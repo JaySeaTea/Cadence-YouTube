@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report a playback speed, channel detection, or playlist/autoplay stop issue on YouTube.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Log any quirk you notice while watching YouTube so it can be fixed in your next release batch.
+
+  - type: dropdown
+    id: page-type
+    attributes:
+      label: YouTube Page or Extension View
+      description: Where did the issue occur?
+      options:
+        - Standard Watch Video (/watch?v=...)
+        - Watch Later Playlist (list=WL)
+        - Saved / Creator Playlist (list=...)
+        - Live Stream (/live/... or live watch)
+        - YouTube Shorts (/shorts/...)
+        - YouTube Home / Channel / Subscriptions Feed
+        - Extension Toolbar Popup
+        - Extension Options Page (All Channel Rules)
+    validations:
+      required: true
+
+  - type: input
+    id: youtube-url
+    attributes:
+      label: Example YouTube URL (Optional)
+      description: Paste the video, playlist, or channel URL if helpful for reproducing.
+      placeholder: https://www.youtube.com/watch?v=...
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what Cadence or YouTube actually did.
+      placeholder: e.g. Switched from a Music channel to an Educational video inside Watch Later and the speed stayed at 1.0x.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect Cadence to do instead?
+      placeholder: e.g. Expected playback speed to automatically switch to 1.5x when the new video loaded.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Cadence Version
+      placeholder: v1.1.1
+      value: v1.1.1
+
+  - type: textarea
+    id: logs-or-screenshots
+    attributes:
+      label: Error Details or Screenshot (Optional)
+      description: Drag and drop a screenshot or paste any message from chrome://extensions → Errors.
+      placeholder: Paste console/extension error details here if any appeared.

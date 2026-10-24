@@ -84,6 +84,15 @@ npm run build
 
 ---
 
+## Release Backlog & GitHub Issue Forms
+
+This repository includes structured GitHub Issue Forms in `.github/ISSUE_TEMPLATE/` so you can collect bugs and enhancement ideas over time and ship them together in batches:
+
+- **Bug Report** (`bug` label): Dropdowns for the exact YouTube surface (`Watch`, `Watch Later`, `Creator Playlist`, `Live`, `Shorts`, `Popup`, `Options`) plus URL and error/screenshot fields.
+- **Feature / Enhancement** (`enhancement` label): Checkboxes for target surfaces (`Background`, `Below-Video Bar`, `Popup`, `Keyboard Shortcut`, `Options`) and a **Batch Priority** selector (`Next Release Batch`, `Soon`, `Someday`).
+
+---
+
 ## License
 
 Released under the [MIT License](./LICENSE).

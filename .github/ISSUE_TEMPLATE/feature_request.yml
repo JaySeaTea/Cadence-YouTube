@@ -1,0 +1,50 @@
+name: Feature / Enhancement
+description: Capture a new idea or workflow improvement for a future Cadence release batch.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Capture enhancement ideas as you use YouTube so multiple items can be built and shipped together in a single release.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What would you like Cadence to do?
+      description: Describe the YouTube annoyance or workflow improvement in plain language.
+      placeholder: e.g. Add keyboard shortcuts ([ and ]) to nudge the current channel's saved speed by 0.1x without opening the popup.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: surfaces
+    attributes:
+      label: Where should this live?
+      description: Check any part of Cadence you picture this touching.
+      options:
+        - label: Automatic background behavior on YouTube
+        - label: Below-video speed bar on YouTube watch pages
+        - label: Extension toolbar popup
+        - label: Keyboard shortcut
+        - label: Extension Options page (All Channel Rules)
+        - label: Web Simulator / Workbench
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Specific behavior or edge cases (Optional)
+      description: Any preferences on defaults, toggles, or how it should interact with playlists/live streams?
+      placeholder: e.g. Should work on watch pages, ignore typing in the search box or comments, and show the brief top-right player toast.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Batch Priority
+      options:
+        - Next Release Batch (High)
+        - Soon / Nice to Have (Medium)
+        - Someday / Idea Parking Lot (Low)
+      default: 0
+    validations:
+      required: true
