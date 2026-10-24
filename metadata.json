@@ -1,0 +1,6 @@
+{
+  "name": "Cadence — Custom YouTube Chrome Extension",
+  "description": "Manifest V3 Chrome extension builder and live YouTube simulator for automatic per-channel playback speeds and strict end-of-video playlist playback stopping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

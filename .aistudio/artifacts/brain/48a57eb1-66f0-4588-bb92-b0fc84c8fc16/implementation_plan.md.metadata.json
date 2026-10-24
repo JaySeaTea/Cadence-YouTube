@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for preparing Cadence for GitHub with project documentation, changelog, MIT license, a standalone unpacked extension package containing only starter sample rules, workspace data reset/gitignore protection, and JSON import/export inside the Chrome extension options page.",
+  "updatedAt":  "2026-10-23T21:32:17.886954570Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en" style="color-scheme: dark;">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cadence — Channel Rules &amp; Playback Settings</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0f19;
+        color: #f1f5f9;
+        padding: 36px 24px;
+      }
+      .container { max-width: 900px; margin: 0 auto; }
+      .top-header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 1px solid #1e293b;
+      }
+      h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; color: #f8fafc; letter-spacing: -0.01em; }
+      .sub { color: #94a3b8; font-size: 14px; max-width: 560px; line-height: 1.5; }
+      .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .status-banner {
+        display: none;
+        padding: 10px 14px;
+        margin-bottom: 20px;
+        border-radius: 8px;
+        background: #111827;
+        border: 1px solid #334155;
+        color: #e2e8f0;
+        font-size: 13px;
+      }
+      .status-banner.visible { display: block; }
+      .panel {
+        background: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+      .panel-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
+      .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+      .preset-row, .rule-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid #1e293b;
+      }
+      .preset-row:first-of-type, .rule-row:first-of-type { border-top: none; }
+      input[type="text"], input[type="number"], select {
+        padding: 7px 10px;
+        background: #0b0f19;
+        color: #f1f5f9;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+      .add-form input[type="text"] { flex: 1; min-width: 180px; }
+      button.primary {
+        background: #dc2626;
+        color: #ffffff;
+        border: none;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.primary:hover { background: #ef4444; }
+      button.ghost {
+        background: #111827;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        padding: 7px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.ghost:hover { color: #f8fafc; background: #1e293b; border-color: #475569; }
+      button.row-remove {
+        background: transparent;
+        color: #94a3b8;
+        border: 1px solid #334155;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.row-remove:hover { color: #f87171; border-color: #ef4444; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="top-header">
+        <div>
+          <h1>Cadence for YouTube</h1>
+          <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
+        </div>
+        <div class="toolbar-actions">
+          <input type="file" id="import-json-input" accept="application/json,.json" style="display:none;" />
+          <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
+          <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
+          <button type="button" id="btn-reset-samples" class="ghost">Reset Samples</button>
+        </div>
+      </div>
+
+      <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>01. Category Speed Profiles</h2>
+          <span class="count-label">Applies to linked channels</span>
+        </div>
+        <div id="presets-list"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>02. Saved Channel Speed Rules</h2>
+          <span id="rules-count" class="count-label">0 saved</span>
+        </div>
+        <form id="add-rule-form" class="add-form">
+          <input type="text" id="input-name" placeholder="Channel name (e.g. Veritasium)" required />
+          <input type="text" id="input-handle" placeholder="@handle (optional)" />
+          <select id="input-preset">
+            <option value="music">Music (1.0×)</option>
+            <option value="educational" selected>Educational (1.5×)</option>
+            <option value="podcast">Podcast / Lecture (2.0×)</option>
+            <option value="custom">Custom Speed</option>
+          </select>
+          <input type="number" id="input-speed" step="0.05" min="0.25" max="4" value="1.5" style="width: 88px;" />
+          <button type="submit" class="primary">Save Channel</button>
+        </form>
+        <div id="rules-list"></div>
+      </div>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>
