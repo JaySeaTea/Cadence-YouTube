@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Cadence — Per-Channel Speed & Playlist Stop for YouTube",
   "short_name": "Cadence",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Automatically sets per-channel playback speeds on YouTube and stops playback at the end of every video, including Watch Later and playlists.",
   "permissions": [
     "storage",

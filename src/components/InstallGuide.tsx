@@ -27,15 +27,15 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
   return (
     <div className="space-y-10">
       <div className="pb-6 border-b border-slate-800/90">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 [text-wrap:balance]">
-          Load or Update Your Extension in Chrome
-        </h1>
-        <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-slate-400">
-          Install Cadence v1.1.0 using Chrome’s unpacked extension loader. Upon loading or
-          reloading, Cadence automatically attaches to all already-open YouTube tabs without
-          requiring a manual page refresh.
-        </p>
-      </div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 [text-wrap:balance]">
+            Load or Update Your Extension in Chrome
+          </h1>
+          <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-slate-400">
+            Install Cadence v1.1.1 using Chrome’s unpacked extension loader. Upon loading,
+            reloading, or swapping unpacked folders, Cadence cleanly retires prior script listeners
+            and attaches to open YouTube tabs without errors or manual refreshes.
+          </p>
+        </div>
 
       {/* Standalone /extension Repository Folder vs Custom .zip Export */}
       <div className="bg-[#111827] border border-slate-800/90 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -60,7 +60,7 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
           className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" />
-          Download v1.1.0 (.zip)
+          Download v1.1.1 (.zip)
         </button>
       </div>
 

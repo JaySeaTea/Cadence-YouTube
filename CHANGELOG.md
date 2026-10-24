@@ -4,6 +4,11 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-10-23
+
+### Fixed
+- **Orphaned Content Script Lifecycle on Reload / Folder Swap**: Fixed `Uncaught (in promise) Error: Extension context invalidated.` on `chrome://extensions` when reloading, disabling, or replacing the unpacked extension while YouTube watch tabs are open. Added synchronous `chrome.runtime.id` context validation around all `chrome.runtime` and `chrome.storage` calls, automatic `AbortController` listener self-teardown for retired script instances, and clean DOM/MAIN-world handover for `#cadence-owner-bar` and `page-bridge.js`.
+
 ## [1.1.0] - 2026-10-23
 
 ### Added

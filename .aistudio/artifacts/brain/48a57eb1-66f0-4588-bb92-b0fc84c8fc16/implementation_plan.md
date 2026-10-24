@@ -1,57 +1,56 @@
-# GitHub Repository Packaging, Clean Sample Defaults & Extension JSON Portability
+# Seamless Extension Reload & Orphaned Context Lifecycle Fix (v1.1.1)
 
-This update prepares Cadence as a clean, shareable, MIT-licensed repository by resetting the base configuration to starter sample rules, excluding runtime workspace data from version control, adding a ready-to-load standalone Chrome extension package, documenting the project and release history, and adding JSON rule import/export directly inside the Chrome extension's options page.
+This update eliminates the `Uncaught (in promise) Error: Extension context invalidated` warning shown on Chrome's Extensions page whenever Cadence is reloaded, removed, or replaced while YouTube watch tabs are already open—ensuring clean listener teardown and zero-error hot-reloading.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Resetting the workspace clears any personal YouTube subscriptions currently stored in the workbench back to the four original sample channels (`Velvet Room Sessions`, `Orbital Mechanics Lab`, `The Longform Archive`, and `Systems Craft`). Your already-installed Chrome browser extension keeps its own internal Chrome storage untouched, and with the new Chrome options JSON backup button you can export your private channel list directly from Chrome anytime.
+> When an unpacked Chrome extension is removed or reloaded while a YouTube video tab is open, Chrome invalidates the old content script's extension APIs (`chrome.runtime` and `chrome.storage`), but leaves its `window` message listeners alive in that tab. When the newly loaded extension attaches and broadcasts to the open tab, the orphaned script wakes up and calls `chrome.runtime.sendMessage(...)`, which throws **synchronously** before `.catch()` can run. Adding synchronous context validation and automatic listener self-teardown prevents any invalidated script from executing again.
 
-- **Confirmed Decision — Workspace Privacy & Reset**: Reset the workspace to the four starter sample rules and ignore local runtime persistence data from Git so personal subscriptions are never committed to GitHub.
-- **Confirmed Decision — Chrome Options Portability**: Add JSON rule import and export controls directly to the Chrome extension's full-tab Options page, using the exact same backup format as the web workbench.
-- **Confirmed Decision — Open-Source Licensing**: Include standard MIT License terms in the repository documentation and license notice.
+- **Confirmed Context — Extension Replacement Flow**: You removed the previous unpacked extension and loaded the updated folder while a YouTube watch tab was open (`watch?v=...`).
+- **Confirmed Behavior — Non-Fatal Warning Badge**: The newly loaded extension continues running normally, and the fix only needs to eliminate the uncaught promise rejection and ensure clean handover of in-page controls across updates.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Transforms the workspace into a complete, self-documented GitHub repository containing both the interactive Dark-Mode Web Workbench and a prebuilt, ready-to-load Chrome Manifest V3 extension seeded strictly with generic sample channels.
-- **Target Audience / Persona**: You (syncing across personal machines via `git clone`) as well as any future GitHub visitors who want to load the unpacked Chrome extension immediately or customize their own channel speed profiles privately.
-- **Key Value**: Separates public repository code from private YouTube subscription lists, eliminates the need to export a `.zip` before loading the extension on a new machine, and provides clear architectural and setup documentation for future maintenance.
+- **What It Does**: Hardens Cadence's Manifest V3 content script, main-world player bridge, and in-page UI bars so that reloading, disabling, or replacing the extension while YouTube tabs are open cleanly retires stale script instances without throwing Chrome runtime errors.
+- **Target Audience / Persona**: Chrome extension users updating or reloading Cadence across active browser sessions with multiple open YouTube video, playlist, or live-stream tabs.
+- **Key Value**: Keeps Chrome's Extensions card completely free of `Errors` badges during updates while guaranteeing that below-video speed chips and end-of-video banners always stay bound to the newly active extension instance.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Direct Unpacked Load After Clone**: Anyone cloning the GitHub repository can open Chrome's Extensions manager, enable Developer Mode, and load the standalone unpacked extension bundle directly from the repository—starting cleanly with the four sample channels (`1.0×` Music, `1.5×` Educational, `2.0×` Podcast).
-  2. **Private Rule Backup & Restore in Chrome**: Inside Chrome, opening **All Channel Rules** from the Cadence toolbar popup launches the native dark-mode Options page, which now includes **Import JSON**, **Backup JSON**, and **Reset to Samples** actions in its header—matching the web workbench's workflow.
-  3. **Clean Web Workbench Reset**: Opening the web studio displays only the four sample channels, includes a one-click **Reset Samples** option alongside JSON import/export in the Channel Rules manager, and keeps any future local workbench testing excluded from Git tracking.
+  1. **Zero-Error Hot Reload / Folder Swap**: Whether you click **Reload (↻)** on Chrome's Extensions page or remove an older unpacked build and load a new folder while watching YouTube, stale script listeners silently detach themselves on the very next event tick without logging errors.
+  2. **Uninterrupted In-Page Controls**: The newly loaded extension immediately takes ownership of the below-video speed bar and end-of-video stop banner on already-open YouTube tabs, replacing any stale button listeners so clicking a speed preset (`1.0×`–`2.0×`) saves cleanly to Chrome storage without needing a page refresh.
+  3. **Synchronized Distribution Packages**: Both the standalone unpacked extension bundle in the repository and the web workbench's `.zip` exporter ship the updated `v1.1.1` runtime scripts.
 - **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Cohesive dark-studio utility across both the web workbench and Chrome's standalone Options and Popup views.
-  - *Color Palette & Mood*: Deep cool slate canvas (`--background`: `#0B0F19`), elevated structural panels (`--card`: `#111827`) with `1px` hairline borders (`#1E293B`), crisp light slate typography (`#F1F5F9` primary, `#94A3B8` secondary), and crimson action accents (`--accent`: `#DC2626`).
-  - *Typography & Hierarchy*: `Plus Jakarta Sans` for headings, `Public Sans` for interface controls and prose, and `JetBrains Mono` (`tabular-nums`) for all playback speed multipliers and counts.
-  - *Component Styling & Layout*: Single-elevation dark containers with hairline row dividers, single-line action buttons, and unboxed inline metadata separated by middle dots (`·`).
+  - *Aesthetic Direction*: Existing dark-studio aesthetic across the web workbench, Chrome toolbar popup, and full-tab Options page remains preserved without visual clutter.
+  - *Color Palette & Mood*: Deep cool slate canvas (`--background`: `#0B0F19`), elevated dark slate surfaces (`--card`: `#111827`) with `1px` borders (`#1E293B`), crisp light slate text (`#F1F5F9` primary, `#94A3B8` muted), and crimson active states (`--accent`: `#DC2626`).
+  - *Typography & Hierarchy*: `Plus Jakarta Sans` display headings, `Public Sans` body copy, and `JetBrains Mono` (`tabular-nums`) for speed multipliers and rule counters.
+  - *Component Styling & Layout*: Single-elevation dark panels, single-line controls, and unboxed metadata separated by middle dots (`·`).
 - **Interactive Feedback & Motion**:
-  - Immediate inline confirmation status on the Chrome Options page when importing, exporting, or resetting channel rules (`≤150ms`), with instant live synchronization across open YouTube tabs via Chrome storage listeners.
+  - Instant `≤150ms` playback rate updates and player toast feedback on active YouTube tabs immediately after an extension reload, with zero console noise or extension error flags.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Prebuilt Unpacked Extension Alongside Dynamic Workbench Exporter**
-  - *Chosen Approach*: Generate a complete, ready-to-load Manifest V3 extension package (including rendered `16px`, `32px`, `48px`, and `128px` PNG icons and sample defaults) directly in the repository while keeping the web workbench's dynamic `.zip` builder synchronized with the exact same source templates.
-  - *Why*: Lets you run `git clone` on any machine and load the unpacked extension into Chrome immediately without running Node or building first, while still allowing interactive customization and `.zip` export from the web UI.
-  - *Alternatives Considered*: Relying solely on the browser `.zip` download was passed over because a tracked unpacked extension bundle makes version diffs on GitHub transparent and speeds up local Chrome testing.
+- **Decision 1: Synchronous Context Validation + `try/catch` Wrappers Around All Chrome APIs**
+  - *Chosen Approach*: Gate every `chrome.runtime` and `chrome.storage` call behind an explicit `isExtensionContextValid()` check (`Boolean(chrome?.runtime?.id)`) wrapped inside synchronous `try/catch` blocks in addition to Promise `.catch()` handlers.
+  - *Why*: In Chromium, calling `chrome.runtime.sendMessage(...)` after an extension context is invalidated throws synchronously rather than returning a rejected Promise—which bypassed `.catch(() => {})` inside `async` event handlers and triggered Chrome's `Uncaught (in promise)` error badge.
+  - *Alternatives Considered*: Relying solely on `.catch()` on returned Promises was proven insufficient because the exception occurs before any Promise is created.
 
-- **Decision 2: Shared JSON Backup Schema Across Web Workbench & Chrome Extension**
-  - *Chosen Approach*: Use an identical `{ presets, rules }` JSON format for importing and exporting rules in both the Chrome Options page and the web workbench, merging imported channels non-destructively by `@handle` and channel name.
-  - *Why*: Allows you to maintain your personal YouTube subscriptions in a private local JSON file outside Git and move rules effortlessly between Chrome browsers or back into the workbench.
-  - *Alternatives Considered*: Baking personal channels into tracked defaults was rejected to keep the base repository clean and shareable.
+- **Decision 2: `AbortController` Self-Teardown for Orphaned Content Scripts**
+  - *Chosen Approach*: Register all `window` message listeners in the isolated content script with an `AbortController` signal. The moment an orphaned script detects its `chrome.runtime.id` is no longer valid, it aborts all of its listeners permanently.
+  - *Why*: Prevents invalidated scripts from continuing to wake up on every `250ms` player heartbeat or competing with the newly loaded extension instance over DOM elements.
+  - *Alternatives Considered*: Requiring users to manually refresh every open YouTube tab after updating the extension was rejected to preserve zero-refresh attachment.
 
-- **Decision 3: Versioned Storage Namespace Reset & Git Exclusion**
-  - *Chosen Approach*: Clear persisted runtime data, exclude the local runtime persistence store from Git version control, and rotate the browser storage namespace so cached personal entries from prior sessions do not automatically re-populate the reset workspace.
-  - *Why*: Guarantees a clean slate with only the four sample rules both locally and when pushing to GitHub.
+- **Decision 3: Clean DOM Bar & Main-World Bridge Handover**
+  - *Chosen Approach*: Expose a clean teardown callback on the `MAIN`-world player bridge so re-injection replaces old timers and listeners cleanly, and re-create in-page speed bar and stop-banner nodes when a fresh isolated script boots so event handlers never point to an invalidated script closure.
+  - *Why*: Ensures clicking a speed chip below a YouTube video right after updating the extension always writes to the live extension's storage.
 
 ---
 
@@ -60,40 +59,41 @@ This update prepares Cadence as a clean, shareable, MIT-licensed repository by r
 - **Architecture & Component Diagram**:
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│                     GitHub Repository (MIT Licensed)                     │
-│                                                                          │
-│  ┌────────────────────────────┐      ┌────────────────────────────────┐  │
-│  │ Project Documentation      │      │ Standalone Unpacked Extension  │  │
-│  │ • Architecture & Install   │      │ • Manifest V3 Runtime Scripts  │  │
-│  │ • Release Changelog        │      │ • Dark Popup & Options UI      │  │
-│  │ • MIT License              │      │ • Pre-rendered 16–128px Icons  │  │
-│  └────────────────────────────┘      │ • Seeded w/ 4 Sample Channels  │  │
-│                                      └───────────────▲────────────────┘  │
-│                                                      │                   │
-│  ┌───────────────────────────────────────────────────┴────────────────┐  │
-│  │                  Dark-Mode Web Workbench & Simulator               │  │
-│  │  • Shared Extension Template Engine (Sample Defaults by Default)   │  │
-│  │  • Live YouTube Simulator + Channel Rules Manager                  │  │
-│  └───────────────▲───────────────────────────────────▲────────────────┘  │
-└──────────────────┼───────────────────────────────────┼───────────────────┘
-                   │                                   │
-       Git-Ignored │ Runtime Store         Portable    │ JSON Backup
-                   ▼                       Schema      ▼
-       ┌───────────────────────┐           ┌────────────────────────────┐
-       │ Local Browser &       │           │ Private User Rules File    │
-       │ Dev Server State      │           │ • Import/Export in Web UI  │
-       │ (Never Committed)     │           │ • Import/Export in Chrome  │
-       └───────────────────────┘           └────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                     Already-Open YouTube Watch / Live Tab                  │
+│                                                                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ MAIN World Player Bridge                                             │  │
+│  │ • Cleanly replaces prior timer/listeners via teardown hook on update │  │
+│  │ • Broadcasts VIDEO_DETECTED / MANUAL_RATE_CHANGE via postMessage     │  │
+│  └──────────────┬───────────────────────────────────────┬───────────────┘  │
+│                 │                                       │                  │
+│                 ▼ (Orphaned Instance)                   ▼ (Active v1.1.1)  │
+│  ┌──────────────────────────────────┐   ┌───────────────────────────────┐  │
+│  │ Previous Content Script Context  │   │ Fresh Content Script Context  │  │
+│  │ 1. Checks chrome.runtime?.id     │   │ 1. Validates live runtime.id  │  │
+│  │ 2. Detects invalidated context   │   │ 2. Rebinds in-page speed bar  │  │
+│  │ 3. Aborts all window listeners   │   │ 3. Safely updates badge &     │  │
+│  │ 4. Exits silently (0 errors)     │   │    Chrome local storage       │  │
+│  └──────────────────────────────────┘   └───────────────┬───────────────┘  │
+└─────────────────────────────────────────────────────────┼──────────────────┘
+                                                          │
+                                                          ▼
+                                          ┌───────────────────────────────┐
+                                          │ Background Service Worker     │
+                                          │ • Updates tab speed badge     │
+                                          │ • Zero Errors on Extensions   │
+                                          └───────────────────────────────┘
 ```
 
 - **Data Model & State**:
-  - **Base Sample Seed**: Contains strictly the three default category profiles (`Music` at `1.0×`, `Educational` at `1.5×`, `Podcast & Lecture` at `2.0×`) and the four sample channel rules (`@velvetroomsessions`, `@orbitalmechanics`, `@longformarchive`, `@systemscraft`).
-  - **Portable Backup Payload**: Standardized JSON object containing `presets` (id, label, description, speed) and `rules` (id, channelName, handle, channelId, presetId, customSpeed, updatedAt), validated and sanitized on import (`0.25×`–`4.0×` speed bounds, normalized `@handle`).
+  - **Lifecycle State (In-Memory per Content Script Instance)**: Tracks `isDestroyed` flag and `AbortController` instance; checks `chrome.runtime?.id` inside a synchronous `try/catch` before any Chrome API access.
+  - **Extension Storage State (`chrome.storage.local`)**: Preserves existing `settings`, `presets`, and `rules` schemas unchanged (`v1.1.1` non-destructively retains any saved user rules in Chrome while shipping the four sample rules in clean builds).
 
 - **Interactive Component & State Mapping**:
-  - **Chrome Options JSON Import/Export**:
-    - *Export*: Reads current `presets` and `rules` from `chrome.storage.local` → serializes formatted JSON → triggers browser download (`cadence-channel-rules.json`) and displays a brief confirmation notice.
-    - *Import*: Opens file picker (`application/json`) → parses and validates incoming `presets` and `rules` → non-destructively merges channels into `chrome.storage.local` (updating matching `@handles` and prepending new channels) → re-renders the rules list and immediately notifies open YouTube tabs via storage change listeners.
-    - *Reset to Samples*: Restores the default presets and four sample channel rules in `chrome.storage.local` on click.
-  - **Workspace Reset & Git Hygiene**: Purges existing runtime state on the server, adds the runtime data store to Git ignore rules, and advances the client storage key so stale personal subscriptions in local browser storage are cleared rather than re-uploaded.
+  - **Safe Chrome API Helpers (`safeSendMessage`, `safeStorageGet`, `safeStorageSet`)**:
+    - Synchronously verify `isExtensionContextValid()`; if invalid or if synchronous invocation throws, trigger `teardownInstance()` and return `null` cleanly instead of throwing inside `async` callbacks.
+  - **DOM Control Handover**:
+    - On fresh content script initialization, remove any pre-existing below-video speed bar or stopped-playback banner created by a retired instance and immediately render fresh nodes bound to the active extension context.
+  - **Main-World Bridge Upgrade Hook**:
+    - Store a cleanup disposer in `MAIN` world (`clearInterval` + `removeEventListener`) so re-executing the bridge script during an extension update upgrades the running bridge cleanly before triggering `FORCE_DETECT`.
