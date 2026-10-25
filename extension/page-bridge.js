@@ -13,14 +13,19 @@
     enabled: true,
     perChannelSpeedEnabled: true,
     stopAfterVideoEnds: true,
+    defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
 
   let isApplyingProgrammatically = false;
   let programmaticTimer = null;
   let heartbeatInterval = null;
+  let fastBurstInterval = null;
   let lastAppliedSpeed = Number(config.targetSpeed) || 1.0;
   let lastDetectedKey = '';
+  let lockedVideoId = '';
+  let wasOnWatchPage = false;
+  let pendingCardHint = null;
   let heldAtEndVideoId = window.__CADENCE_HELD_VIDEO_ID__ || null;
   let userInitiatedNavUntil = 0;
 
@@ -39,6 +44,74 @@
     userInitiatedNavUntil = Date.now() + 4000;
   }
 
+  function parseVideoIdFromHref(rawHref) {
+    if (!rawHref) return '';
+    try {
+      const parsed = new URL(rawHref, location.origin);
+      if (parsed.pathname.startsWith('/watch')) {
+        return parsed.searchParams.get('v') || '';
+      }
+      if (parsed.pathname.startsWith('/live/')) {
+        const seg = parsed.pathname.split('/live/')[1];
+        return seg ? seg.split(/[/?#]/)[0] : '';
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function getUrlVideoId() {
+    return parseVideoIdFromHref(location.href);
+  }
+
+  function extractCardPreviewHint(target) {
+    const watchAnchor = target.closest('a[href*="/watch"], a[href*="/live/"]');
+    if (!watchAnchor) return null;
+    const videoId = parseVideoIdFromHref(watchAnchor.getAttribute('href') || '');
+    if (!videoId) return null;
+
+    const card = target.closest(
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
+    );
+
+    let handle = '';
+    let channelId = '';
+    let channelName = '';
+
+    if (card) {
+      const channelAnchors = card.querySelectorAll('a[href*="/@"], a[href*="/channel/UC"]');
+      for (const chAnchor of channelAnchors) {
+        const href = chAnchor.getAttribute('href') || '';
+        if (href.includes('/watch')) continue;
+        const hMatch = href.match(/\/(@[^/?#]+)/);
+        if (hMatch && !handle) handle = hMatch[1].toLowerCase();
+        const cMatch = href.match(/\/channel\/(UC[^/?#]+)/);
+        if (cMatch && !channelId) channelId = cMatch[1];
+        const txt = (chAnchor.textContent || '').trim();
+        if (txt && !channelName) channelName = txt;
+      }
+
+      if (!channelName) {
+        const nameEl = card.querySelector(
+          'ytd-channel-name #text, .yt-content-metadata-view-model__metadata-row span'
+        );
+        if (nameEl) {
+          const txt = (nameEl.textContent || '').trim();
+          if (txt && !txt.includes('views') && !txt.includes('ago')) {
+            channelName = txt;
+          }
+        }
+      }
+    }
+
+    return {
+      videoId,
+      channelId,
+      handle,
+      channelName,
+      expiresAt: Date.now() + 5000,
+    };
+  }
+
   document.addEventListener(
     'pointerdown',
     (e) => {
@@ -50,6 +123,48 @@
         )
       ) {
         markUserNavigationIntent();
+      }
+
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        const hint = extractCardPreviewHint(target);
+        if (hint) {
+          pendingCardHint = hint;
+          if (!isSupportedWatchOrLivePage()) {
+            postToContent('NAVIGATION_PREVIEW', hint);
+            startFastDetectionBurst();
+          }
+        }
+      }
+    },
+    { capture: true, signal: bridgeSignal }
+  );
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
+        return;
+      }
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+
+      const hint = extractCardPreviewHint(target);
+      if (hint) {
+        pendingCardHint = hint;
+        postToContent('NAVIGATION_PREVIEW', hint);
+        startFastDetectionBurst();
+        return;
+      }
+
+      const homeOrBrowseLink = target.closest(
+        'a#logo, ytd-topbar-logo-renderer a, a[href="/"], a[href^="/feed/"], a[href^="/results"]'
+      );
+      if (homeOrBrowseLink) {
+        setTimeout(() => {
+          if (!isSupportedWatchOrLivePage()) {
+            handleNonWatchRoute();
+          }
+        }, 0);
       }
     },
     { capture: true, signal: bridgeSignal }
@@ -90,12 +205,8 @@
   }
 
   function getCurrentVideoId(player) {
-    const params = new URLSearchParams(location.search);
-    if (params.get('v')) return params.get('v');
-    if (location.pathname.startsWith('/live/')) {
-      const seg = location.pathname.split('/live/')[1];
-      if (seg) return seg.split(/[/?#]/)[0];
-    }
+    const urlVid = getUrlVideoId();
+    if (urlVid) return urlVid;
     const flexy = document.querySelector('ytd-watch-flexy');
     if (flexy && flexy.getAttribute('video-id')) {
       return flexy.getAttribute('video-id');
@@ -115,7 +226,8 @@
     }
     const player = getMoviePlayer();
     const adActive = isAdPlaying(player);
-    let videoId = getCurrentVideoId(player);
+    const urlVideoId = getUrlVideoId();
+    let videoId = urlVideoId;
     let channelId = '';
     let channelName = '';
     let handle = '';
@@ -125,48 +237,75 @@
     try {
       if (player && typeof player.getPlayerResponse === 'function') {
         const resp = player.getPlayerResponse();
-        if (resp && resp.videoDetails) {
-          videoId = resp.videoDetails.videoId || videoId;
-          channelId = resp.videoDetails.channelId || '';
-          channelName = resp.videoDetails.author || '';
-          title = resp.videoDetails.title || '';
-          isLive = Boolean(resp.videoDetails.isLiveContent) || isLive;
+        const details = resp && resp.videoDetails;
+        if (details && details.videoId && (!urlVideoId || details.videoId === urlVideoId)) {
+          videoId = details.videoId;
+          channelId = details.channelId || '';
+          channelName = details.author || '';
+          title = details.title || '';
+          isLive = Boolean(details.isLiveContent) || isLive;
         }
       }
       if ((!channelName || !videoId) && player && typeof player.getVideoData === 'function') {
         const vd = player.getVideoData();
-        if (vd) {
-          videoId = vd.video_id || videoId;
+        if (vd && vd.video_id && (!urlVideoId || vd.video_id === urlVideoId)) {
+          videoId = vd.video_id;
           channelName = channelName || vd.author || '';
           title = title || vd.title || '';
         }
       }
     } catch (_) {}
 
-    const ownerLink =
-      document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner ytd-channel-name a[href]') ||
-      document.querySelector('ytd-watch-flexy ytd-video-owner-renderer ytd-channel-name a[href]') ||
-      document.querySelector('ytd-watch-metadata #owner ytd-channel-name a[href]') ||
-      document.querySelector('#owner ytd-channel-name a[href]');
+    const flexy = document.querySelector('ytd-watch-flexy');
+    const flexyVideoId = flexy ? flexy.getAttribute('video-id') || '' : '';
+    const domMatchesUrlVideo = !urlVideoId || (flexyVideoId && flexyVideoId === urlVideoId);
 
-    if (ownerLink) {
-      const href = ownerLink.getAttribute('href') || '';
-      const handleMatch = href.match(/\/(@[^/?#]+)/);
-      if (handleMatch) handle = handleMatch[1].toLowerCase();
-      const chMatch = href.match(/\/channel\/(UC[^/?#]+)/);
-      if (chMatch && !channelId) channelId = chMatch[1];
-      const domText = (ownerLink.textContent || '').trim();
-      if (domText && !adActive) channelName = domText;
+    if (domMatchesUrlVideo) {
+      if (!videoId && flexyVideoId) {
+        videoId = flexyVideoId;
+      }
+
+      const ownerLink =
+        document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner ytd-channel-name a[href]') ||
+        document.querySelector('ytd-watch-flexy ytd-video-owner-renderer ytd-channel-name a[href]') ||
+        document.querySelector('ytd-watch-metadata #owner ytd-channel-name a[href]');
+
+      if (ownerLink) {
+        const href = ownerLink.getAttribute('href') || '';
+        const handleMatch = href.match(/\/(@[^/?#]+)/);
+        if (handleMatch) handle = handleMatch[1].toLowerCase();
+        const chMatch = href.match(/\/channel\/(UC[^/?#]+)/);
+        if (chMatch && !channelId) channelId = chMatch[1];
+        const domText = (ownerLink.textContent || '').trim();
+        if (domText && !adActive) channelName = domText;
+      }
+
+      if (!channelId && flexy) {
+        const metaCh = flexy.querySelector('meta[itemprop="channelId"]');
+        if (metaCh) channelId = metaCh.getAttribute('content') || '';
+      }
+
+      if (!channelName && flexy) {
+        const authorLink = flexy.querySelector('span[itemprop="author"] link[itemprop="name"]');
+        if (authorLink) channelName = authorLink.getAttribute('content') || '';
+      }
     }
 
-    if (!channelId) {
-      const metaCh = document.querySelector('ytd-watch-flexy meta[itemprop="channelId"], meta[itemprop="channelId"]');
-      if (metaCh) channelId = metaCh.getAttribute('content') || '';
-    }
-
-    if (!channelName) {
-      const authorLink = document.querySelector('ytd-watch-flexy span[itemprop="author"] link[itemprop="name"]');
-      if (authorLink) channelName = authorLink.getAttribute('content') || '';
+    let isPreview = false;
+    if (
+      videoId &&
+      !channelName &&
+      !channelId &&
+      !handle &&
+      pendingCardHint &&
+      pendingCardHint.videoId === videoId &&
+      pendingCardHint.expiresAt > Date.now() &&
+      (pendingCardHint.channelName || pendingCardHint.handle || pendingCardHint.channelId)
+    ) {
+      channelId = pendingCardHint.channelId || '';
+      handle = pendingCardHint.handle || '';
+      channelName = pendingCardHint.channelName || pendingCardHint.handle || '';
+      isPreview = true;
     }
 
     if (!videoId || (!channelName && !channelId && !handle)) {
@@ -177,26 +316,31 @@
     return {
       videoId,
       channelId,
-      channelName,
+      channelName: channelName || handle,
       handle,
       title,
       isAd: adActive,
       isLive,
+      isPreview,
       currentRate: video ? Number(video.playbackRate.toFixed(2)) : 1.0,
       hasPlaylist: new URLSearchParams(location.search).has('list'),
       listId: new URLSearchParams(location.search).get('list') || '',
     };
   }
 
-  function applyPlaybackSpeed(speed) {
+  function applyPlaybackSpeed(speed, forceResetOnBrowse = false) {
     const numericSpeed = Math.min(4.0, Math.max(0.25, Math.round(Number(speed) * 100) / 100 || 1.0));
     const player = getMoviePlayer();
     const video = getMainVideo();
-    if (!video || isAdPlaying(player)) return;
+    if (!forceResetOnBrowse && isAdPlaying(player)) return;
 
     isApplyingProgrammatically = true;
     clearTimeout(programmaticTimer);
     lastAppliedSpeed = numericSpeed;
+
+    if (video && Math.abs(video.playbackRate - numericSpeed) > 0.008) {
+      video.playbackRate = numericSpeed;
+    }
 
     try {
       if (
@@ -210,13 +354,52 @@
       }
     } catch (_) {}
 
-    if (Math.abs(video.playbackRate - numericSpeed) > 0.008) {
-      video.playbackRate = numericSpeed;
-    }
-
     programmaticTimer = setTimeout(() => {
       isApplyingProgrammatically = false;
-    }, 450);
+    }, 350);
+  }
+
+  function stopFastDetectionBurst() {
+    if (fastBurstInterval) {
+      clearInterval(fastBurstInterval);
+      fastBurstInterval = null;
+    }
+  }
+
+  function handleNonWatchRoute() {
+    stopFastDetectionBurst();
+    heldAtEndVideoId = null;
+    window.__CADENCE_HELD_VIDEO_ID__ = null;
+    const defaultSpd = Number(config.defaultSpeed) || 1.0;
+    config.targetSpeed = defaultSpd;
+    window.__CADENCE_LAST_CONFIG__ = config;
+    applyPlaybackSpeed(defaultSpd, true);
+
+    if (wasOnWatchPage || lastDetectedKey !== '' || lockedVideoId !== '') {
+      wasOnWatchPage = false;
+      lastDetectedKey = '';
+      lockedVideoId = '';
+      postToContent('LEFT_WATCH_PAGE', { pathname: location.pathname });
+    }
+  }
+
+  function startFastDetectionBurst() {
+    stopFastDetectionBurst();
+    let ticks = 0;
+    fastBurstInterval = setInterval(() => {
+      ticks += 1;
+      if (!isSupportedWatchOrLivePage()) {
+        if (ticks >= 8) {
+          handleNonWatchRoute();
+        }
+        return;
+      }
+      broadcastChannelMetadata(false);
+      const urlVid = getUrlVideoId();
+      if ((urlVid && lockedVideoId === urlVid) || ticks >= 65) {
+        stopFastDetectionBurst();
+      }
+    }, 40);
   }
 
   function suppressNativeAutoplayAndPlaylist() {
@@ -247,7 +430,7 @@
   }
 
   function checkNearVideoEnd() {
-    if (!config.enabled || !config.stopAfterVideoEnds) return;
+    if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchOrLivePage()) return;
     const player = getMoviePlayer();
     const video = getMainVideo();
     if (!video || isAdPlaying(player) || video.loop) return;
@@ -288,36 +471,76 @@
     }
   }
 
+  function enforceConfiguredSpeedNow() {
+    if (!isSupportedWatchOrLivePage()) return;
+    if (config.enabled && config.perChannelSpeedEnabled) {
+      applyPlaybackSpeed(config.targetSpeed);
+    }
+  }
+
   function bindVideoListeners() {
     const video = getMainVideo();
     if (!video || video.__cadenceBridgeId === bridgeInstanceId) return;
     video.__cadenceBridgeId = bridgeInstanceId;
 
     video.addEventListener('timeupdate', checkNearVideoEnd, { signal: bridgeSignal });
+
+    video.addEventListener(
+      'loadstart',
+      () => {
+        heldAtEndVideoId = null;
+        window.__CADENCE_HELD_VIDEO_ID__ = null;
+        if (!isSupportedWatchOrLivePage()) {
+          handleNonWatchRoute();
+          return;
+        }
+        const urlVid = getUrlVideoId();
+        if (urlVid && urlVid !== lockedVideoId) {
+          const hasMatchingHint =
+            pendingCardHint &&
+            pendingCardHint.videoId === urlVid &&
+            pendingCardHint.expiresAt > Date.now();
+          if (!hasMatchingHint) {
+            config.targetSpeed = Number(config.defaultSpeed) || 1.0;
+            window.__CADENCE_LAST_CONFIG__ = config;
+          }
+        }
+        enforceConfiguredSpeedNow();
+        broadcastChannelMetadata(false);
+        startFastDetectionBurst();
+      },
+      { signal: bridgeSignal }
+    );
+
     video.addEventListener(
       'loadedmetadata',
       () => {
         heldAtEndVideoId = null;
         window.__CADENCE_HELD_VIDEO_ID__ = null;
         broadcastChannelMetadata(true);
-        if (config.enabled && config.perChannelSpeedEnabled) {
-          setTimeout(() => applyPlaybackSpeed(config.targetSpeed), 120);
-        }
+        enforceConfiguredSpeedNow();
+        setTimeout(enforceConfiguredSpeedNow, 30);
         suppressNativeAutoplayAndPlaylist();
       },
       { signal: bridgeSignal }
     );
 
+    video.addEventListener('loadeddata', enforceConfiguredSpeedNow, { signal: bridgeSignal });
+    video.addEventListener('canplay', enforceConfiguredSpeedNow, { signal: bridgeSignal });
+
     video.addEventListener(
       'play',
       () => {
         suppressNativeAutoplayAndPlaylist();
-        if (config.enabled && config.perChannelSpeedEnabled) {
-          const player = getMoviePlayer();
-          if (!isAdPlaying(player) && Math.abs(video.playbackRate - config.targetSpeed) > 0.015) {
-            applyPlaybackSpeed(config.targetSpeed);
-          }
-        }
+        enforceConfiguredSpeedNow();
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
+      'playing',
+      () => {
+        enforceConfiguredSpeedNow();
       },
       { signal: bridgeSignal }
     );
@@ -325,13 +548,14 @@
     video.addEventListener(
       'ratechange',
       () => {
+        if (!isSupportedWatchOrLivePage()) return;
         const player = getMoviePlayer();
         if (isApplyingProgrammatically || isAdPlaying(player)) return;
         const newRate = Math.round(video.playbackRate * 100) / 100;
         if (Math.abs(newRate - lastAppliedSpeed) >= 0.03) {
           lastAppliedSpeed = newRate;
           const meta = extractChannelMetadata();
-          if (meta) {
+          if (meta && !meta.isPreview) {
             postToContent('MANUAL_RATE_CHANGE', { ...meta, speed: newRate });
           }
         }
@@ -342,10 +566,25 @@
 
   function broadcastChannelMetadata(force = false) {
     bindVideoListeners();
+    if (!isSupportedWatchOrLivePage()) {
+      handleNonWatchRoute();
+      return;
+    }
+    wasOnWatchPage = true;
     suppressNativeAutoplayAndPlaylist();
     const meta = extractChannelMetadata();
     if (!meta) return;
-    const key = [meta.videoId, meta.channelId, meta.handle, meta.channelName, meta.isAd].join('|');
+    if (!meta.isPreview) {
+      lockedVideoId = meta.videoId;
+    }
+    const key = [
+      meta.videoId,
+      meta.channelId,
+      meta.handle,
+      meta.channelName,
+      meta.isAd,
+      meta.isPreview ? 'preview' : 'verified',
+    ].join('|');
     if (force || key !== lastDetectedKey) {
       lastDetectedKey = key;
       postToContent('VIDEO_DETECTED', meta);
@@ -363,7 +602,9 @@
         config = { ...config, ...payload };
         window.__CADENCE_LAST_CONFIG__ = config;
         suppressNativeAutoplayAndPlaylist();
-        if (config.enabled && config.perChannelSpeedEnabled && typeof payload.targetSpeed === 'number') {
+        if (!isSupportedWatchOrLivePage()) {
+          applyPlaybackSpeed(config.defaultSpeed || 1.0, true);
+        } else if (config.enabled && config.perChannelSpeedEnabled && typeof payload.targetSpeed === 'number') {
           applyPlaybackSpeed(payload.targetSpeed);
         }
       } else if (type === 'COMMAND') {
@@ -401,12 +642,47 @@
   );
 
   window.addEventListener(
+    'yt-navigate-start',
+    (e) => {
+      heldAtEndVideoId = null;
+      window.__CADENCE_HELD_VIDEO_ID__ = null;
+      const destUrl = (e && e.detail && e.detail.url) || '';
+      const destVid = parseVideoIdFromHref(destUrl) || getUrlVideoId();
+
+      if (destUrl && !destUrl.startsWith('/watch') && !destUrl.startsWith('/live')) {
+        handleNonWatchRoute();
+        return;
+      }
+
+      if (destVid && destVid !== lockedVideoId) {
+        const hasMatchingHint =
+          pendingCardHint &&
+          pendingCardHint.videoId === destVid &&
+          pendingCardHint.expiresAt > Date.now();
+        if (!hasMatchingHint) {
+          config.targetSpeed = Number(config.defaultSpeed) || 1.0;
+          window.__CADENCE_LAST_CONFIG__ = config;
+          applyPlaybackSpeed(config.targetSpeed);
+        }
+      }
+      startFastDetectionBurst();
+    },
+    { signal: bridgeSignal }
+  );
+
+  window.addEventListener(
     'yt-navigate-finish',
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
-      setTimeout(() => broadcastChannelMetadata(true), 120);
-      setTimeout(() => broadcastChannelMetadata(true), 700);
+      if (!isSupportedWatchOrLivePage()) {
+        handleNonWatchRoute();
+        return;
+      }
+      broadcastChannelMetadata(true);
+      startFastDetectionBurst();
+      setTimeout(() => broadcastChannelMetadata(false), 120);
+      setTimeout(() => broadcastChannelMetadata(false), 500);
     },
     { signal: bridgeSignal }
   );
@@ -414,7 +690,23 @@
   window.addEventListener(
     'yt-page-data-updated',
     () => {
-      setTimeout(() => broadcastChannelMetadata(true), 120);
+      if (!isSupportedWatchOrLivePage()) {
+        handleNonWatchRoute();
+        return;
+      }
+      broadcastChannelMetadata(true);
+    },
+    { signal: bridgeSignal }
+  );
+
+  window.addEventListener(
+    'popstate',
+    () => {
+      if (!isSupportedWatchOrLivePage()) {
+        handleNonWatchRoute();
+      } else {
+        startFastDetectionBurst();
+      }
     },
     { signal: bridgeSignal }
   );
@@ -428,6 +720,7 @@
     try {
       bridgeController.abort();
     } catch (_) {}
+    stopFastDetectionBurst();
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = null;

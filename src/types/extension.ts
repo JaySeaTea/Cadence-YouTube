@@ -25,9 +25,11 @@ export interface ExtensionSettings {
   stopAfterVideoEnds: boolean;
   showInPageControlBar: boolean;
   showSpeedToast: boolean;
+  settingsSchemaVersion?: number;
 }
 
 export type PlaylistContextMode =
+  | 'youtube_home'
   | 'watch_later'
   | 'creator_playlist'
   | 'standalone'

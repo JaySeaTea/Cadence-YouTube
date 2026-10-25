@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Cadence v1.1.1 eliminating 'Extension context invalidated' errors when reloading, replacing, or updating the unpacked Chrome extension while YouTube tabs are open, via synchronous Chrome API guards, orphaned listener self-teardown, and clean DOM/MAIN-world handover.",
-  "updatedAt":  "2026-10-24T01:06:10.246285043Z",
+  "summary":  "Implementation plan for Cadence v1.2.0 delivering session-only real-time speed adjustments on the below-video bar (0.75x–2.0x chips, +/-0.05x fine nudge, and Reset), session-only default for YouTube's player gear menu, instant badge clearing on YouTube Home/browse pages, and sub-50ms playback speed locking on video start.",
+  "updatedAt":  "2026-10-24T22:21:19.298482885Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

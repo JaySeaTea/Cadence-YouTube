@@ -4,6 +4,18 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-24
+
+### Added
+- **Session-Only Below-Video Speed Bar**: Upgraded the watch-page speed bar (`#cadence-owner-bar`) next to YouTube's Subscribe button with `0.75×`–`2.0×` quick chips, fine `−0.05×` / `+0.05×` steppers (`0.25×`–`4.0×`), and a one-click **Reset** button. Adjustments made on the below-video bar apply strictly to the current video session (`videoId`) and never overwrite saved Channel Rules.
+- **YouTube Home Mode in Web Simulator**: Added a **YouTube Home** browse context and upgraded session-only below-video controls in the web workbench to mirror Chrome behavior end-to-end.
+
+### Changed
+- **Session-Only Default for Player Gear Menu**: Changed `autoRememberManualSpeed` to `false` by default (with automatic `settingsSchemaVersion: 2` migration) so speed changes in YouTube's built-in player menu stay temporary for the current video unless **Remember Manual Changes** is explicitly enabled. Permanent Channel Rules are managed exclusively in the Cadence Toolbar Popup or Options page.
+
+### Fixed
+- **Zero-Lag Speed Lock & Badge Reset on YouTube Home**: Eliminated the 2–3 second playback speed carryover when returning to YouTube Home and clicking into a new video. Cadence now clears the toolbar icon badge and resets YouTube's persistent `<video>` rate to `1.0×` immediately on non-watch routes, captures destination channel hints on video card click (`NAVIGATION_PREVIEW`), verifies `videoId` parity against `ytd-watch-flexy` to reject stale DOM nodes, and enforces target speeds synchronously on `loadstart` / `loadeddata` / `canplay` / `playing`.
+
 ## [1.1.1] - 2026-10-23
 
 ### Fixed

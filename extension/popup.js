@@ -11,11 +11,12 @@
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
-    autoRememberManualSpeed: true,
+    autoRememberManualSpeed: false,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
+    settingsSchemaVersion: 2,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -79,7 +80,6 @@
     );
   }
 
-  // Fallback MAIN-world reader if tab was opened prior to extension install/reload
   async function probeTabDirectlyWithScripting(tabId) {
     try {
       await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] }).catch(() => {});
@@ -92,11 +92,12 @@
         func: () => {
           const player = document.getElementById('movie_player');
           const video = document.querySelector('video.html5-main-video');
-          let videoId = new URLSearchParams(location.search).get('v') || '';
-          if (!videoId && location.pathname.startsWith('/live/')) {
+          let urlVideoId = new URLSearchParams(location.search).get('v') || '';
+          if (!urlVideoId && location.pathname.startsWith('/live/')) {
             const seg = location.pathname.split('/live/')[1];
-            if (seg) videoId = seg.split(/[/?#]/)[0];
+            if (seg) urlVideoId = seg.split(/[/?#]/)[0];
           }
+          let videoId = urlVideoId;
           let channelId = '';
           let channelName = '';
           let handle = '';
@@ -104,34 +105,43 @@
           try {
             if (player && typeof player.getPlayerResponse === 'function') {
               const resp = player.getPlayerResponse();
-              if (resp && resp.videoDetails) {
-                videoId = resp.videoDetails.videoId || videoId;
+              if (
+                resp &&
+                resp.videoDetails &&
+                resp.videoDetails.videoId &&
+                (!urlVideoId || resp.videoDetails.videoId === urlVideoId)
+              ) {
+                videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
               }
             }
             if (!channelName && player && typeof player.getVideoData === 'function') {
               const vd = player.getVideoData();
-              if (vd) {
-                videoId = vd.video_id || videoId;
+              if (vd && vd.video_id && (!urlVideoId || vd.video_id === urlVideoId)) {
+                videoId = vd.video_id;
                 channelName = vd.author || '';
               }
             }
           } catch (_) {}
 
-          const ownerLink =
-            document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner ytd-channel-name a[href]') ||
-            document.querySelector('ytd-watch-flexy ytd-video-owner-renderer ytd-channel-name a[href]') ||
-            document.querySelector('#owner ytd-channel-name a[href]');
+          const flexy = document.querySelector('ytd-watch-flexy');
+          const flexyVid = flexy ? flexy.getAttribute('video-id') || '' : '';
+          if (!urlVideoId || !flexyVid || flexyVid === urlVideoId) {
+            const ownerLink =
+              document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner ytd-channel-name a[href]') ||
+              document.querySelector('ytd-watch-flexy ytd-video-owner-renderer ytd-channel-name a[href]') ||
+              document.querySelector('#owner ytd-channel-name a[href]');
 
-          if (ownerLink) {
-            const href = ownerLink.getAttribute('href') || '';
-            const hMatch = href.match(/\/(@[^/?#]+)/);
-            if (hMatch) handle = hMatch[1].toLowerCase();
-            const cMatch = href.match(/\/channel\/(UC[^/?#]+)/);
-            if (cMatch && !channelId) channelId = cMatch[1];
-            const txt = (ownerLink.textContent || '').trim();
-            if (txt) channelName = txt;
+            if (ownerLink) {
+              const href = ownerLink.getAttribute('href') || '';
+              const hMatch = href.match(/\/(@[^/?#]+)/);
+              if (hMatch) handle = hMatch[1].toLowerCase();
+              const cMatch = href.match(/\/channel\/(UC[^/?#]+)/);
+              if (cMatch && !channelId) channelId = cMatch[1];
+              const txt = (ownerLink.textContent || '').trim();
+              if (txt) channelName = txt;
+            }
           }
 
           if (!channelName && !handle && !channelId) return null;
@@ -162,6 +172,16 @@
   );
 
   if (!isYouTubeVideoUrl) {
+    if (tab && tab.id) {
+      chrome.runtime
+        .sendMessage({
+          type: 'CADENCE_UPDATE_BADGE',
+          tabId: tab.id,
+          enabled: false,
+          speed: null,
+        })
+        .catch(() => {});
+    }
     return;
   }
 
@@ -184,31 +204,47 @@
 
   const activeChannel = detected.channel;
   let currentRule = findRuleForChannel(activeChannel);
+  let sessionOverrideSpeed =
+    typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
   let currentSpeed = Number(detected.activeSpeed) || 1.0;
 
-  // If a rule already exists and tab had not yet applied it, resolve and apply immediately
-  if (currentRule && settings.enabled && settings.perChannelSpeedEnabled) {
+  if (
+    sessionOverrideSpeed === null &&
+    currentRule &&
+    settings.enabled &&
+    settings.perChannelSpeedEnabled
+  ) {
     const resolvedRuleSpeed =
       currentRule.presetId === 'custom'
         ? Number(currentRule.customSpeed)
-        : Number((presets.find((p) => p.id === currentRule.presetId) || {}).speed || currentRule.customSpeed);
+        : Number(
+            (presets.find((p) => p.id === currentRule.presetId) || {}).speed ||
+              currentRule.customSpeed
+          );
     if (resolvedRuleSpeed && Math.abs(currentSpeed - resolvedRuleSpeed) > 0.02) {
       currentSpeed = resolvedRuleSpeed;
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: 'MAIN',
-        args: [currentSpeed],
-        func: (spd) => {
-          const p = document.getElementById('movie_player');
-          const v = document.querySelector('video.html5-main-video');
-          try {
-            if (p && typeof p.setPlaybackRate === 'function' && spd <= 2.0 && Math.abs(Math.round(spd * 20) - spd * 20) < 0.001) {
-              p.setPlaybackRate(spd);
-            }
-          } catch (_) {}
-          if (v) v.playbackRate = spd;
-        },
-      }).catch(() => {});
+      chrome.scripting
+        .executeScript({
+          target: { tabId: tab.id },
+          world: 'MAIN',
+          args: [currentSpeed],
+          func: (spd) => {
+            const p = document.getElementById('movie_player');
+            const v = document.querySelector('video.html5-main-video');
+            if (v) v.playbackRate = spd;
+            try {
+              if (
+                p &&
+                typeof p.setPlaybackRate === 'function' &&
+                spd <= 2.0 &&
+                Math.abs(Math.round(spd * 20) - spd * 20) < 0.001
+              ) {
+                p.setPlaybackRate(spd);
+              }
+            } catch (_) {}
+          },
+        })
+        .catch(() => {});
     }
   }
 
@@ -233,9 +269,23 @@
     )
     .join('');
 
+  function resolveRuleBaseline(rule) {
+    if (!rule) return Number(settings.defaultSpeed) || 1.0;
+    if (rule.presetId === 'custom') return Number(rule.customSpeed) || 1.0;
+    const found = presets.find((p) => p.id === rule.presetId);
+    return found ? Number(found.speed) : Number(rule.customSpeed) || 1.0;
+  }
+
   function renderActiveSpeedUI() {
     currentRule = findRuleForChannel(activeChannel);
-    statusEl.textContent = currentRule ? 'Saved Channel Rule' : 'Detected Channel · Default';
+    const baseline = resolveRuleBaseline(currentRule);
+    if (sessionOverrideSpeed !== null) {
+      statusEl.textContent = currentRule
+        ? `Session Override · Rule is ${formatSpeed(baseline)}×`
+        : `Session Override · Default ${formatSpeed(baseline)}×`;
+    } else {
+      statusEl.textContent = currentRule ? 'Saved Channel Rule' : 'Detected Channel · Default';
+    }
     readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
     stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
 
@@ -243,6 +293,7 @@
       const pid = btn.getAttribute('data-preset-id');
       const pspd = Number(btn.getAttribute('data-speed'));
       const isSelected =
+        sessionOverrideSpeed === null &&
         currentRule &&
         currentRule.presetId === pid &&
         Math.abs(currentSpeed - pspd) < 0.02;
@@ -251,13 +302,17 @@
 
     speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
       const val = Number(btn.getAttribute('data-speed'));
-      btn.classList.toggle('active', Math.abs(val - currentSpeed) < 0.015);
+      btn.classList.toggle(
+        'active',
+        sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
+      );
     });
   }
 
   async function assignSpeedFromPopup(newSpeed, presetId) {
     const clean = Math.round(Math.min(4.0, Math.max(0.25, Number(newSpeed) || 1.0)) * 100) / 100;
     currentSpeed = clean;
+    sessionOverrideSpeed = null;
 
     const existingIdx = rules.findIndex(
       (r) =>
@@ -303,6 +358,7 @@
         func: (spd) => {
           const p = document.getElementById('movie_player');
           const v = document.querySelector('video.html5-main-video');
+          if (v) v.playbackRate = spd;
           try {
             if (
               p &&
@@ -314,7 +370,6 @@
               p.setPlaybackRate(spd);
             }
           } catch (_) {}
-          if (v) v.playbackRate = spd;
         },
       })
       .catch(() => {});

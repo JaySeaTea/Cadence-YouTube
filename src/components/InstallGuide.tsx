@@ -31,9 +31,12 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
             Load or Update Your Extension in Chrome
           </h1>
           <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-slate-400">
-            Install Cadence v1.1.1 using Chrome’s unpacked extension loader. Upon loading,
-            reloading, or swapping unpacked folders, Cadence cleanly retires prior script listeners
-            and attaches to open YouTube tabs without errors or manual refreshes.
+            Install Cadence v1.2.0 using Chrome’s unpacked extension loader. Pull updates with{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+              git pull
+            </code>{' '}
+            and click Reload on <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">chrome://extensions</code>—Cadence
+            cleanly retires prior listeners and preserves your saved channel rules.
           </p>
         </div>
 
@@ -60,7 +63,7 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
           className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" />
-          Download v1.1.1 (.zip)
+          Download v1.2.0 (.zip)
         </button>
       </div>
 
@@ -180,22 +183,18 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-5 text-sm text-slate-400 leading-relaxed">
           <div className="space-y-1.5">
             <h3 className="font-semibold text-slate-100">
-              Cross-World Structured Sync &amp; Live Tab Probe
+              Zero-Lag Pre-Navigation Lock &amp; Session Bar
             </h3>
             <p>
-              Cadence bridges YouTube’s{' '}
+              Cadence captures video card channel hints on click, resets YouTube’s persistent{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-                #movie_player
+                &lt;video&gt;
               </code>{' '}
-              in the MAIN world with Chrome storage in the ISOLATED world over structured{' '}
+              rate and toolbar badge when returning to YouTube Home, and enforces target speeds on{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-                window.postMessage
+                loadstart
               </code>{' '}
-              envelopes, paired with direct DOM extraction and on-demand{' '}
-              <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-                chrome.scripting
-              </code>{' '}
-              probing so active channels are recognized immediately.
+              within milliseconds—while keeping below-video speed tweaks strictly session-only.
             </p>
           </div>
           <div className="space-y-1.5">

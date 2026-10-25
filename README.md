@@ -2,7 +2,7 @@
 
 **Cadence** is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around two high-impact improvements to YouTube:
 
-1. **Automatic Per-Channel Playback Speeds**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×`. Whenever a video or live stream from that channel plays, Cadence applies its saved rate automatically (while leaving ads at normal speed) and optionally remembers manual speed adjustments you make in the YouTube player.
+1. **Automatic Per-Channel Playback Speeds + Session-Only Real-Time Tweaks**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup or Options page. Whenever a video or live stream from that channel starts, Cadence locks in its saved rate within milliseconds (while leaving ads at normal speed). Need to slow down a dense technical video without altering your saved Channel Rule? Use the **session-only below-video speed bar** (`0.75×`–`2.0×`, `±0.05×`, and **Reset**) next to Subscribe for temporary single-video overrides.
 2. **Strict End-of-Video Stop (Including Watch Later & Saved Playlists)**: YouTube's native Autoplay toggle does not stop playlist auto-advance inside **Watch Later (`list=WL`)** or saved creator playlists. Cadence disarms `yt-playlist-manager` auto-advance and pauses playback right as the video finishes, presenting a clean **Replay / Play Next / Dismiss** bar while preserving manual **Next (`Shift+N`)** and playlist sidebar clicks.
 
 ---
@@ -78,7 +78,8 @@ npm run build
 
 ## How the Manifest V3 Architecture Works
 
-- **Cross-World Structured Messaging (`page-bridge.js` ↔ `content.js`)**: YouTube's internal player methods (`#movie_player.getPlayerResponse()`, `setPlaybackRate()`, `setAutonavState()`, and `yt-playlist-manager`) live in the page's `MAIN` JavaScript world, whereas `chrome.storage.local` lives in the `ISOLATED` content-script world. Because Chromium strips `CustomEvent.detail` across world boundaries, Cadence communicates via structured `window.postMessage` envelopes paired with a direct DOM metadata fallback (`ytd-watch-metadata #owner`).
+- **Zero-Lag Pre-Navigation Speed Lock (`page-bridge.js` ↔ `content.js`)**: Captures destination `videoId` and channel hints directly from clicked YouTube video cards (`NAVIGATION_PREVIEW`), resets YouTube's persistent `<video>` rate to `1.0×` and clears the toolbar badge immediately when returning to YouTube Home or browse feeds, validates `videoId` parity on `ytd-watch-flexy` so stale DOM nodes are never misread during SPA transitions, and enforces target speeds synchronously on `loadstart`, `loadeddata`, `canplay`, and `playing`.
+- **Session-Only Watch Bar vs. Persistent Rules**: Speed controls injected beside YouTube's Subscribe button (`#cadence-owner-bar`) and YouTube's native player gear menu adjust a per-video `sessionOverride` by default, keeping permanent Channel Rules untouched unless edited in the Toolbar Popup or Options page.
 - **Zero-Refresh Attachment (`background.js` & `popup.js`)**: On install, update, browser startup, or toolbar icon click, Cadence uses `chrome.scripting` to attach to already-open YouTube `/watch` and `/live` tabs and query live channel metadata immediately.
 - **Playlist Stop Guard**: Monitors `timeupdate` near the end of each video (scaled by playback rate) and pauses playback before YouTube's playlist manager advances to the next item—while tracking pointer and keyboard (`Shift+N` / `Shift+P`) intent so manual navigation always works normally.
 

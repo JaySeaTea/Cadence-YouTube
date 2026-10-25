@@ -65,6 +65,17 @@ function mergeRuleLists(primary: ChannelRule[], secondary: ChannelRule[]): Chann
   return merged;
 }
 
+function normalizeSettingsSchema(
+  raw: Partial<ExtensionSettings> | undefined
+): ExtensionSettings {
+  const merged: ExtensionSettings = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  if ((raw?.settingsSchemaVersion ?? 1) < 2) {
+    merged.autoRememberManualSpeed = false;
+    merged.settingsSchemaVersion = 2;
+  }
+  return merged;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('simulator');
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -76,7 +87,7 @@ export default function App() {
   const [settings, setSettings] = useState<ExtensionSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.settings);
-      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+      return saved ? normalizeSettingsSchema(JSON.parse(saved)) : DEFAULT_SETTINGS;
     } catch {
       return DEFAULT_SETTINGS;
     }
@@ -161,14 +172,14 @@ export default function App() {
         const localUpdatedAt = localStorage.getItem(STORAGE_KEYS.updatedAt);
 
         if (!hadInitialLocalRulesRef.current) {
-          if (srv.settings) setSettings(srv.settings);
+          if (srv.settings) setSettings(normalizeSettingsSchema(srv.settings));
           if (Array.isArray(srv.presets)) setPresets(srv.presets);
           if (Array.isArray(srv.rules)) setRules(srv.rules);
           if (srv.updatedAt) {
             localStorage.setItem(STORAGE_KEYS.updatedAt, srv.updatedAt);
           }
         } else if (srv.updatedAt && (!localUpdatedAt || srv.updatedAt > localUpdatedAt)) {
-          if (srv.settings) setSettings(srv.settings);
+          if (srv.settings) setSettings(normalizeSettingsSchema(srv.settings));
           if (Array.isArray(srv.presets)) setPresets(srv.presets);
           if (Array.isArray(srv.rules)) setRules(srv.rules);
           localStorage.setItem(STORAGE_KEYS.updatedAt, srv.updatedAt);
