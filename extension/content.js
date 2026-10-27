@@ -48,6 +48,11 @@
     videoId: null,
     speed: null,
   };
+  let remainingState = {
+    videoId: null,
+    rawRemainingSec: null,
+    hidden: true,
+  };
   let lastToastedVideoId = null;
   let toastTimeout = null;
   let barMountRetryTimer = null;
@@ -128,11 +133,31 @@
     return Math.round(Math.min(4.0, Math.max(0.25, Number(val) || 1.0)) * 100) / 100;
   }
 
-  function isWatchOrLiveLocation() {
-    return (
-      location.pathname.startsWith('/watch') ||
-      location.pathname.startsWith('/live')
-    );
+  function formatRemainingReadout(rawRemainingSec, speed) {
+    if (typeof rawRemainingSec !== 'number' || !Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) {
+      return '';
+    }
+    const safeRate = Math.max(0.25, Number(speed) || 1.0);
+    const totalSec = Math.max(0, Math.round(rawRemainingSec / safeRate));
+
+    let durationPart = '';
+    if (totalSec < 60) {
+      durationPart = `${totalSec}s left`;
+    } else {
+      const totalMins = Math.max(1, Math.round(totalSec / 60));
+      if (totalMins < 60) {
+        durationPart = `${totalMins}m left`;
+      } else {
+        const hrs = Math.floor(totalMins / 60);
+        const mins = totalMins % 60;
+        durationPart = mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
+      }
+    }
+    return `${durationPart} @ ${formatDisplaySpeed(safeRate)}×`;
+  }
+
+  function isWatchLocation() {
+    return location.pathname.startsWith('/watch');
   }
 
   function postToBridge(type, payload) {
@@ -159,14 +184,10 @@
   };
 
   function extractDomChannelFallback() {
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       return null;
     }
-    let urlVideoId = new URLSearchParams(location.search).get('v') || '';
-    if (!urlVideoId && location.pathname.startsWith('/live/')) {
-      const seg = location.pathname.split('/live/')[1];
-      if (seg) urlVideoId = seg.split(/[/?#]/)[0];
-    }
+    const urlVideoId = new URLSearchParams(location.search).get('v') || '';
     const flexy = document.querySelector('ytd-watch-flexy');
     const flexyVideoId = flexy ? flexy.getAttribute('video-id') || '' : '';
     if (urlVideoId && flexyVideoId && flexyVideoId !== urlVideoId) {
@@ -212,7 +233,6 @@
       channelName: channelName || handle,
       handle,
       isAd: false,
-      isLive: location.pathname.startsWith('/live'),
       hasPlaylist: new URLSearchParams(location.search).has('list'),
     };
   }
@@ -238,14 +258,6 @@
     return preset ? Number(preset.speed) : Number(rule.customSpeed) || 1.0;
   }
 
-  function hasActiveSessionOverride(videoId) {
-    return Boolean(
-      videoId &&
-        sessionOverride.videoId === videoId &&
-        typeof sessionOverride.speed === 'number'
-    );
-  }
-
   function getBaselineSpeedForChannel(meta) {
     if (!state.settings.enabled || !state.settings.perChannelSpeedEnabled) {
       return 1.0;
@@ -254,12 +266,62 @@
     return resolveSpeedForRule(rule);
   }
 
+  function hasActiveSessionOverride(videoId) {
+    return Boolean(
+      videoId &&
+        sessionOverride.videoId === videoId &&
+        typeof sessionOverride.speed === 'number'
+    );
+  }
+
+  function clearSessionOverrideIfMatchesBaseline(meta) {
+    if (!meta || !hasActiveSessionOverride(meta.videoId)) return false;
+    const baseline = getBaselineSpeedForChannel(meta);
+    if (Math.abs(sessionOverride.speed - baseline) < 0.015) {
+      sessionOverride = { videoId: null, speed: null };
+      return true;
+    }
+    return false;
+  }
+
   function getEffectiveSpeedForChannel(meta) {
     if (!state.settings.enabled) return 1.0;
+    clearSessionOverrideIfMatchesBaseline(meta);
     if (meta && hasActiveSessionOverride(meta.videoId)) {
       return sessionOverride.speed;
     }
     return getBaselineSpeedForChannel(meta);
+  }
+
+  function computeCurrentRemainingText() {
+    if (
+      !currentChannel ||
+      currentChannel.isAd ||
+      remainingState.hidden ||
+      typeof remainingState.rawRemainingSec !== 'number'
+    ) {
+      return '';
+    }
+    if (
+      remainingState.videoId &&
+      currentChannel.videoId &&
+      remainingState.videoId !== currentChannel.videoId
+    ) {
+      return '';
+    }
+    const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+    return formatRemainingReadout(remainingState.rawRemainingSec, effectiveSpeed);
+  }
+
+  function updateRemainingReadoutInPlace() {
+    const bar = document.getElementById('cadence-owner-bar');
+    if (!bar) return;
+    const wrapEl = bar.querySelector('.cadence-remaining-wrap');
+    const timeEl = bar.querySelector('.cadence-remaining-time');
+    if (!wrapEl || !timeEl) return;
+    const text = computeCurrentRemainingText();
+    timeEl.textContent = text;
+    wrapEl.style.display = text ? 'inline-flex' : 'none';
   }
 
   function pushConfigToBridge(targetSpeed, showOnBadge = true) {
@@ -279,9 +341,9 @@
       type: 'CADENCE_UPDATE_BADGE',
       enabled:
         showOnBadge &&
-        isWatchOrLiveLocation() &&
+        isWatchLocation() &&
         Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
-      speed: showOnBadge && isWatchOrLiveLocation() ? activeSpeed : null,
+      speed: showOnBadge && isWatchLocation() ? activeSpeed : null,
     });
   }
 
@@ -416,6 +478,24 @@
     const cleanSpeed = clampSpeed(nextSpeed);
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+    const wasOverridden = hasActiveSessionOverride(currentChannel.videoId);
+
+    if (Math.abs(cleanSpeed - baselineSpeed) < 0.015) {
+      sessionOverride = {
+        videoId: null,
+        speed: null,
+      };
+      pushConfigToBridge(baselineSpeed, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
+      renderInPageBar();
+      const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+      showPlayerToast(
+        wasOverridden
+          ? `Restored ${formatDisplaySpeed(baselineSpeed)}× (${baselineLabel})`
+          : `${formatDisplaySpeed(baselineSpeed)}× · ${baselineLabel}`
+      );
+      return;
+    }
 
     sessionOverride = {
       videoId: currentChannel.videoId,
@@ -477,7 +557,7 @@
       existing = null;
     }
 
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       clearBarMountRetry();
       if (existing) existing.remove();
       return;
@@ -512,6 +592,7 @@
       ownerContainer.appendChild(bar);
     }
 
+    clearSessionOverrideIfMatchesBaseline(currentChannel);
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
@@ -520,6 +601,7 @@
     const tooltip = isSessionActive
       ? `Session override for this video only · Baseline is ${formatDisplaySpeed(baselineSpeed)}×`
       : 'Session-only speed bar · Does not overwrite saved channel rules';
+    const initialRemainingText = computeCurrentRemainingText();
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     bar.innerHTML = `
@@ -543,6 +625,10 @@
         <button type="button" data-step="0.05" class="cadence-step-chip" title="Speed up by 0.05× for this video session">+0.05</button>
         <button type="button" data-action="reset" class="cadence-reset-chip ${isSessionActive ? 'is-active' : ''}" ${!isSessionActive ? 'disabled' : ''} title="Reset to ${matchedRule ? 'channel rule' : 'default'} (${formatDisplaySpeed(baselineSpeed)}×)">Reset</button>
       </div>
+      <span class="cadence-remaining-wrap" style="display:${initialRemainingText ? 'inline-flex' : 'none'};">
+        <span class="cadence-bar-divider" aria-hidden="true"></span>
+        <span class="cadence-remaining-time" title="Real wall-clock time remaining at active playback speed">${initialRemainingText}</span>
+      </span>
     `;
 
     bar.querySelectorAll('.cadence-speed-chip').forEach((btn) => {
@@ -584,6 +670,7 @@
   function handleLeftWatchPage() {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
+    remainingState = { videoId: null, rawRemainingSec: null, hidden: true };
     lastToastedVideoId = null;
     clearBarMountRetry();
 
@@ -605,7 +692,7 @@
       teardownInstance();
       return;
     }
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       handleLeftWatchPage();
       return;
     }
@@ -620,6 +707,7 @@
       return;
     }
 
+    clearSessionOverrideIfMatchesBaseline(currentChannel);
     const rule = findMatchingRule(currentChannel);
     const speed = getEffectiveSpeedForChannel(currentChannel);
     pushConfigToBridge(speed, true);
@@ -656,9 +744,20 @@
         const { type, payload } = event.data;
         if (type === 'LEFT_WATCH_PAGE') {
           handleLeftWatchPage();
+        } else if (type === 'TIME_REMAINING_UPDATE' && payload) {
+          remainingState = {
+            videoId: payload.videoId || null,
+            rawRemainingSec:
+              typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
+            hidden: Boolean(payload.hidden),
+          };
+          updateRemainingReadoutInPlace();
         } else if (type === 'NAVIGATION_PREVIEW' && payload && payload.videoId) {
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
+          }
+          if (remainingState.videoId !== payload.videoId) {
+            remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
           }
           const hasChannelHint = Boolean(
             payload.channelId || payload.handle || payload.channelName
@@ -678,7 +777,7 @@
             defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
             targetSpeed: activeSpeed,
           });
-          if (isWatchOrLiveLocation()) {
+          if (isWatchLocation()) {
             safeSendMessage({
               type: 'CADENCE_UPDATE_BADGE',
               enabled: Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
@@ -691,6 +790,9 @@
             if (sessionOverride.videoId !== payload.videoId) {
               sessionOverride = { videoId: null, speed: null };
             }
+            if (remainingState.videoId !== payload.videoId) {
+              remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
+            }
             barMountAttempts = 0;
             const existingBanner = document.querySelector('.cadence-stopped-banner');
             if (existingBanner) {
@@ -701,27 +803,60 @@
           applyForCurrentChannel(true);
         } else if (type === 'MANUAL_RATE_CHANGE' && payload) {
           if (!state.settings.enabled) return;
-          currentChannel = payload;
+          if (payload && payload.channelName) {
+            currentChannel = payload;
+          } else if (!currentChannel) {
+            currentChannel = extractDomChannelFallback();
+          }
+          if (!currentChannel) return;
+
+          const cleanManualSpeed = clampSpeed(payload.speed);
 
           if (state.settings.autoRememberManualSpeed) {
             sessionOverride = { videoId: null, speed: null };
-            const matchingPreset = state.presets.find((p) => Math.abs(p.speed - payload.speed) < 0.01);
+            const matchingPreset = state.presets.find(
+              (p) => Math.abs(p.speed - cleanManualSpeed) < 0.01
+            );
             const saved = await saveChannelSpeed(
-              payload,
-              payload.speed,
+              currentChannel,
+              cleanManualSpeed,
               matchingPreset ? matchingPreset.id : 'custom'
             );
             if (!saved) return;
-            pushConfigToBridge(payload.speed, true);
-            showPlayerToast(`Remembered ${formatDisplaySpeed(payload.speed)}× for ${payload.channelName}`);
+            pushConfigToBridge(cleanManualSpeed, true);
+            showPlayerToast(
+              `Remembered ${formatDisplaySpeed(cleanManualSpeed)}× for ${currentChannel.channelName}`
+            );
           } else {
-            sessionOverride = {
-              videoId: payload.videoId || 'active',
-              speed: clampSpeed(payload.speed),
-            };
-            pushConfigToBridge(sessionOverride.speed, true);
-            renderInPageBar();
-            showPlayerToast(`Session ${formatDisplaySpeed(sessionOverride.speed)}× · This video only`);
+            const matchedRule = findMatchingRule(currentChannel);
+            const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+            const activeVid = currentChannel.videoId || payload.videoId || 'active';
+            const wasOverridden = hasActiveSessionOverride(activeVid);
+
+            if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
+              sessionOverride = { videoId: null, speed: null };
+              pushConfigToBridge(baselineSpeed, true);
+              renderInPageBar();
+              const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+              showPlayerToast(
+                wasOverridden
+                  ? `Restored ${formatDisplaySpeed(baselineSpeed)}× (${baselineLabel})`
+                  : `${formatDisplaySpeed(baselineSpeed)}× · ${baselineLabel}`
+              );
+            } else {
+              sessionOverride = {
+                videoId: activeVid,
+                speed: cleanManualSpeed,
+              };
+              pushConfigToBridge(sessionOverride.speed, true);
+              renderInPageBar();
+              const suffix = matchedRule
+                ? `Rule ${formatDisplaySpeed(baselineSpeed)}× unchanged`
+                : 'This video only';
+              showPlayerToast(
+                `Session ${formatDisplaySpeed(sessionOverride.speed)}× · ${suffix}`
+              );
+            }
           }
         } else if (type === 'PLAYBACK_STOPPED') {
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
@@ -742,7 +877,7 @@
         return false;
       }
       if (msg && msg.type === 'CADENCE_GET_ACTIVE_CHANNEL') {
-        if (!isWatchOrLiveLocation()) {
+        if (!isWatchLocation()) {
           sendResponse({ channel: null });
           return false;
         }
@@ -751,13 +886,24 @@
         }
         const video = document.querySelector('video.html5-main-video');
         const liveVideoSpeed = video ? Math.round(video.playbackRate * 100) / 100 : activeSpeed;
+        const baseline = getBaselineSpeedForChannel(currentChannel);
+        if (
+          currentChannel &&
+          hasActiveSessionOverride(currentChannel.videoId) &&
+          Math.abs(liveVideoSpeed - baseline) < 0.015
+        ) {
+          sessionOverride = { videoId: null, speed: null };
+          renderInPageBar();
+        } else {
+          clearSessionOverrideIfMatchesBaseline(currentChannel);
+        }
         const rule = findMatchingRule(currentChannel);
         const isSession = hasActiveSessionOverride(currentChannel && currentChannel.videoId);
         sendResponse({
           channel: currentChannel,
           activeSpeed: liveVideoSpeed || activeSpeed,
           matchedRule: rule,
-          baselineSpeed: getBaselineSpeedForChannel(currentChannel),
+          baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
         });
         return false;
@@ -816,7 +962,7 @@
       targetSpeed: activeSpeed,
     });
 
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       handleLeftWatchPage();
       return;
     }

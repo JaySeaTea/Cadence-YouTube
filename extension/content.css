@@ -46,6 +46,19 @@ html[dark] .cadence-bar-label.is-session strong {
   background: rgba(148, 163, 184, 0.3);
 }
 
+.cadence-remaining-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cadence-remaining-time {
+  font-size: 11px;
+  opacity: 0.78;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .cadence-speed-chip {
   border: none;
   background: transparent;

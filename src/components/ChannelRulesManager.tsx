@@ -6,7 +6,11 @@ import {
   ChannelRule,
   ExtensionSettings,
 } from '../types/extension';
-import { normalizeHandle, resolveRuleSpeed } from '../data/initialData';
+import {
+  EXTENSION_VERSION,
+  normalizeHandle,
+  resolveRuleSpeed,
+} from '../data/initialData';
 
 interface ChannelRulesManagerProps {
   settings: ExtensionSettings;
@@ -141,6 +145,9 @@ export const ChannelRulesManager: React.FC<ChannelRulesManagerProps> = ({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-6 border-b border-slate-800/90">
         <div className="max-w-2xl">
+          <div className="text-xs font-mono tabular-nums text-slate-400 mb-1.5">
+            Cadence Options · v{EXTENSION_VERSION}
+          </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 [text-wrap:balance]">
             Channel Speed Rules &amp; Category Profiles
           </h1>
@@ -279,7 +286,7 @@ export const ChannelRulesManager: React.FC<ChannelRulesManagerProps> = ({
             </p>
           </div>
           <span className="text-xs text-slate-400 tabular-nums shrink-0">
-            {rules.length} saved
+            {rules.length} saved · v{EXTENSION_VERSION}
           </span>
         </div>
 

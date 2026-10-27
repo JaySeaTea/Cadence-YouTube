@@ -6,6 +6,7 @@ import {
 } from '../types/extension';
 import {
   DEFAULT_PRESETS,
+  EXTENSION_VERSION,
   INITIAL_CHANNEL_RULES,
 } from '../data/sampleDefaults';
 
@@ -26,9 +27,9 @@ export function buildExtensionFiles(
       manifest_version: 3,
       name: 'Cadence — Per-Channel Speed & Playlist Stop for YouTube',
       short_name: 'Cadence',
-      version: '1.2.0',
+      version: EXTENSION_VERSION,
       description:
-        'Automatically sets per-channel playback speeds on YouTube, provides session-only real-time speed controls, and stops playback at the end of every video.',
+        'Automatically sets per-channel playback speeds on YouTube, shows real-time remaining duration at speed, and stops playback at the end of every video.',
       permissions: ['storage', 'tabs', 'scripting', 'activeTab'],
       host_permissions: ['*://*.youtube.com/*'],
       background: {
@@ -88,10 +89,10 @@ function formatBadgeSpeed(speed) {
   return num.toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1') + 'x';
 }
 
-function isYouTubeWatchOrLiveUrl(url) {
+function isYouTubeWatchUrl(url) {
   return (
     typeof url === 'string' &&
-    /^https?:\\/\\/([a-z0-9-]+\\.)?youtube\\.com\\/(watch|live)/i.test(url)
+    /^https?:\\/\\/([a-z0-9-]+\\.)?youtube\\.com\\/watch/i.test(url)
   );
 }
 
@@ -100,7 +101,7 @@ async function injectIntoExistingYouTubeTabs() {
     const tabs = await chrome.tabs.query({ url: ['*://*.youtube.com/*'] });
     for (const tab of tabs) {
       if (!tab.id) continue;
-      if (tab.url && !isYouTubeWatchOrLiveUrl(tab.url)) {
+      if (tab.url && !isYouTubeWatchUrl(tab.url)) {
         chrome.action.setBadgeText({ tabId: tab.id, text: '' }).catch(() => {});
       }
       try {
@@ -178,7 +179,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!candidateUrl) return;
   if (
     /^https?:\\/\\/([a-z0-9-]+\\.)?youtube\\.com\\//i.test(candidateUrl) &&
-    !isYouTubeWatchOrLiveUrl(candidateUrl)
+    !isYouTubeWatchUrl(candidateUrl)
   ) {
     chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
   }
@@ -189,7 +190,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;
     if (tabId) {
       const tabUrl = (sender.tab && sender.tab.url) || '';
-      const allowBadge = !tabUrl || isYouTubeWatchOrLiveUrl(tabUrl);
+      const allowBadge = !tabUrl || isYouTubeWatchUrl(tabUrl);
       const text =
         allowBadge && message.enabled && message.speed ? formatBadgeSpeed(message.speed) : '';
       chrome.action.setBadgeText({ tabId, text }).catch(() => {});
@@ -232,6 +233,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let pendingCardHint = null;
   let heldAtEndVideoId = window.__CADENCE_HELD_VIDEO_ID__ || null;
   let userInitiatedNavUntil = 0;
+  let lastRemainingEmitAt = 0;
+  let lastRemainingSignature = '';
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -255,10 +258,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (parsed.pathname.startsWith('/watch')) {
         return parsed.searchParams.get('v') || '';
       }
-      if (parsed.pathname.startsWith('/live/')) {
-        const seg = parsed.pathname.split('/live/')[1];
-        return seg ? seg.split(/[/?#]/)[0] : '';
-      }
     } catch (_) {}
     return '';
   }
@@ -267,8 +266,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return parseVideoIdFromHref(location.href);
   }
 
+  function isSupportedWatchPage() {
+    return location.pathname.startsWith('/watch');
+  }
+
   function extractCardPreviewHint(target) {
-    const watchAnchor = target.closest('a[href*="/watch"], a[href*="/live/"]');
+    const watchAnchor = target.closest('a[href*="/watch"]');
     if (!watchAnchor) return null;
     const videoId = parseVideoIdFromHref(watchAnchor.getAttribute('href') || '');
     if (!videoId) return null;
@@ -323,7 +326,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!target) return;
       if (
         target.closest(
-          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], a[href*="/live/"], .cadence-play-next-btn'
+          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], .cadence-play-next-btn'
         )
       ) {
         markUserNavigationIntent();
@@ -333,7 +336,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const hint = extractCardPreviewHint(target);
         if (hint) {
           pendingCardHint = hint;
-          if (!isSupportedWatchOrLivePage()) {
+          if (!isSupportedWatchPage()) {
             postToContent('NAVIGATION_PREVIEW', hint);
             startFastDetectionBurst();
           }
@@ -365,7 +368,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
       if (homeOrBrowseLink) {
         setTimeout(() => {
-          if (!isSupportedWatchOrLivePage()) {
+          if (!isSupportedWatchPage()) {
             handleNonWatchRoute();
           }
         }, 0);
@@ -401,13 +404,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting');
   }
 
-  function isSupportedWatchOrLivePage() {
-    return (
-      location.pathname.startsWith('/watch') ||
-      location.pathname.startsWith('/live')
-    );
-  }
-
   function getCurrentVideoId(player) {
     const urlVid = getUrlVideoId();
     if (urlVid) return urlVid;
@@ -424,8 +420,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return '';
   }
 
+  function emitTimeRemaining(force = false) {
+    if (!isSupportedWatchPage()) return;
+    const now = Date.now();
+    if (!force && now - lastRemainingEmitAt < 950) return;
+
+    const player = getMoviePlayer();
+    const video = getMainVideo();
+    if (!video) return;
+
+    const adActive = isAdPlaying(player);
+    const isUnboundedBroadcast =
+      adActive ||
+      Boolean(player && player.classList && player.classList.contains('ytp-live')) ||
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0;
+
+    const rate = Math.max(0.25, Number(video.playbackRate) || 1.0);
+    const rawRemainingSec = isUnboundedBroadcast
+      ? null
+      : Math.max(0, video.duration - video.currentTime);
+    const videoId = getCurrentVideoId(player) || '';
+    const realBucket =
+      rawRemainingSec === null ? 'na' : Math.round(rawRemainingSec / rate);
+    const sig = [videoId, realBucket, rate.toFixed(2)].join('|');
+
+    if (!force && sig === lastRemainingSignature) return;
+    lastRemainingEmitAt = now;
+    lastRemainingSignature = sig;
+
+    postToContent('TIME_REMAINING_UPDATE', {
+      videoId,
+      rawRemainingSec,
+      playbackRate: Math.round(rate * 100) / 100,
+      hidden: isUnboundedBroadcast,
+    });
+  }
+
   function extractChannelMetadata() {
-    if (!isSupportedWatchOrLivePage()) {
+    if (!isSupportedWatchPage()) {
       return null;
     }
     const player = getMoviePlayer();
@@ -436,7 +469,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let channelName = '';
     let handle = '';
     let title = '';
-    let isLive = location.pathname.startsWith('/live');
 
     try {
       if (player && typeof player.getPlayerResponse === 'function') {
@@ -447,7 +479,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           channelId = details.channelId || '';
           channelName = details.author || '';
           title = details.title || '';
-          isLive = Boolean(details.isLiveContent) || isLive;
         }
       }
       if ((!channelName || !videoId) && player && typeof player.getVideoData === 'function') {
@@ -524,7 +555,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handle,
       title,
       isAd: adActive,
-      isLive,
       isPreview,
       currentRate: video ? Number(video.playbackRate.toFixed(2)) : 1.0,
       hasPlaylist: new URLSearchParams(location.search).has('list'),
@@ -558,6 +588,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     } catch (_) {}
 
+    if (!forceResetOnBrowse) {
+      emitTimeRemaining(true);
+    }
+
     programmaticTimer = setTimeout(() => {
       isApplyingProgrammatically = false;
     }, 350);
@@ -574,6 +608,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopFastDetectionBurst();
     heldAtEndVideoId = null;
     window.__CADENCE_HELD_VIDEO_ID__ = null;
+    lastRemainingEmitAt = 0;
+    lastRemainingSignature = '';
     const defaultSpd = Number(config.defaultSpeed) || 1.0;
     config.targetSpeed = defaultSpd;
     window.__CADENCE_LAST_CONFIG__ = config;
@@ -592,7 +628,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let ticks = 0;
     fastBurstInterval = setInterval(() => {
       ticks += 1;
-      if (!isSupportedWatchOrLivePage()) {
+      if (!isSupportedWatchPage()) {
         if (ticks >= 8) {
           handleNonWatchRoute();
         }
@@ -634,7 +670,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function checkNearVideoEnd() {
-    if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchOrLivePage()) return;
+    if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return;
     const player = getMoviePlayer();
     const video = getMainVideo();
     if (!video || isAdPlaying(player) || video.loop) return;
@@ -676,7 +712,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function enforceConfiguredSpeedNow() {
-    if (!isSupportedWatchOrLivePage()) return;
+    if (!isSupportedWatchPage()) return;
     if (config.enabled && config.perChannelSpeedEnabled) {
       applyPlaybackSpeed(config.targetSpeed);
     }
@@ -687,14 +723,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!video || video.__cadenceBridgeId === bridgeInstanceId) return;
     video.__cadenceBridgeId = bridgeInstanceId;
 
-    video.addEventListener('timeupdate', checkNearVideoEnd, { signal: bridgeSignal });
+    video.addEventListener(
+      'timeupdate',
+      () => {
+        checkNearVideoEnd();
+        emitTimeRemaining(false);
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
+      'seeked',
+      () => {
+        emitTimeRemaining(true);
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
+      'durationchange',
+      () => {
+        emitTimeRemaining(true);
+      },
+      { signal: bridgeSignal }
+    );
 
     video.addEventListener(
       'loadstart',
       () => {
         heldAtEndVideoId = null;
         window.__CADENCE_HELD_VIDEO_ID__ = null;
-        if (!isSupportedWatchOrLivePage()) {
+        lastRemainingSignature = '';
+        if (!isSupportedWatchPage()) {
           handleNonWatchRoute();
           return;
         }
@@ -723,6 +783,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         window.__CADENCE_HELD_VIDEO_ID__ = null;
         broadcastChannelMetadata(true);
         enforceConfiguredSpeedNow();
+        emitTimeRemaining(true);
         setTimeout(enforceConfiguredSpeedNow, 30);
         suppressNativeAutoplayAndPlaylist();
       },
@@ -737,6 +798,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       () => {
         suppressNativeAutoplayAndPlaylist();
         enforceConfiguredSpeedNow();
+        emitTimeRemaining(true);
       },
       { signal: bridgeSignal }
     );
@@ -745,6 +807,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       'playing',
       () => {
         enforceConfiguredSpeedNow();
+        emitTimeRemaining(false);
       },
       { signal: bridgeSignal }
     );
@@ -752,15 +815,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'ratechange',
       () => {
-        if (!isSupportedWatchOrLivePage()) return;
+        if (!isSupportedWatchPage()) return;
         const player = getMoviePlayer();
         if (isApplyingProgrammatically || isAdPlaying(player)) return;
         const newRate = Math.round(video.playbackRate * 100) / 100;
-        if (Math.abs(newRate - lastAppliedSpeed) >= 0.03) {
+        emitTimeRemaining(true);
+        if (Math.abs(newRate - lastAppliedSpeed) >= 0.025) {
           lastAppliedSpeed = newRate;
           const meta = extractChannelMetadata();
           if (meta && !meta.isPreview) {
             postToContent('MANUAL_RATE_CHANGE', { ...meta, speed: newRate });
+          } else {
+            const fallbackVideoId = getCurrentVideoId(player) || '';
+            if (fallbackVideoId) {
+              postToContent('MANUAL_RATE_CHANGE', {
+                videoId: fallbackVideoId,
+                speed: newRate,
+              });
+            }
           }
         }
       },
@@ -770,7 +842,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function broadcastChannelMetadata(force = false) {
     bindVideoListeners();
-    if (!isSupportedWatchOrLivePage()) {
+    if (!isSupportedWatchPage()) {
       handleNonWatchRoute();
       return;
     }
@@ -792,6 +864,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (force || key !== lastDetectedKey) {
       lastDetectedKey = key;
       postToContent('VIDEO_DETECTED', meta);
+      emitTimeRemaining(true);
     }
   }
 
@@ -806,7 +879,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         config = { ...config, ...payload };
         window.__CADENCE_LAST_CONFIG__ = config;
         suppressNativeAutoplayAndPlaylist();
-        if (!isSupportedWatchOrLivePage()) {
+        if (!isSupportedWatchPage()) {
           applyPlaybackSpeed(config.defaultSpeed || 1.0, true);
         } else if (config.enabled && config.perChannelSpeedEnabled && typeof payload.targetSpeed === 'number') {
           applyPlaybackSpeed(payload.targetSpeed);
@@ -828,6 +901,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (player && typeof player.playVideo === 'function') {
             player.playVideo();
           }
+          emitTimeRemaining(true);
         } else if (payload.action === 'PLAY_NEXT_MANUAL') {
           markUserNavigationIntent();
           const player = getMoviePlayer();
@@ -839,6 +913,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         } else if (payload.action === 'FORCE_DETECT') {
           broadcastChannelMetadata(true);
+          emitTimeRemaining(true);
         }
       }
     },
@@ -850,10 +925,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (e) => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
+      lastRemainingSignature = '';
       const destUrl = (e && e.detail && e.detail.url) || '';
       const destVid = parseVideoIdFromHref(destUrl) || getUrlVideoId();
 
-      if (destUrl && !destUrl.startsWith('/watch') && !destUrl.startsWith('/live')) {
+      if (destUrl && !destUrl.startsWith('/watch')) {
         handleNonWatchRoute();
         return;
       }
@@ -879,7 +955,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
-      if (!isSupportedWatchOrLivePage()) {
+      if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
       }
@@ -894,7 +970,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   window.addEventListener(
     'yt-page-data-updated',
     () => {
-      if (!isSupportedWatchOrLivePage()) {
+      if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
       }
@@ -906,7 +982,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   window.addEventListener(
     'popstate',
     () => {
-      if (!isSupportedWatchOrLivePage()) {
+      if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
       } else {
         startFastDetectionBurst();
@@ -918,6 +994,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   heartbeatInterval = setInterval(() => {
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
+    emitTimeRemaining(false);
   }, 250);
 
   window.__CADENCE_PAGE_BRIDGE_CLEANUP__ = () => {
@@ -985,6 +1062,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let sessionOverride = {
     videoId: null,
     speed: null,
+  };
+  let remainingState = {
+    videoId: null,
+    rawRemainingSec: null,
+    hidden: true,
   };
   let lastToastedVideoId = null;
   let toastTimeout = null;
@@ -1066,11 +1148,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return Math.round(Math.min(4.0, Math.max(0.25, Number(val) || 1.0)) * 100) / 100;
   }
 
-  function isWatchOrLiveLocation() {
-    return (
-      location.pathname.startsWith('/watch') ||
-      location.pathname.startsWith('/live')
-    );
+  function formatRemainingReadout(rawRemainingSec, speed) {
+    if (typeof rawRemainingSec !== 'number' || !Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) {
+      return '';
+    }
+    const safeRate = Math.max(0.25, Number(speed) || 1.0);
+    const totalSec = Math.max(0, Math.round(rawRemainingSec / safeRate));
+
+    let durationPart = '';
+    if (totalSec < 60) {
+      durationPart = \`\${totalSec}s left\`;
+    } else {
+      const totalMins = Math.max(1, Math.round(totalSec / 60));
+      if (totalMins < 60) {
+        durationPart = \`\${totalMins}m left\`;
+      } else {
+        const hrs = Math.floor(totalMins / 60);
+        const mins = totalMins % 60;
+        durationPart = mins > 0 ? \`\${hrs}h \${mins}m left\` : \`\${hrs}h left\`;
+      }
+    }
+    return \`\${durationPart} @ \${formatDisplaySpeed(safeRate)}×\`;
+  }
+
+  function isWatchLocation() {
+    return location.pathname.startsWith('/watch');
   }
 
   function postToBridge(type, payload) {
@@ -1097,14 +1199,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   };
 
   function extractDomChannelFallback() {
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       return null;
     }
-    let urlVideoId = new URLSearchParams(location.search).get('v') || '';
-    if (!urlVideoId && location.pathname.startsWith('/live/')) {
-      const seg = location.pathname.split('/live/')[1];
-      if (seg) urlVideoId = seg.split(/[/?#]/)[0];
-    }
+    const urlVideoId = new URLSearchParams(location.search).get('v') || '';
     const flexy = document.querySelector('ytd-watch-flexy');
     const flexyVideoId = flexy ? flexy.getAttribute('video-id') || '' : '';
     if (urlVideoId && flexyVideoId && flexyVideoId !== urlVideoId) {
@@ -1150,7 +1248,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       channelName: channelName || handle,
       handle,
       isAd: false,
-      isLive: location.pathname.startsWith('/live'),
       hasPlaylist: new URLSearchParams(location.search).has('list'),
     };
   }
@@ -1176,14 +1273,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return preset ? Number(preset.speed) : Number(rule.customSpeed) || 1.0;
   }
 
-  function hasActiveSessionOverride(videoId) {
-    return Boolean(
-      videoId &&
-        sessionOverride.videoId === videoId &&
-        typeof sessionOverride.speed === 'number'
-    );
-  }
-
   function getBaselineSpeedForChannel(meta) {
     if (!state.settings.enabled || !state.settings.perChannelSpeedEnabled) {
       return 1.0;
@@ -1192,12 +1281,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return resolveSpeedForRule(rule);
   }
 
+  function hasActiveSessionOverride(videoId) {
+    return Boolean(
+      videoId &&
+        sessionOverride.videoId === videoId &&
+        typeof sessionOverride.speed === 'number'
+    );
+  }
+
+  function clearSessionOverrideIfMatchesBaseline(meta) {
+    if (!meta || !hasActiveSessionOverride(meta.videoId)) return false;
+    const baseline = getBaselineSpeedForChannel(meta);
+    if (Math.abs(sessionOverride.speed - baseline) < 0.015) {
+      sessionOverride = { videoId: null, speed: null };
+      return true;
+    }
+    return false;
+  }
+
   function getEffectiveSpeedForChannel(meta) {
     if (!state.settings.enabled) return 1.0;
+    clearSessionOverrideIfMatchesBaseline(meta);
     if (meta && hasActiveSessionOverride(meta.videoId)) {
       return sessionOverride.speed;
     }
     return getBaselineSpeedForChannel(meta);
+  }
+
+  function computeCurrentRemainingText() {
+    if (
+      !currentChannel ||
+      currentChannel.isAd ||
+      remainingState.hidden ||
+      typeof remainingState.rawRemainingSec !== 'number'
+    ) {
+      return '';
+    }
+    if (
+      remainingState.videoId &&
+      currentChannel.videoId &&
+      remainingState.videoId !== currentChannel.videoId
+    ) {
+      return '';
+    }
+    const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+    return formatRemainingReadout(remainingState.rawRemainingSec, effectiveSpeed);
+  }
+
+  function updateRemainingReadoutInPlace() {
+    const bar = document.getElementById('cadence-owner-bar');
+    if (!bar) return;
+    const wrapEl = bar.querySelector('.cadence-remaining-wrap');
+    const timeEl = bar.querySelector('.cadence-remaining-time');
+    if (!wrapEl || !timeEl) return;
+    const text = computeCurrentRemainingText();
+    timeEl.textContent = text;
+    wrapEl.style.display = text ? 'inline-flex' : 'none';
   }
 
   function pushConfigToBridge(targetSpeed, showOnBadge = true) {
@@ -1217,9 +1356,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       type: 'CADENCE_UPDATE_BADGE',
       enabled:
         showOnBadge &&
-        isWatchOrLiveLocation() &&
+        isWatchLocation() &&
         Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
-      speed: showOnBadge && isWatchOrLiveLocation() ? activeSpeed : null,
+      speed: showOnBadge && isWatchLocation() ? activeSpeed : null,
     });
   }
 
@@ -1354,6 +1493,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const cleanSpeed = clampSpeed(nextSpeed);
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+    const wasOverridden = hasActiveSessionOverride(currentChannel.videoId);
+
+    if (Math.abs(cleanSpeed - baselineSpeed) < 0.015) {
+      sessionOverride = {
+        videoId: null,
+        speed: null,
+      };
+      pushConfigToBridge(baselineSpeed, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
+      renderInPageBar();
+      const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+      showPlayerToast(
+        wasOverridden
+          ? \`Restored \${formatDisplaySpeed(baselineSpeed)}× (\${baselineLabel})\`
+          : \`\${formatDisplaySpeed(baselineSpeed)}× · \${baselineLabel}\`
+      );
+      return;
+    }
 
     sessionOverride = {
       videoId: currentChannel.videoId,
@@ -1415,7 +1572,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       existing = null;
     }
 
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       clearBarMountRetry();
       if (existing) existing.remove();
       return;
@@ -1450,6 +1607,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ownerContainer.appendChild(bar);
     }
 
+    clearSessionOverrideIfMatchesBaseline(currentChannel);
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
@@ -1458,6 +1616,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tooltip = isSessionActive
       ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
       : 'Session-only speed bar · Does not overwrite saved channel rules';
+    const initialRemainingText = computeCurrentRemainingText();
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     bar.innerHTML = \`
@@ -1481,6 +1640,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         <button type="button" data-step="0.05" class="cadence-step-chip" title="Speed up by 0.05× for this video session">+0.05</button>
         <button type="button" data-action="reset" class="cadence-reset-chip \${isSessionActive ? 'is-active' : ''}" \${!isSessionActive ? 'disabled' : ''} title="Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(baselineSpeed)}×)">Reset</button>
       </div>
+      <span class="cadence-remaining-wrap" style="display:\${initialRemainingText ? 'inline-flex' : 'none'};">
+        <span class="cadence-bar-divider" aria-hidden="true"></span>
+        <span class="cadence-remaining-time" title="Real wall-clock time remaining at active playback speed">\${initialRemainingText}</span>
+      </span>
     \`;
 
     bar.querySelectorAll('.cadence-speed-chip').forEach((btn) => {
@@ -1522,6 +1685,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function handleLeftWatchPage() {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
+    remainingState = { videoId: null, rawRemainingSec: null, hidden: true };
     lastToastedVideoId = null;
     clearBarMountRetry();
 
@@ -1543,7 +1707,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       teardownInstance();
       return;
     }
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       handleLeftWatchPage();
       return;
     }
@@ -1558,6 +1722,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    clearSessionOverrideIfMatchesBaseline(currentChannel);
     const rule = findMatchingRule(currentChannel);
     const speed = getEffectiveSpeedForChannel(currentChannel);
     pushConfigToBridge(speed, true);
@@ -1594,9 +1759,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { type, payload } = event.data;
         if (type === 'LEFT_WATCH_PAGE') {
           handleLeftWatchPage();
+        } else if (type === 'TIME_REMAINING_UPDATE' && payload) {
+          remainingState = {
+            videoId: payload.videoId || null,
+            rawRemainingSec:
+              typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
+            hidden: Boolean(payload.hidden),
+          };
+          updateRemainingReadoutInPlace();
         } else if (type === 'NAVIGATION_PREVIEW' && payload && payload.videoId) {
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
+          }
+          if (remainingState.videoId !== payload.videoId) {
+            remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
           }
           const hasChannelHint = Boolean(
             payload.channelId || payload.handle || payload.channelName
@@ -1616,7 +1792,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
             targetSpeed: activeSpeed,
           });
-          if (isWatchOrLiveLocation()) {
+          if (isWatchLocation()) {
             safeSendMessage({
               type: 'CADENCE_UPDATE_BADGE',
               enabled: Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
@@ -1629,6 +1805,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (sessionOverride.videoId !== payload.videoId) {
               sessionOverride = { videoId: null, speed: null };
             }
+            if (remainingState.videoId !== payload.videoId) {
+              remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
+            }
             barMountAttempts = 0;
             const existingBanner = document.querySelector('.cadence-stopped-banner');
             if (existingBanner) {
@@ -1639,27 +1818,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           applyForCurrentChannel(true);
         } else if (type === 'MANUAL_RATE_CHANGE' && payload) {
           if (!state.settings.enabled) return;
-          currentChannel = payload;
+          if (payload && payload.channelName) {
+            currentChannel = payload;
+          } else if (!currentChannel) {
+            currentChannel = extractDomChannelFallback();
+          }
+          if (!currentChannel) return;
+
+          const cleanManualSpeed = clampSpeed(payload.speed);
 
           if (state.settings.autoRememberManualSpeed) {
             sessionOverride = { videoId: null, speed: null };
-            const matchingPreset = state.presets.find((p) => Math.abs(p.speed - payload.speed) < 0.01);
+            const matchingPreset = state.presets.find(
+              (p) => Math.abs(p.speed - cleanManualSpeed) < 0.01
+            );
             const saved = await saveChannelSpeed(
-              payload,
-              payload.speed,
+              currentChannel,
+              cleanManualSpeed,
               matchingPreset ? matchingPreset.id : 'custom'
             );
             if (!saved) return;
-            pushConfigToBridge(payload.speed, true);
-            showPlayerToast(\`Remembered \${formatDisplaySpeed(payload.speed)}× for \${payload.channelName}\`);
+            pushConfigToBridge(cleanManualSpeed, true);
+            showPlayerToast(
+              \`Remembered \${formatDisplaySpeed(cleanManualSpeed)}× for \${currentChannel.channelName}\`
+            );
           } else {
-            sessionOverride = {
-              videoId: payload.videoId || 'active',
-              speed: clampSpeed(payload.speed),
-            };
-            pushConfigToBridge(sessionOverride.speed, true);
-            renderInPageBar();
-            showPlayerToast(\`Session \${formatDisplaySpeed(sessionOverride.speed)}× · This video only\`);
+            const matchedRule = findMatchingRule(currentChannel);
+            const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+            const activeVid = currentChannel.videoId || payload.videoId || 'active';
+            const wasOverridden = hasActiveSessionOverride(activeVid);
+
+            if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
+              sessionOverride = { videoId: null, speed: null };
+              pushConfigToBridge(baselineSpeed, true);
+              renderInPageBar();
+              const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+              showPlayerToast(
+                wasOverridden
+                  ? \`Restored \${formatDisplaySpeed(baselineSpeed)}× (\${baselineLabel})\`
+                  : \`\${formatDisplaySpeed(baselineSpeed)}× · \${baselineLabel}\`
+              );
+            } else {
+              sessionOverride = {
+                videoId: activeVid,
+                speed: cleanManualSpeed,
+              };
+              pushConfigToBridge(sessionOverride.speed, true);
+              renderInPageBar();
+              const suffix = matchedRule
+                ? \`Rule \${formatDisplaySpeed(baselineSpeed)}× unchanged\`
+                : 'This video only';
+              showPlayerToast(
+                \`Session \${formatDisplaySpeed(sessionOverride.speed)}× · \${suffix}\`
+              );
+            }
           }
         } else if (type === 'PLAYBACK_STOPPED') {
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
@@ -1680,7 +1892,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
       if (msg && msg.type === 'CADENCE_GET_ACTIVE_CHANNEL') {
-        if (!isWatchOrLiveLocation()) {
+        if (!isWatchLocation()) {
           sendResponse({ channel: null });
           return false;
         }
@@ -1689,13 +1901,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const video = document.querySelector('video.html5-main-video');
         const liveVideoSpeed = video ? Math.round(video.playbackRate * 100) / 100 : activeSpeed;
+        const baseline = getBaselineSpeedForChannel(currentChannel);
+        if (
+          currentChannel &&
+          hasActiveSessionOverride(currentChannel.videoId) &&
+          Math.abs(liveVideoSpeed - baseline) < 0.015
+        ) {
+          sessionOverride = { videoId: null, speed: null };
+          renderInPageBar();
+        } else {
+          clearSessionOverrideIfMatchesBaseline(currentChannel);
+        }
         const rule = findMatchingRule(currentChannel);
         const isSession = hasActiveSessionOverride(currentChannel && currentChannel.videoId);
         sendResponse({
           channel: currentChannel,
           activeSpeed: liveVideoSpeed || activeSpeed,
           matchedRule: rule,
-          baselineSpeed: getBaselineSpeedForChannel(currentChannel),
+          baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
         });
         return false;
@@ -1754,7 +1977,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       targetSpeed: activeSpeed,
     });
 
-    if (!isWatchOrLiveLocation()) {
+    if (!isWatchLocation()) {
       handleLeftWatchPage();
       return;
     }
@@ -1815,6 +2038,19 @@ html[dark] .cadence-bar-label.is-session strong {
   width: 1px;
   height: 14px;
   background: rgba(148, 163, 184, 0.3);
+}
+
+.cadence-remaining-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cadence-remaining-time {
+  font-size: 11px;
+  opacity: 0.78;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .cadence-speed-chip {
@@ -1975,7 +2211,18 @@ html[dark] .cadence-bar-label.is-session strong {
         padding-bottom: 12px;
         border-bottom: 1px solid #1e293b;
       }
+      .brand-wrap {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+      }
       .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .version-meta {
+        font-size: 11px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
       .link-btn {
         border: none;
         background: none;
@@ -2124,7 +2371,10 @@ html[dark] .cadence-bar-label.is-session strong {
   </head>
   <body>
     <div class="header">
-      <span class="brand">Cadence</span>
+      <div class="brand-wrap">
+        <span class="brand">Cadence</span>
+        <span class="version-meta" id="ext-version"></span>
+      </div>
       <button id="open-options" class="link-btn">All Channel Rules</button>
     </div>
 
@@ -2133,7 +2383,7 @@ html[dark] .cadence-bar-label.is-session strong {
         <span class="kicker" id="channel-status">Active YouTube Tab</span>
         <span class="speed-readout" id="active-speed-readout"></span>
       </div>
-      <div class="channel-title" id="channel-name">Open a YouTube video or live stream</div>
+      <div class="channel-title" id="channel-name">Open a YouTube video</div>
       <div class="channel-handle" id="channel-handle"></div>
 
       <div class="controls-wrap" id="controls-wrap">
@@ -2181,7 +2431,7 @@ html[dark] .cadence-bar-label.is-session strong {
       <div class="row">
         <div>
           <div class="row-label">Show Speed Bar Below Video</div>
-          <div class="row-sub">Session-only speed bar beside Subscribe</div>
+          <div class="row-sub">Session-only speed bar &amp; remaining time</div>
         </div>
         <input type="checkbox" id="toggle-bar" />
       </div>
@@ -2189,6 +2439,7 @@ html[dark] .cadence-bar-label.is-session strong {
 
     <div class="section footer-row">
       <span class="rule-count" id="saved-summary">0 channels configured</span>
+      <span class="version-meta" id="footer-version"></span>
     </div>
 
     <script src="popup.js"></script>
@@ -2203,6 +2454,19 @@ html[dark] .cadence-bar-label.is-session strong {
 
   function normalizeText(str) {
     return (str || '').trim().toLowerCase();
+  }
+
+  const manifestVersion =
+    chrome.runtime && typeof chrome.runtime.getManifest === 'function'
+      ? chrome.runtime.getManifest().version
+      : '';
+  const versionEl = document.getElementById('ext-version');
+  const footerVersionEl = document.getElementById('footer-version');
+  if (versionEl && manifestVersion) {
+    versionEl.textContent = \`· v\${manifestVersion}\`;
+  }
+  if (footerVersionEl && manifestVersion) {
+    footerVersionEl.textContent = \`v\${manifestVersion}\`;
   }
 
   const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
@@ -2290,11 +2554,7 @@ html[dark] .cadence-bar-label.is-session strong {
         func: () => {
           const player = document.getElementById('movie_player');
           const video = document.querySelector('video.html5-main-video');
-          let urlVideoId = new URLSearchParams(location.search).get('v') || '';
-          if (!urlVideoId && location.pathname.startsWith('/live/')) {
-            const seg = location.pathname.split('/live/')[1];
-            if (seg) urlVideoId = seg.split(/[/?#]/)[0];
-          }
+          const urlVideoId = new URLSearchParams(location.search).get('v') || '';
           let videoId = urlVideoId;
           let channelId = '';
           let channelName = '';
@@ -2366,7 +2626,7 @@ html[dark] .cadence-bar-label.is-session strong {
     tab &&
       tab.id &&
       tab.url &&
-      /^https?:\\/\\/([a-z0-9-]+\\.)?youtube\\.com\\/(watch|live)/i.test(tab.url)
+      /^https?:\\/\\/([a-z0-9-]+\\.)?youtube\\.com\\/watch/i.test(tab.url)
   );
 
   if (!isYouTubeVideoUrl) {
@@ -2406,19 +2666,29 @@ html[dark] .cadence-bar-label.is-session strong {
     typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
   let currentSpeed = Number(detected.activeSpeed) || 1.0;
 
+  function resolveRuleBaseline(rule) {
+    if (!settings.enabled || !settings.perChannelSpeedEnabled) return 1.0;
+    if (!rule) return Number(settings.defaultSpeed) || 1.0;
+    if (rule.presetId === 'custom') return Number(rule.customSpeed) || 1.0;
+    const found = presets.find((p) => p.id === rule.presetId);
+    return found ? Number(found.speed) : Number(rule.customSpeed) || 1.0;
+  }
+
+  const initialBaseline = resolveRuleBaseline(currentRule);
+  if (
+    sessionOverrideSpeed !== null &&
+    Math.abs(sessionOverrideSpeed - initialBaseline) < 0.015
+  ) {
+    sessionOverrideSpeed = null;
+  }
+
   if (
     sessionOverrideSpeed === null &&
     currentRule &&
     settings.enabled &&
     settings.perChannelSpeedEnabled
   ) {
-    const resolvedRuleSpeed =
-      currentRule.presetId === 'custom'
-        ? Number(currentRule.customSpeed)
-        : Number(
-            (presets.find((p) => p.id === currentRule.presetId) || {}).speed ||
-              currentRule.customSpeed
-          );
+    const resolvedRuleSpeed = resolveRuleBaseline(currentRule);
     if (resolvedRuleSpeed && Math.abs(currentSpeed - resolvedRuleSpeed) > 0.02) {
       currentSpeed = resolvedRuleSpeed;
       chrome.scripting
@@ -2467,16 +2737,12 @@ html[dark] .cadence-bar-label.is-session strong {
     )
     .join('');
 
-  function resolveRuleBaseline(rule) {
-    if (!rule) return Number(settings.defaultSpeed) || 1.0;
-    if (rule.presetId === 'custom') return Number(rule.customSpeed) || 1.0;
-    const found = presets.find((p) => p.id === rule.presetId);
-    return found ? Number(found.speed) : Number(rule.customSpeed) || 1.0;
-  }
-
   function renderActiveSpeedUI() {
     currentRule = findRuleForChannel(activeChannel);
     const baseline = resolveRuleBaseline(currentRule);
+    if (sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
+      sessionOverrideSpeed = null;
+    }
     if (sessionOverrideSpeed !== null) {
       statusEl.textContent = currentRule
         ? \`Session Override · Rule is \${formatSpeed(baseline)}×\`
@@ -2643,7 +2909,19 @@ html[dark] .cadence-bar-label.is-session strong {
         margin-bottom: 24px;
         border-bottom: 1px solid #1e293b;
       }
-      h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; color: #f8fafc; letter-spacing: -0.01em; }
+      .title-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      h1 { font-size: 24px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; }
+      .version-meta {
+        font-size: 13px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
       .sub { color: #94a3b8; font-size: 14px; max-width: 560px; line-height: 1.5; }
       .toolbar-actions {
         display: flex;
@@ -2738,7 +3016,10 @@ html[dark] .cadence-bar-label.is-session strong {
     <div class="container">
       <div class="top-header">
         <div>
-          <h1>Cadence for YouTube</h1>
+          <div class="title-row">
+            <h1>Cadence for YouTube</h1>
+            <span id="ext-version" class="version-meta"></span>
+          </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
         </div>
         <div class="toolbar-actions">
@@ -2786,6 +3067,15 @@ html[dark] .cadence-bar-label.is-session strong {
 
   const optionsJs = `(async () => {
   const SAMPLE_DEFAULTS = ${sampleDefaultsJson};
+
+  const manifestVersion =
+    chrome.runtime && typeof chrome.runtime.getManifest === 'function'
+      ? chrome.runtime.getManifest().version
+      : '';
+  const versionEl = document.getElementById('ext-version');
+  if (versionEl && manifestVersion) {
+    versionEl.textContent = \`· v\${manifestVersion}\`;
+  }
 
   let stored = await chrome.storage.local.get(['presets', 'rules']);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -2886,7 +3176,9 @@ html[dark] .cadence-bar-label.is-session strong {
 
   function renderRules() {
     if (rulesCountEl) {
-      rulesCountEl.textContent = \`\${rules.length} saved\`;
+      rulesCountEl.textContent = manifestVersion
+        ? \`\${rules.length} saved · v\${manifestVersion}\`
+        : \`\${rules.length} saved\`;
     }
     if (rules.length === 0) {
       rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:8px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';
@@ -3085,29 +3377,28 @@ html[dark] .cadence-bar-label.is-session strong {
     {
       path: 'manifest.json',
       language: 'json',
-      description:
-        'Manifest V3 (v1.2.0) running MAIN and ISOLATED scripts at document_start for millisecond speed lock.',
+      description: `Manifest V3 (v${EXTENSION_VERSION}) running MAIN and ISOLATED scripts at document_start for millisecond speed lock.`,
       content: manifestJson,
     },
     {
       path: 'page-bridge.js',
       language: 'javascript',
       description:
-        'MAIN-world bridge with pre-navigation card hints, YouTube Home 1.0× reset, videoId parity checks, and synchronous loadstart enforcement.',
+        'MAIN-world bridge with pre-navigation card hints, YouTube Home 1.0× reset, real-time remaining duration sampling, and synchronous loadstart enforcement.',
       content: pageBridgeJs,
     },
     {
       path: 'content.js',
       language: 'javascript',
       description:
-        'Isolated content script managing per-video sessionOverride state, session-only below-video speed bar (0.75×–2.0×, ±0.05×, Reset), and popup sync.',
+        'Isolated content script with baseline-parity sessionOverride auto-reset, below-video speed bar + remaining duration readout, and popup sync.',
       content: contentJs,
     },
     {
       path: 'content.css',
       language: 'css',
       description:
-        'Adaptive light/dark styles for the session-only watch-page speed bar (quick chips, fine steppers, Reset) and end-stop banner.',
+        'Adaptive light/dark styles for the watch-page speed bar, tabular remaining-time readout, and end-stop banner.',
       content: contentCss,
     },
     {
@@ -3121,28 +3412,28 @@ html[dark] .cadence-bar-label.is-session strong {
       path: 'popup.html',
       language: 'html',
       description:
-        'Native dark-mode toolbar popup for assigning persistent Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
+        'Native dark-mode toolbar popup displaying active version, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
       content: popupHtml,
     },
     {
       path: 'popup.js',
       language: 'javascript',
       description:
-        'Popup controller displaying session-override vs. saved-rule status, clearing stale badges on browse pages, and saving channel rules.',
+        'Popup controller reading manifest version dynamically, syncing self-clearing session overrides, and saving channel rules.',
       content: popupJs,
     },
     {
       path: 'options.html',
       language: 'html',
       description:
-        'Full-tab dark-mode Chrome extension options page with JSON Import, JSON Backup, and Reset Samples controls.',
+        'Full-tab dark-mode Chrome extension options page with dynamic version readout, JSON Import, JSON Backup, and Reset Samples.',
       content: optionsHtml,
     },
     {
       path: 'options.js',
       language: 'javascript',
       description:
-        'Options page controller supporting category profile editing, per-channel rules, JSON import/export, and sample reset.',
+        'Options page controller displaying active version and supporting category profiles, per-channel rules, JSON import/export, and sample reset.',
       content: optionsJs,
     },
   ];

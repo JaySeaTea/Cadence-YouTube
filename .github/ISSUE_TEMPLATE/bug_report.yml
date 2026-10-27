@@ -17,7 +17,6 @@ body:
         - Standard Watch Video (/watch?v=...)
         - Watch Later Playlist (list=WL)
         - Saved / Creator Playlist (list=...)
-        - Live Stream (/live/... or live watch)
         - YouTube Shorts (/shorts/...)
         - YouTube Home / Channel / Subscriptions Feed
         - Extension Toolbar Popup
@@ -54,8 +53,8 @@ body:
     id: version
     attributes:
       label: Cadence Version
-      placeholder: v1.1.1
-      value: v1.1.1
+      placeholder: v1.3.0
+      value: v1.3.0
 
   - type: textarea
     id: logs-or-screenshots

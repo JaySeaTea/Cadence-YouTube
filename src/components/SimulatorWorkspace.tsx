@@ -18,7 +18,11 @@ import {
   PlaylistContextMode,
   SimulatedVideo,
 } from '../types/extension';
-import { resolveRuleSpeed, SIMULATED_VIDEOS } from '../data/initialData';
+import {
+  EXTENSION_VERSION,
+  resolveRuleSpeed,
+  SIMULATED_VIDEOS,
+} from '../data/initialData';
 
 interface SimulatorWorkspaceProps {
   settings: ExtensionSettings;
@@ -38,8 +42,12 @@ interface SimulatorWorkspaceProps {
 
 function formatTime(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
-  const mins = Math.floor(safe / 60);
+  const hrs = Math.floor(safe / 3600);
+  const mins = Math.floor((safe % 3600) / 60);
   const secs = safe % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
@@ -49,6 +57,28 @@ function formatSpeed(speed: number): string {
 
 function clampSpeed(speed: number): number {
   return Math.round(Math.min(4.0, Math.max(0.25, speed)) * 100) / 100;
+}
+
+function formatRemainingReadout(rawRemainingSec: number, speed: number): string {
+  if (!Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) return '';
+  const safeRate = Math.max(0.25, speed || 1.0);
+  const totalSec = Math.max(0, Math.round(rawRemainingSec / safeRate));
+
+  let durationPart = '';
+  if (totalSec < 60) {
+    durationPart = `${totalSec}s left`;
+  } else {
+    const totalMins = Math.max(1, Math.round(totalSec / 60));
+    if (totalMins < 60) {
+      durationPart = `${totalMins}m left`;
+    } else {
+      const hrs = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      durationPart = mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
+    }
+  }
+
+  return `${durationPart} @ ${formatSpeed(safeRate)}×`;
 }
 
 export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
@@ -64,7 +94,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [playlistMode, setPlaylistMode] = useState<PlaylistContextMode>('watch_later');
   const [currentVideoIndex, setCurrentVideoIndex] = useState<number>(1);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [currentTime, setCurrentTime] = useState<number>(8);
+  const [currentTime, setCurrentTime] = useState<number>(1440);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.5);
   const [sessionOverrideSpeed, setSessionOverrideSpeed] = useState<number | null>(null);
   const [stoppedByCadence, setStoppedByCadence] = useState<boolean>(false);
@@ -74,7 +104,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
 
-  const currentTimeRef = useRef<number>(8);
+  const currentTimeRef = useRef<number>(1440);
   const toastTimerRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextPulseTimeRef = useRef<number>(0);
@@ -118,6 +148,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       return;
     }
     if (sessionOverrideSpeed !== null) {
+      if (Math.abs(sessionOverrideSpeed - baselineSpeed) < 0.015) {
+        setSessionOverrideSpeed(null);
+        setPlaybackSpeed(baselineSpeed);
+        return;
+      }
       setPlaybackSpeed(sessionOverrideSpeed);
       return;
     }
@@ -131,6 +166,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     isHomeBrowseMode,
     currentVideo.id,
     sessionOverrideSpeed,
+    baselineSpeed,
     settings.enabled,
     settings.perChannelSpeedEnabled,
     settings.defaultSpeed,
@@ -300,6 +336,27 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleSessionBarSpeedChange = (newSpeed: number) => {
     const clean = clampSpeed(newSpeed);
+    const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
+
+    if (matchesBaseline) {
+      const wasOverridden = sessionOverrideSpeed !== null;
+      setSessionOverrideSpeed(null);
+      setPlaybackSpeed(baselineSpeed);
+      const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+      triggerToast(
+        wasOverridden
+          ? `Restored ${formatSpeed(baselineSpeed)}× (${baselineLabel})`
+          : `${formatSpeed(baselineSpeed)}× · ${baselineLabel}`
+      );
+      if (wasOverridden) {
+        onAddLog(
+          `Cleared session override at ${formatSpeed(baselineSpeed)}×`,
+          `Returned to ${matchedRule ? 'saved channel rule' : 'default speed'} for ${currentVideo.channelName}`
+        );
+      }
+      return;
+    }
+
     setSessionOverrideSpeed(clean);
     setPlaybackSpeed(clean);
     const suffix = matchedRule
@@ -330,11 +387,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleManualPlayerSpeedChange = (newSpeed: number) => {
     const clean = clampSpeed(newSpeed);
-    setPlaybackSpeed(clean);
     setShowNativeGearMenu(false);
 
     if (settings.enabled && settings.autoRememberManualSpeed) {
       setSessionOverrideSpeed(null);
+      setPlaybackSpeed(clean);
       const matchedPreset = presets.find((p) => Math.abs(p.speed - clean) < 0.01);
       onSaveChannelRule(
         currentVideo,
@@ -343,14 +400,39 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         'Auto-remembered from YouTube player'
       );
       triggerToast(`Remembered ${formatSpeed(clean)}× for ${currentVideo.channelName}`);
-    } else {
-      setSessionOverrideSpeed(clean);
-      triggerToast(`Session ${formatSpeed(clean)}× · This video only`);
-      onAddLog(
-        `Player menu ${formatSpeed(clean)}× (session-only)`,
-        `${currentVideo.channelName} · Channel rule unchanged`
-      );
+      return;
     }
+
+    const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
+    if (matchesBaseline) {
+      const wasOverridden = sessionOverrideSpeed !== null;
+      setSessionOverrideSpeed(null);
+      setPlaybackSpeed(baselineSpeed);
+      const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
+      triggerToast(
+        wasOverridden
+          ? `Restored ${formatSpeed(baselineSpeed)}× (${baselineLabel})`
+          : `${formatSpeed(baselineSpeed)}× · ${baselineLabel}`
+      );
+      if (wasOverridden) {
+        onAddLog(
+          `Player menu restored ${formatSpeed(baselineSpeed)}×`,
+          `Cleared session override — matches ${matchedRule ? 'saved channel rule' : 'default speed'} for ${currentVideo.channelName}`
+        );
+      }
+      return;
+    }
+
+    setSessionOverrideSpeed(clean);
+    setPlaybackSpeed(clean);
+    const suffix = matchedRule
+      ? `Rule ${formatSpeed(baselineSpeed)}× unchanged`
+      : 'This video only';
+    triggerToast(`Session ${formatSpeed(clean)}× · ${suffix}`);
+    onAddLog(
+      `Player menu ${formatSpeed(clean)}× (session-only)`,
+      `${currentVideo.channelName} · Channel rule unchanged`
+    );
   };
 
   const handleAssignChannelSpeed = (speed: number, presetId: CategoryPresetId, origin: string) => {
@@ -387,6 +469,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   const progressPercent = Math.min(100, (currentTime / currentVideo.durationSec) * 100);
+  const rawRemainingSec = Math.max(0, currentVideo.durationSec - currentTime);
+  const remainingReadout = formatRemainingReadout(rawRemainingSec, playbackSpeed);
+
   const playlistLabel =
     playlistMode === 'youtube_home'
       ? 'YouTube Home · Browse Feed'
@@ -394,9 +479,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         ? 'Watch Later · 4 videos'
         : playlistMode === 'creator_playlist'
           ? 'Creator Series Playlist · 4 videos'
-          : playlistMode === 'live_stream'
-            ? 'Live Stream (/live)'
-            : 'Standalone Watch Page';
+          : 'Standalone Watch Page';
 
   const badgeText =
     !isHomeBrowseMode && settings.enabled && settings.perChannelSpeedEnabled
@@ -412,9 +495,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             Interactive YouTube &amp; Extension Workbench
           </h1>
           <p className="mt-2 text-[15px] leading-relaxed text-slate-400">
-            Test zero-lag channel speed locks, session-only below-video adjustments, YouTube Home
-            badge clearing, and playlist end-of-video stopping. Permanent channel rules are edited in
-            the popup or Channel Rules tab.
+            Test zero-lag channel speed locks, real-time remaining duration at speed, self-clearing
+            session overrides, YouTube Home badge clearing, and playlist end-of-video stopping.
           </p>
         </div>
 
@@ -431,7 +513,6 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 { id: 'watch_later', label: 'Watch Later' },
                 { id: 'creator_playlist', label: 'Creator Playlist' },
                 { id: 'standalone', label: 'Single Video' },
-                { id: 'live_stream', label: 'Live Stream' },
               ] as const
             ).map((mode) => (
               <button
@@ -495,15 +576,13 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 <span className="text-slate-200 truncate">
                   {isHomeBrowseMode
                     ? 'youtube.com/'
-                    : playlistMode === 'live_stream'
-                      ? `youtube.com/live/${currentVideo.id}`
-                      : `youtube.com/watch?v=${currentVideo.id}${
-                          playlistMode === 'watch_later'
-                            ? '&list=WL'
-                            : playlistMode === 'creator_playlist'
-                              ? '&list=PL_CREATOR_SERIES'
-                              : ''
-                        }`}
+                    : `youtube.com/watch?v=${currentVideo.id}${
+                        playlistMode === 'watch_later'
+                          ? '&list=WL'
+                          : playlistMode === 'creator_playlist'
+                            ? '&list=PL_CREATOR_SERIES'
+                            : ''
+                      }`}
                 </span>
               </div>
             </div>
@@ -871,7 +950,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         })}
                       </div>
 
-                      <span className="hidden sm:inline-block w-px h-3.5 bg-slate-700" aria-hidden="true" />
+                      <span
+                        className="hidden sm:inline-block w-px h-3.5 bg-slate-700"
+                        aria-hidden="true"
+                      />
 
                       <div className="inline-flex items-center gap-1">
                         <button
@@ -904,6 +986,21 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           Reset
                         </button>
                       </div>
+
+                      {remainingReadout && (
+                        <>
+                          <span
+                            className="hidden sm:inline-block w-px h-3.5 bg-slate-700"
+                            aria-hidden="true"
+                          />
+                          <span
+                            className="text-[11px] font-mono tabular-nums text-slate-400 whitespace-nowrap"
+                            title="Real wall-clock time remaining at active playback speed"
+                          >
+                            {remainingReadout}
+                          </span>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -915,7 +1012,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       Switch Video to Test Session Reset &amp; Zero-Lag Rule Lock
                     </h3>
                     <span className="text-xs text-slate-400">
-                      Session overrides reset automatically on the next video
+                      Session overrides reset automatically on baseline match or next video
                     </span>
                   </div>
 
@@ -1002,8 +1099,13 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             {/* Extension Popup Top Header */}
             <div className="flex items-center justify-between pb-3.5 border-b border-slate-800">
               <div>
-                <div className="text-sm font-bold text-slate-100 font-display">
-                  Cadence Toolbar Popup
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-sm font-bold text-slate-100 font-display">
+                    Cadence Toolbar Popup
+                  </span>
+                  <span className="text-xs font-mono tabular-nums text-slate-400">
+                    · v{EXTENSION_VERSION}
+                  </span>
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5 tabular-nums">
                   Toolbar Badge ·{' '}
@@ -1029,7 +1131,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
               <div className="space-y-1.5 pb-4 border-b border-slate-800">
                 <div className="text-xs text-slate-400">Active YouTube Tab</div>
                 <div className="text-sm font-semibold text-slate-100">
-                  Open a YouTube video or live stream
+                  Open a YouTube video
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed">
                   While browsing YouTube Home, Cadence clears the toolbar icon badge and keeps
@@ -1233,7 +1335,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     Show Speed Bar Below Video
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Session-only speed bar beside Subscribe on YouTube
+                    Session-only speed bar with remaining time beside Subscribe
                   </div>
                 </div>
                 <input
@@ -1249,7 +1351,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-400 tabular-nums">
-                {rules.length} channel {rules.length === 1 ? 'rule' : 'rules'} persisted
+                {rules.length} channel {rules.length === 1 ? 'rule' : 'rules'} · v{EXTENSION_VERSION}
               </span>
               <button
                 type="button"

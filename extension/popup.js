@@ -7,6 +7,19 @@
     return (str || '').trim().toLowerCase();
   }
 
+  const manifestVersion =
+    chrome.runtime && typeof chrome.runtime.getManifest === 'function'
+      ? chrome.runtime.getManifest().version
+      : '';
+  const versionEl = document.getElementById('ext-version');
+  const footerVersionEl = document.getElementById('footer-version');
+  if (versionEl && manifestVersion) {
+    versionEl.textContent = `· v${manifestVersion}`;
+  }
+  if (footerVersionEl && manifestVersion) {
+    footerVersionEl.textContent = `v${manifestVersion}`;
+  }
+
   const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
   const settings = stored.settings || {
     enabled: true,
@@ -92,11 +105,7 @@
         func: () => {
           const player = document.getElementById('movie_player');
           const video = document.querySelector('video.html5-main-video');
-          let urlVideoId = new URLSearchParams(location.search).get('v') || '';
-          if (!urlVideoId && location.pathname.startsWith('/live/')) {
-            const seg = location.pathname.split('/live/')[1];
-            if (seg) urlVideoId = seg.split(/[/?#]/)[0];
-          }
+          const urlVideoId = new URLSearchParams(location.search).get('v') || '';
           let videoId = urlVideoId;
           let channelId = '';
           let channelName = '';
@@ -168,7 +177,7 @@
     tab &&
       tab.id &&
       tab.url &&
-      /^https?:\/\/([a-z0-9-]+\.)?youtube\.com\/(watch|live)/i.test(tab.url)
+      /^https?:\/\/([a-z0-9-]+\.)?youtube\.com\/watch/i.test(tab.url)
   );
 
   if (!isYouTubeVideoUrl) {
@@ -208,19 +217,29 @@
     typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
   let currentSpeed = Number(detected.activeSpeed) || 1.0;
 
+  function resolveRuleBaseline(rule) {
+    if (!settings.enabled || !settings.perChannelSpeedEnabled) return 1.0;
+    if (!rule) return Number(settings.defaultSpeed) || 1.0;
+    if (rule.presetId === 'custom') return Number(rule.customSpeed) || 1.0;
+    const found = presets.find((p) => p.id === rule.presetId);
+    return found ? Number(found.speed) : Number(rule.customSpeed) || 1.0;
+  }
+
+  const initialBaseline = resolveRuleBaseline(currentRule);
+  if (
+    sessionOverrideSpeed !== null &&
+    Math.abs(sessionOverrideSpeed - initialBaseline) < 0.015
+  ) {
+    sessionOverrideSpeed = null;
+  }
+
   if (
     sessionOverrideSpeed === null &&
     currentRule &&
     settings.enabled &&
     settings.perChannelSpeedEnabled
   ) {
-    const resolvedRuleSpeed =
-      currentRule.presetId === 'custom'
-        ? Number(currentRule.customSpeed)
-        : Number(
-            (presets.find((p) => p.id === currentRule.presetId) || {}).speed ||
-              currentRule.customSpeed
-          );
+    const resolvedRuleSpeed = resolveRuleBaseline(currentRule);
     if (resolvedRuleSpeed && Math.abs(currentSpeed - resolvedRuleSpeed) > 0.02) {
       currentSpeed = resolvedRuleSpeed;
       chrome.scripting
@@ -269,16 +288,12 @@
     )
     .join('');
 
-  function resolveRuleBaseline(rule) {
-    if (!rule) return Number(settings.defaultSpeed) || 1.0;
-    if (rule.presetId === 'custom') return Number(rule.customSpeed) || 1.0;
-    const found = presets.find((p) => p.id === rule.presetId);
-    return found ? Number(found.speed) : Number(rule.customSpeed) || 1.0;
-  }
-
   function renderActiveSpeedUI() {
     currentRule = findRuleForChannel(activeChannel);
     const baseline = resolveRuleBaseline(currentRule);
+    if (sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
+      sessionOverrideSpeed = null;
+    }
     if (sessionOverrideSpeed !== null) {
       statusEl.textContent = currentRule
         ? `Session Override · Rule is ${formatSpeed(baseline)}×`

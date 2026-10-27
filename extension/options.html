@@ -22,7 +22,19 @@
         margin-bottom: 24px;
         border-bottom: 1px solid #1e293b;
       }
-      h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; color: #f8fafc; letter-spacing: -0.01em; }
+      .title-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      h1 { font-size: 24px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; }
+      .version-meta {
+        font-size: 13px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
       .sub { color: #94a3b8; font-size: 14px; max-width: 560px; line-height: 1.5; }
       .toolbar-actions {
         display: flex;
@@ -117,7 +129,10 @@
     <div class="container">
       <div class="top-header">
         <div>
-          <h1>Cadence for YouTube</h1>
+          <div class="title-row">
+            <h1>Cadence for YouTube</h1>
+            <span id="ext-version" class="version-meta"></span>
+          </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
         </div>
         <div class="toolbar-actions">

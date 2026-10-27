@@ -1,8 +1,8 @@
 # Cadence — Per-Channel Speed & Playlist Stop for YouTube
 
-**Cadence** is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around two high-impact improvements to YouTube:
+**Cadence** (`v1.3.0`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
 
-1. **Automatic Per-Channel Playback Speeds + Session-Only Real-Time Tweaks**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup or Options page. Whenever a video or live stream from that channel starts, Cadence locks in its saved rate within milliseconds (while leaving ads at normal speed). Need to slow down a dense technical video without altering your saved Channel Rule? Use the **session-only below-video speed bar** (`0.75×`–`2.0×`, `±0.05×`, and **Reset**) next to Subscribe for temporary single-video overrides.
+1. **Automatic Per-Channel Playback Speeds + Self-Clearing Session Tweaks**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup or Options page. Whenever a video from that channel starts, Cadence locks in its saved rate within milliseconds (while leaving ads at normal speed). Need a temporary single-video speed tweak without altering your saved Channel Rule? Use the **session-only below-video speed bar** (`0.75×`–`2.0×`, `±0.05×`, and **Reset**) beside Subscribe—plus a **real-time remaining duration readout** (`24m left @ 1.5×`) scaled to your active speed. Returning to your channel rule or `1.0×` default by any control automatically clears session override indicators.
 2. **Strict End-of-Video Stop (Including Watch Later & Saved Playlists)**: YouTube's native Autoplay toggle does not stop playlist auto-advance inside **Watch Later (`list=WL`)** or saved creator playlists. Cadence disarms `yt-playlist-manager` auto-advance and pauses playback right as the video finishes, presenting a clean **Replay / Play Next / Dismiss** bar while preserving manual **Next (`Shift+N`)** and playlist sidebar clicks.
 
 ---
@@ -11,13 +11,13 @@
 
 ```text
 ├── extension/                  # Standalone Manifest V3 Chrome Extension (Load Unpacked directly!)
-│   ├── manifest.json           # Manifest V3 config (storage, tabs, scripting, activeTab)
+│   ├── manifest.json           # Manifest V3 config (v1.3.0 — storage, tabs, scripting, activeTab)
 │   ├── background.js           # Service worker: sample seeding, badge readout & open-tab attach
-│   ├── page-bridge.js          # MAIN-world bridge for #movie_player API & playlist stop guard
+│   ├── page-bridge.js          # MAIN-world bridge for #movie_player API, remaining time & stop guard
 │   ├── content.js              # ISOLATED-world storage sync, below-video speed bar & popup API
 │   ├── content.css             # Adaptive styles for YouTube watch-page bar & end-stop banner
-│   ├── popup.html / popup.js   # Dark-mode toolbar popup (presets, quick speeds, ±0.05× stepper)
-│   ├── options.html / .js      # Full-tab rule manager with JSON Import, JSON Backup & Reset
+│   ├── popup.html / popup.js   # Dark-mode toolbar popup (version readout, presets, ±0.05× stepper)
+│   ├── options.html / .js      # Full-tab rule manager with version readout, JSON Import & Backup
 │   └── icons/                  # 16×16, 32×32, 48×48, and 128×128 extension icons
 ├── scripts/
 │   └── build-extension.ts      # Regenerates /extension from canonical TypeScript templates
@@ -38,7 +38,7 @@ You can load Cadence directly from a cloned copy of this repository—no build s
 2. Open Chrome and navigate to `chrome://extensions`.
 3. Enable **Developer mode** in the top-right corner.
 4. Click **Load unpacked** in the top-left toolbar and select the **`extension/`** directory inside this repository.
-5. Pin **Cadence** from Chrome's puzzle-piece extensions menu. Any already-open YouTube `/watch` or `/live` tabs attach immediately without needing a page refresh.
+5. Pin **Cadence** from Chrome's puzzle-piece extensions menu. Any already-open YouTube `/watch` tabs attach immediately without needing a page refresh.
 
 ---
 
@@ -79,8 +79,8 @@ npm run build
 ## How the Manifest V3 Architecture Works
 
 - **Zero-Lag Pre-Navigation Speed Lock (`page-bridge.js` ↔ `content.js`)**: Captures destination `videoId` and channel hints directly from clicked YouTube video cards (`NAVIGATION_PREVIEW`), resets YouTube's persistent `<video>` rate to `1.0×` and clears the toolbar badge immediately when returning to YouTube Home or browse feeds, validates `videoId` parity on `ytd-watch-flexy` so stale DOM nodes are never misread during SPA transitions, and enforces target speeds synchronously on `loadstart`, `loadeddata`, `canplay`, and `playing`.
-- **Session-Only Watch Bar vs. Persistent Rules**: Speed controls injected beside YouTube's Subscribe button (`#cadence-owner-bar`) and YouTube's native player gear menu adjust a per-video `sessionOverride` by default, keeping permanent Channel Rules untouched unless edited in the Toolbar Popup or Options page.
-- **Zero-Refresh Attachment (`background.js` & `popup.js`)**: On install, update, browser startup, or toolbar icon click, Cadence uses `chrome.scripting` to attach to already-open YouTube `/watch` and `/live` tabs and query live channel metadata immediately.
+- **Self-Clearing Session Watch Bar & Remaining Duration**: Speed controls injected beside YouTube's Subscribe button (`#cadence-owner-bar`) and YouTube's native player gear menu adjust a per-video `sessionOverride` by default while displaying real wall-clock remaining duration (`24m left @ 1.5×`). Returning to a channel's saved rule or `1.0×` default by any control clears session override indicators automatically.
+- **Zero-Refresh Attachment (`background.js` & `popup.js`)**: On install, update, browser startup, or toolbar icon click, Cadence uses `chrome.scripting` to attach to already-open YouTube `/watch` tabs and query live channel metadata immediately.
 - **Playlist Stop Guard**: Monitors `timeupdate` near the end of each video (scaled by playback rate) and pauses playback before YouTube's playlist manager advances to the next item—while tracking pointer and keyboard (`Shift+N` / `Shift+P`) intent so manual navigation always works normally.
 
 ---
@@ -89,7 +89,7 @@ npm run build
 
 This repository includes structured GitHub Issue Forms in `.github/ISSUE_TEMPLATE/` so you can collect bugs and enhancement ideas over time and ship them together in batches:
 
-- **Bug Report** (`bug` label): Dropdowns for the exact YouTube surface (`Watch`, `Watch Later`, `Creator Playlist`, `Live`, `Shorts`, `Popup`, `Options`) plus URL and error/screenshot fields.
+- **Bug Report** (`bug` label): Dropdowns for the exact YouTube surface (`Watch`, `Watch Later`, `Creator Playlist`, `Shorts`, `Popup`, `Options`) plus URL and error/screenshot fields.
 - **Feature / Enhancement** (`enhancement` label): Checkboxes for target surfaces (`Background`, `Below-Video Bar`, `Popup`, `Keyboard Shortcut`, `Options`) and a **Batch Priority** selector (`Next Release Batch`, `Soon`, `Someday`).
 
 ---

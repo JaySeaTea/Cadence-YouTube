@@ -19,7 +19,18 @@
         padding-bottom: 12px;
         border-bottom: 1px solid #1e293b;
       }
+      .brand-wrap {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+      }
       .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .version-meta {
+        font-size: 11px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
       .link-btn {
         border: none;
         background: none;
@@ -168,7 +179,10 @@
   </head>
   <body>
     <div class="header">
-      <span class="brand">Cadence</span>
+      <div class="brand-wrap">
+        <span class="brand">Cadence</span>
+        <span class="version-meta" id="ext-version"></span>
+      </div>
       <button id="open-options" class="link-btn">All Channel Rules</button>
     </div>
 
@@ -177,7 +191,7 @@
         <span class="kicker" id="channel-status">Active YouTube Tab</span>
         <span class="speed-readout" id="active-speed-readout"></span>
       </div>
-      <div class="channel-title" id="channel-name">Open a YouTube video or live stream</div>
+      <div class="channel-title" id="channel-name">Open a YouTube video</div>
       <div class="channel-handle" id="channel-handle"></div>
 
       <div class="controls-wrap" id="controls-wrap">
@@ -225,7 +239,7 @@
       <div class="row">
         <div>
           <div class="row-label">Show Speed Bar Below Video</div>
-          <div class="row-sub">Session-only speed bar beside Subscribe</div>
+          <div class="row-sub">Session-only speed bar &amp; remaining time</div>
         </div>
         <input type="checkbox" id="toggle-bar" />
       </div>
@@ -233,6 +247,7 @@
 
     <div class="section footer-row">
       <span class="rule-count" id="saved-summary">0 channels configured</span>
+      <span class="version-meta" id="footer-version"></span>
     </div>
 
     <script src="popup.js"></script>

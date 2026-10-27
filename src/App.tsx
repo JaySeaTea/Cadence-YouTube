@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_PRESETS,
   DEFAULT_SETTINGS,
+  EXTENSION_VERSION,
   INITIAL_CHANNEL_RULES,
 } from './data/initialData';
 import { downloadExtensionZip } from './extension/generateExtensionZip';
@@ -345,7 +346,7 @@ export default function App() {
     try {
       await downloadExtensionZip(settings, presets, rules);
       addLog(
-        'Exported Chrome extension (.zip)',
+        `Exported Chrome extension v${EXTENSION_VERSION} (.zip)`,
         `Bundled Manifest V3 files with ${rules.length} channel rules`
       );
     } finally {
@@ -489,7 +490,9 @@ export default function App() {
       {/* Quiet Editorial Footer */}
       <footer className="border-t border-slate-800/90 bg-[#0F1624] mt-12">
         <div className="max-w-[1320px] mx-auto px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
-          <span>Cadence for YouTube · Manifest V3 Chrome Extension</span>
+          <span className="tabular-nums">
+            Cadence for YouTube · v{EXTENSION_VERSION} · Manifest V3 Chrome Extension
+          </span>
           <div className="flex items-center gap-5">
             <button
               type="button"

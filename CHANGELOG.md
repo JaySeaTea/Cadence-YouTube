@@ -4,6 +4,18 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-27
+
+### Added
+- **Real-Time Remaining Duration (`@ Speed`) (#3)**: Added a subtle, speed-adjusted wall-clock remaining duration readout (e.g., `24m left @ 1.5×`, `1h 12m left @ 1.5×`, or `42s left @ 1.5×` in the final minute) inside the below-video speed bar on YouTube watch pages and in the Web Simulator. Updates `.cadence-remaining-time` text in-place (throttled to 1s during playback, instant on speed changes and seeks) without rebuilding button DOM, and hides automatically during ads or unbounded broadcasts.
+- **Version Readout Across Toolbar Popup, Options Page & Workbench (#9)**: Displays the active extension version (`v1.3.0`) dynamically via `chrome.runtime.getManifest().version` in both the Extension Toolbar Popup (`popup.html`) and Extension Options page (`options.html`), synced via a canonical `EXTENSION_VERSION` constant across the Web Workbench.
+
+### Changed
+- **Unified `/watch` Route Scope (#8)**: Removed deprecated `/live/...` URL formatting, filtering, and simulator `"Live Stream"` context tabs across `background.js`, `page-bridge.js`, `content.js`, `popup.html` / `popup.js`, the Web Simulator, and GitHub issue templates so Cadence focuses cleanly on `/watch` Channel Rules and Playlists.
+
+### Fixed
+- **Automatic `"Session Override"` Reset on Baseline Match (#7)**: Fixed stale `"Session"` / `"Session Override"` indicators when playback speed was adjusted away from baseline and later returned to match the active Channel Rule (or `1.0×` Default) via either YouTube's built-in gear menu or the below-video speed bar. Returning to baseline speed by any control surface now automatically clears `sessionOverride`, dims the `Reset` button, and restores normal `Rule` or `Default` indicators in both the watch bar and Toolbar Popup.
+
 ## [1.2.0] - 2026-10-24
 
 ### Added

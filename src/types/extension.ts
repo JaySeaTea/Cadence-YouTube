@@ -32,8 +32,7 @@ export type PlaylistContextMode =
   | 'youtube_home'
   | 'watch_later'
   | 'creator_playlist'
-  | 'standalone'
-  | 'live_stream';
+  | 'standalone';
 
 export interface SimulatedVideo {
   id: string;

@@ -60,6 +60,15 @@
   ]
 };
 
+  const manifestVersion =
+    chrome.runtime && typeof chrome.runtime.getManifest === 'function'
+      ? chrome.runtime.getManifest().version
+      : '';
+  const versionEl = document.getElementById('ext-version');
+  if (versionEl && manifestVersion) {
+    versionEl.textContent = `· v${manifestVersion}`;
+  }
+
   let stored = await chrome.storage.local.get(['presets', 'rules']);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
@@ -159,7 +168,9 @@
 
   function renderRules() {
     if (rulesCountEl) {
-      rulesCountEl.textContent = `${rules.length} saved`;
+      rulesCountEl.textContent = manifestVersion
+        ? `${rules.length} saved · v${manifestVersion}`
+        : `${rules.length} saved`;
     }
     if (rules.length === 0) {
       rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:8px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';

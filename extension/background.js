@@ -75,10 +75,10 @@ function formatBadgeSpeed(speed) {
   return num.toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1') + 'x';
 }
 
-function isYouTubeWatchOrLiveUrl(url) {
+function isYouTubeWatchUrl(url) {
   return (
     typeof url === 'string' &&
-    /^https?:\/\/([a-z0-9-]+\.)?youtube\.com\/(watch|live)/i.test(url)
+    /^https?:\/\/([a-z0-9-]+\.)?youtube\.com\/watch/i.test(url)
   );
 }
 
@@ -87,7 +87,7 @@ async function injectIntoExistingYouTubeTabs() {
     const tabs = await chrome.tabs.query({ url: ['*://*.youtube.com/*'] });
     for (const tab of tabs) {
       if (!tab.id) continue;
-      if (tab.url && !isYouTubeWatchOrLiveUrl(tab.url)) {
+      if (tab.url && !isYouTubeWatchUrl(tab.url)) {
         chrome.action.setBadgeText({ tabId: tab.id, text: '' }).catch(() => {});
       }
       try {
@@ -165,7 +165,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!candidateUrl) return;
   if (
     /^https?:\/\/([a-z0-9-]+\.)?youtube\.com\//i.test(candidateUrl) &&
-    !isYouTubeWatchOrLiveUrl(candidateUrl)
+    !isYouTubeWatchUrl(candidateUrl)
   ) {
     chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {});
   }
@@ -176,7 +176,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;
     if (tabId) {
       const tabUrl = (sender.tab && sender.tab.url) || '';
-      const allowBadge = !tabUrl || isYouTubeWatchOrLiveUrl(tabUrl);
+      const allowBadge = !tabUrl || isYouTubeWatchUrl(tabUrl);
       const text =
         allowBadge && message.enabled && message.speed ? formatBadgeSpeed(message.speed) : '';
       chrome.action.setBadgeText({ tabId, text }).catch(() => {});
