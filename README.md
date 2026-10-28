@@ -1,8 +1,8 @@
 # Cadence — Per-Channel Speed & Playlist Stop for YouTube
 
-**Cadence** (`v1.3.1`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
+**Cadence** (`v1.3.2`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
 
-1. **Automatic Per-Channel Playback Speeds + Self-Clearing Session Tweaks**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup or Options page. Whenever a video from that channel starts, Cadence locks in its saved rate within milliseconds (while leaving ads at normal speed). Need a temporary single-video speed tweak without altering your saved Channel Rule? Use the **session-only below-video speed bar** (`0.75×`–`2.0×`, `±0.05×`, and **Reset**) beside Subscribe—plus a **real-time remaining duration readout** (`24m left @ 1.5×`) scaled to your active speed, **live broadcast detection** (`● Live`), and a clickable **Live DVR catch-up countdown** (`Live in 20m @ 1.5×` or `10m behind Live`) that jumps straight back to the live broadcast head. Returning to your channel rule or `1.0×` default by any control automatically clears session override indicators.
+1. **Automatic Per-Channel Playback Speeds + Self-Clearing Session Tweaks**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup or Options page. Whenever a video from that channel starts, Cadence locks in its saved rate within milliseconds (while leaving ads at normal speed). Need a temporary single-video speed tweak without altering your saved Channel Rule? Use the **session-only below-video speed bar** (`0.75×`–`2.0×`, `±0.05×`, and **Reset**) beside Subscribe—plus a **real-time remaining duration readout** (`24m left @ 1.5×`) scaled to your active speed, **live broadcast detection** (`● Live`), and a clickable **Live DVR catch-up countdown** (`−10m · Live in 20m @ 1.5×` or `10m behind Live`) that jumps straight back to the live broadcast head. Returning to your channel rule or `1.0×` default by any control automatically clears session override indicators.
 2. **Strict End-of-Video Stop (Including Watch Later & Saved Playlists)**: YouTube's native Autoplay toggle does not stop playlist auto-advance inside **Watch Later (`list=WL`)** or saved creator playlists. Cadence disarms `yt-playlist-manager` auto-advance and pauses playback right as the video finishes (automatically bypassed on active live broadcasts), presenting a clean **Replay / Play Next / Dismiss** bar while preserving manual **Next (`Shift+N`)** and playlist sidebar clicks.
 
 ---
@@ -11,7 +11,7 @@
 
 ```text
 ├── extension/                  # Standalone Manifest V3 Chrome Extension (Load Unpacked directly!)
-│   ├── manifest.json           # Manifest V3 config (v1.3.1 — storage, tabs, scripting, activeTab)
+│   ├── manifest.json           # Manifest V3 config (v1.3.2 — storage, tabs, scripting, activeTab)
 │   ├── background.js           # Service worker: sample seeding, badge readout & open-tab attach
 │   ├── page-bridge.js          # MAIN-world bridge for #movie_player API, live DVR & stop guard
 │   ├── content.js              # ISOLATED-world storage sync, below-video speed bar & popup API

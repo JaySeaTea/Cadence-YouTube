@@ -566,19 +566,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         };
       }
       const lagLabel = formatCompactDuration(Math.max(1, dvrLagSec));
-      if (isPlaying && playbackSpeed > 1.02) {
+      if (playbackSpeed > 1.02) {
         const catchUpSec = Math.max(1, Math.round(dvrLagSec / (playbackSpeed - 1.0)));
+        const catchUpLabel = formatCompactDuration(catchUpSec);
+        const titlePrefix = !isPlaying
+          ? `Paused ${lagLabel} behind live · Resuming at ${formatSpeed(playbackSpeed)}× catches up in ${catchUpLabel}`
+          : `${lagLabel} behind live · Catching up at ${formatSpeed(playbackSpeed)}×`;
         return {
           mode: 'live-catchup' as const,
-          text: `Live in ${formatCompactDuration(catchUpSec)} @ ${formatSpeed(playbackSpeed)}×`,
-          title: `${lagLabel} behind live · Click to jump to live edge`,
+          text: `−${lagLabel} · Live in ${catchUpLabel} @ ${formatSpeed(playbackSpeed)}×`,
+          title: `${titlePrefix} · Click to jump to live edge`,
           clickable: true,
         };
       }
       return {
         mode: 'live-behind' as const,
         text: `${lagLabel} behind Live`,
-        title: `${!isPlaying ? 'Paused · ' : ''}Click to jump back to live edge`,
+        title: `${!isPlaying ? 'Paused · ' : ''}Increase speed above 1× to catch up, or click to jump to live edge`,
         clickable: true,
       };
     }

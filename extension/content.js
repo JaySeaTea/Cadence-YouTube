@@ -324,19 +324,23 @@
       const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
       const lagLabel = formatCompactDuration(lagSec);
       const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-      const liveRate =
-        typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
+      const liveRate = state.settings.enabled
+        ? effectiveSpeed
+        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
           ? remainingState.playbackRate
-          : effectiveSpeed;
+          : 1.0;
 
-      if (!remainingState.isPaused && liveRate > 1.02) {
+      if (liveRate > 1.02) {
         const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
         const catchUpLabel = formatCompactDuration(catchUpSec);
+        const titlePrefix = remainingState.isPaused
+          ? `Paused ${lagLabel} behind live · Resuming at ${formatDisplaySpeed(liveRate)}× catches up in ${catchUpLabel}`
+          : `${lagLabel} behind live · Catching up at ${formatDisplaySpeed(liveRate)}×`;
         return {
           visible: true,
           mode: 'live-catchup',
-          text: `Live in ${catchUpLabel} @ ${formatDisplaySpeed(liveRate)}×`,
-          title: `${lagLabel} behind live · Click to jump to live edge`,
+          text: `−${lagLabel} · Live in ${catchUpLabel} @ ${formatDisplaySpeed(liveRate)}×`,
+          title: `${titlePrefix} · Click to jump to live edge`,
           clickable: true,
         };
       }
@@ -345,7 +349,7 @@
         visible: true,
         mode: 'live-behind',
         text: `${lagLabel} behind Live`,
-        title: `${remainingState.isPaused ? 'Paused · ' : ''}Click to jump back to live edge`,
+        title: `${remainingState.isPaused ? 'Paused · ' : ''}Increase speed above 1× to catch up, or click to jump to live edge`,
         clickable: true,
       };
     }
@@ -1028,9 +1032,16 @@
           currentChannel = extractDomChannelFallback();
         }
         const video = document.querySelector('video.html5-main-video');
-        const liveVideoSpeed = video ? Math.round(video.playbackRate * 100) / 100 : activeSpeed;
         const baseline = getBaselineSpeedForChannel(currentChannel);
+        const liveClampedOrPaused =
+          remainingState.isLive && (remainingState.isAtLiveHead || remainingState.isPaused);
+        const liveVideoSpeed = liveClampedOrPaused
+          ? getEffectiveSpeedForChannel(currentChannel)
+          : video
+            ? Math.round(video.playbackRate * 100) / 100
+            : activeSpeed;
         if (
+          !liveClampedOrPaused &&
           currentChannel &&
           hasActiveSessionOverride(currentChannel.videoId) &&
           Math.abs(liveVideoSpeed - baseline) < 0.015
@@ -1042,9 +1053,12 @@
         }
         const rule = findMatchingRule(currentChannel);
         const isSession = hasActiveSessionOverride(currentChannel && currentChannel.videoId);
+        const reportedSpeed = state.settings.enabled
+          ? getEffectiveSpeedForChannel(currentChannel)
+          : liveVideoSpeed || activeSpeed;
         sendResponse({
           channel: currentChannel,
-          activeSpeed: liveVideoSpeed || activeSpeed,
+          activeSpeed: reportedSpeed,
           matchedRule: rule,
           baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
@@ -1058,6 +1072,9 @@
           sessionOverride = { videoId: null, speed: null };
           saveChannelSpeed(targetMeta, msg.speed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
+              if (!remainingState.isLive || !remainingState.isAtLiveHead) {
+                remainingState.playbackRate = clampSpeed(msg.speed);
+              }
               pushConfigToBridge(msg.speed, true);
               postToBridge('COMMAND', { action: 'SET_SPEED', speed: msg.speed });
               renderInPageBar();

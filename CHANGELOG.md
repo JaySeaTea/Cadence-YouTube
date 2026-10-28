@@ -4,6 +4,12 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-10-27
+
+### Fixed
+- **Eliminated `1h behind Live` MSE Duration Artifact on Live Stream Refresh (#10)**: Stopped reading `HTMLMediaElement.seekable.end()` on finite-duration MSE live streams (where Chromium reports `mediaSource.duration = liveEdge + 3600s`), honored `.ytp-live-badge` / `getProgressState().isAtLiveHead` unconditionally when synced at the broadcast head, calibrated a wall-clock live-head anchor cross-checked against `getProgressState().seekableEnd - current`, `video.buffered`, and `.ytp-time-current` negative DVR offsets, and guarded `JUMP_TO_LIVE` fallback seeks from MSE forward duration ceilings.
+- **Speed-Adjusted Live DVR Catch-Up Readout & Rate Persistence (#10)**: Updated `#movie_player.setPlaybackRate()` ordering so YouTube's internal SABR/MSE live controller engages fast catch-up rates without snapping fine `0.05×` steps or resetting configured DVR speeds via internal `1.0×` `ratechange` events; enabled immediate catch-up calculation while paused or playing using Cadence's effective speed; and displayed explicit lag alongside catch-up time (`−10m · Live in 20m @ 1.5×`, `−10m · Live in 10m @ 2×`) so buffer offset and speed-adjusted catch-up duration are both clear at every playback rate.
+
 ## [1.3.1] - 2026-10-27
 
 ### Added

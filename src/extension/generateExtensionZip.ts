@@ -233,14 +233,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let pendingCardHint = null;
   let heldAtEndVideoId = window.__CADENCE_HELD_VIDEO_ID__ || null;
   let userInitiatedNavUntil = 0;
-  let recentGearInteractionUntil = 0;
+  let recentNativeSpeedGestureUntil = 0;
   let lastRemainingEmitAt = 0;
   let lastRemainingSignature = '';
   let liveStateVideoId = '';
   let liveHeadHysteresisBehind = false;
-  let lastLiveEdgeSec = null;
-  let lastLiveEdgeSampleAt = 0;
+  let liveAnchorVideoSec = null;
+  let liveAnchorWallMs = 0;
+  let psHasMseCeiling = false;
+  let lastCleanPsLagSec = null;
+  let lastCleanPsLagAt = 0;
+  let lastUiNegativeLagSec = null;
+  let lastUiNegativeLagAt = 0;
   let lastDvrRestoreAt = 0;
+  let dvrRestoreAttempts = 0;
+  let postSpeedVerifyTimer = null;
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -338,7 +345,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         markUserNavigationIntent();
       }
       if (target.closest('.ytp-settings-button, .ytp-settings-menu, .ytp-panel-menu, .ytp-menuitem')) {
-        recentGearInteractionUntil = Date.now() + 2500;
+        recentNativeSpeedGestureUntil = Date.now() + 4500;
       }
 
       if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
@@ -358,10 +365,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   document.addEventListener(
     'click',
     (e) => {
+      const rawTarget = e.target instanceof Element ? e.target : null;
+      if (
+        rawTarget &&
+        rawTarget.closest('.ytp-settings-button, .ytp-settings-menu, .ytp-panel-menu, .ytp-menuitem')
+      ) {
+        recentNativeSpeedGestureUntil = Date.now() + 4500;
+      }
       if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
         return;
       }
-      const target = e.target instanceof Element ? e.target : null;
+      const target = rawTarget;
       if (!target) return;
 
       const hint = extractCardPreviewHint(target);
@@ -391,6 +405,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (e) => {
       if (e.shiftKey && (e.key === 'N' || e.key === 'n' || e.key === 'P' || e.key === 'p')) {
         markUserNavigationIntent();
+      }
+      if (e.shiftKey && (e.key === '>' || e.key === '<' || e.key === '.' || e.key === ',')) {
+        recentNativeSpeedGestureUntil = Date.now() + 2500;
       }
     },
     { capture: true, signal: bridgeSignal }
@@ -495,8 +512,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function resetLiveTrackingState(videoId = '') {
     liveStateVideoId = videoId;
     liveHeadHysteresisBehind = false;
-    lastLiveEdgeSec = null;
-    lastLiveEdgeSampleAt = 0;
+    liveAnchorVideoSec = null;
+    liveAnchorWallMs = 0;
+    psHasMseCeiling = false;
+    lastCleanPsLagSec = null;
+    lastCleanPsLagAt = 0;
+    lastUiNegativeLagSec = null;
+    lastUiNegativeLagAt = 0;
+    dvrRestoreAttempts = 0;
+  }
+
+  function readNegativeLiveTimeOffsetSec(player) {
+    const root = player || document;
+    const timeEl = root.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live .ytp-time-current, .ytp-time-display.ytp-live .ytp-time-current'
+    );
+    if (!(timeEl instanceof HTMLElement)) return null;
+    try {
+      const style = window.getComputedStyle(timeEl);
+      if (style.display === 'none' || style.visibility === 'hidden') return null;
+    } catch (_) {}
+    const raw = (timeEl.textContent || '').trim();
+    const match = raw.match(/^[-−]\\s*(\\d+):(\\d{2})(?::(\\d{2}))?$/);
+    if (!match) return null;
+    if (match[3] !== undefined) {
+      return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+    }
+    return Number(match[1]) * 60 + Number(match[2]);
   }
 
   function measureLiveDvrState(player, video, currentVid) {
@@ -505,90 +547,204 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resetLiveTrackingState(currentVid);
     }
 
-    let rawSeekableStart = null;
-    let rawSeekableEnd = null;
+    const isPaused = Boolean(video && video.paused);
+    const currentVideoSec =
+      video && Number.isFinite(video.currentTime) ? video.currentTime : null;
+    const mediaDuration =
+      video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
 
-    if (video && video.seekable && video.seekable.length > 0) {
+    let maxBufferedEnd = null;
+    if (video && video.buffered && video.buffered.length > 0) {
       try {
-        const startVal = video.seekable.start(0);
-        const endVal = video.seekable.end(video.seekable.length - 1);
-        if (Number.isFinite(startVal) && Number.isFinite(endVal) && endVal >= startVal) {
-          rawSeekableStart = startVal;
-          rawSeekableEnd = endVal;
-        }
+        const bEnd = video.buffered.end(video.buffered.length - 1);
+        if (Number.isFinite(bEnd)) maxBufferedEnd = bEnd;
       } catch (_) {}
-    }
-
-    try {
-      if (player && typeof player.getProgressState === 'function') {
-        const ps = player.getProgressState();
-        if (ps && Number.isFinite(ps.seekableEnd) && ps.seekableEnd > 0) {
-          if (rawSeekableEnd === null || ps.seekableEnd > rawSeekableEnd) {
-            rawSeekableEnd = ps.seekableEnd;
-          }
-          if (rawSeekableStart === null && Number.isFinite(ps.seekableStart)) {
-            rawSeekableStart = ps.seekableStart;
-          }
-        }
-      }
-    } catch (_) {}
-
-    if (rawSeekableEnd !== null && Number.isFinite(rawSeekableEnd)) {
-      if (lastLiveEdgeSec === null || rawSeekableEnd > lastLiveEdgeSec + 0.2 || (video && !video.paused)) {
-        lastLiveEdgeSec = rawSeekableEnd;
-        lastLiveEdgeSampleAt = now;
-      }
-    }
-
-    let effectiveLiveEdge = rawSeekableEnd;
-    if (video && video.paused && lastLiveEdgeSec !== null && lastLiveEdgeSampleAt > 0) {
-      const extrapolated = lastLiveEdgeSec + Math.max(0, (now - lastLiveEdgeSampleAt) / 1000);
-      effectiveLiveEdge =
-        effectiveLiveEdge !== null ? Math.max(effectiveLiveEdge, extrapolated) : extrapolated;
     }
 
     const badge = getLiveBadgeElement(player);
     const badgeAtHead = isLiveBadgeAtHead(badge);
-    const dvrWindowSec =
-      rawSeekableStart !== null && effectiveLiveEdge !== null
-        ? Math.max(0, effectiveLiveEdge - rawSeekableStart)
-        : 0;
+    const uiNegSec = readNegativeLiveTimeOffsetSec(player);
 
-    let lagSec = 0;
-    if (video && effectiveLiveEdge !== null && Number.isFinite(effectiveLiveEdge)) {
-      lagSec = Math.max(0, effectiveLiveEdge - video.currentTime);
+    let ps = null;
+    try {
+      if (player && typeof player.getProgressState === 'function') {
+        ps = player.getProgressState();
+      }
+    } catch (_) {}
+
+    const psIsAtHead =
+      ps && typeof ps.isAtLiveHead === 'boolean' ? ps.isAtLiveHead : null;
+
+    const confirmedAtHead =
+      !isPaused &&
+      (badgeAtHead || (psIsAtHead === true && (uiNegSec === null || uiNegSec <= 10)));
+
+    if (confirmedAtHead) {
+      if (currentVideoSec !== null) {
+        liveAnchorVideoSec = currentVideoSec;
+        liveAnchorWallMs = now;
+      }
+      if (
+        ps &&
+        Number.isFinite(ps.seekableEnd) &&
+        Number.isFinite(ps.current) &&
+        ps.seekableEnd - ps.current > 45
+      ) {
+        psHasMseCeiling = true;
+      }
+      lastCleanPsLagSec = 0;
+      lastCleanPsLagAt = now;
+      lastUiNegativeLagSec = 0;
+      lastUiNegativeLagAt = now;
+      liveHeadHysteresisBehind = false;
+      dvrRestoreAttempts = 0;
+      return {
+        isAtLiveHead: true,
+        dvrLagSec: 0,
+        isPaused: false,
+      };
     }
 
-    const hasDvrWindow =
-      dvrWindowSec >= 25 || lagSec >= 15 || Boolean(video && video.paused && dvrWindowSec >= 8);
+    if (uiNegSec !== null) {
+      if (
+        !isPaused ||
+        lastUiNegativeLagSec === null ||
+        Math.abs(uiNegSec - lastUiNegativeLagSec) > 2
+      ) {
+        lastUiNegativeLagSec = uiNegSec;
+        lastUiNegativeLagAt = now;
+      }
+      if (liveAnchorWallMs === 0 && currentVideoSec !== null) {
+        liveAnchorVideoSec = currentVideoSec + uiNegSec;
+        liveAnchorWallMs = now;
+      }
+    }
 
-    if (!hasDvrWindow && badgeAtHead && (!video || !video.paused)) {
+    let cleanPsLag = null;
+    if (
+      !psHasMseCeiling &&
+      ps &&
+      Number.isFinite(ps.seekableEnd) &&
+      Number.isFinite(ps.current) &&
+      ps.seekableEnd >= ps.current
+    ) {
+      const rawPsLag = ps.seekableEnd - ps.current;
+      const matchesMseDurationCeiling =
+        (mediaDuration !== null &&
+          maxBufferedEnd !== null &&
+          mediaDuration - maxBufferedEnd > 300 &&
+          Math.abs(ps.seekableEnd - mediaDuration) < 30) ||
+        (mediaDuration !== null &&
+          currentVideoSec !== null &&
+          currentVideoSec < 20 &&
+          Math.abs(rawPsLag - 3600) < 45) ||
+        (uiNegSec !== null && Math.abs(rawPsLag - uiNegSec) > 300) ||
+        (liveAnchorWallMs > 0 &&
+          liveAnchorVideoSec !== null &&
+          currentVideoSec !== null &&
+          Math.abs(
+            rawPsLag -
+              Math.max(
+                0,
+                liveAnchorVideoSec + Math.max(0, (now - liveAnchorWallMs) / 1000) - currentVideoSec
+              )
+          ) > 300);
+
+      if (matchesMseDurationCeiling) {
+        psHasMseCeiling = true;
+      } else {
+        cleanPsLag = Math.max(0, rawPsLag);
+        if (
+          !isPaused ||
+          lastCleanPsLagSec === null ||
+          Math.abs(cleanPsLag - lastCleanPsLagSec) > 2
+        ) {
+          lastCleanPsLagSec = cleanPsLag;
+          lastCleanPsLagAt = now;
+        }
+        if (liveAnchorWallMs === 0 && currentVideoSec !== null) {
+          liveAnchorVideoSec = currentVideoSec + cleanPsLag;
+          liveAnchorWallMs = now;
+        }
+      }
+    }
+
+    let anchorLagSec = null;
+    if (liveAnchorWallMs > 0 && liveAnchorVideoSec !== null && currentVideoSec !== null) {
+      let expectedLiveVideoSec =
+        liveAnchorVideoSec + Math.max(0, (now - liveAnchorWallMs) / 1000);
+      if (currentVideoSec > expectedLiveVideoSec + 1.5) {
+        liveAnchorVideoSec = currentVideoSec;
+        liveAnchorWallMs = now;
+        expectedLiveVideoSec = currentVideoSec;
+      } else if (
+        !isPaused &&
+        cleanPsLag !== null &&
+        Math.abs(expectedLiveVideoSec - currentVideoSec - cleanPsLag) > 6
+      ) {
+        liveAnchorVideoSec = currentVideoSec + cleanPsLag;
+        liveAnchorWallMs = now;
+        expectedLiveVideoSec = liveAnchorVideoSec;
+      }
+      anchorLagSec = Math.max(0, expectedLiveVideoSec - currentVideoSec);
+    }
+
+    let verifiedLagSec = null;
+    if (!isPaused && cleanPsLag !== null) {
+      verifiedLagSec = cleanPsLag;
+    } else if (anchorLagSec !== null) {
+      verifiedLagSec = anchorLagSec;
+    } else if (lastCleanPsLagSec !== null && lastCleanPsLagAt > 0) {
+      verifiedLagSec =
+        lastCleanPsLagSec + (isPaused ? Math.max(0, (now - lastCleanPsLagAt) / 1000) : 0);
+    } else if (lastUiNegativeLagSec !== null && lastUiNegativeLagAt > 0) {
+      verifiedLagSec =
+        lastUiNegativeLagSec + (isPaused ? Math.max(0, (now - lastUiNegativeLagAt) / 1000) : 0);
+    } else if (
+      video &&
+      !Number.isFinite(video.duration) &&
+      currentVideoSec !== null &&
+      video.seekable &&
+      video.seekable.length > 0
+    ) {
+      try {
+        const hlsEnd = video.seekable.end(video.seekable.length - 1);
+        if (Number.isFinite(hlsEnd) && hlsEnd >= currentVideoSec) {
+          verifiedLagSec = Math.max(0, hlsEnd - currentVideoSec);
+        }
+      } catch (_) {}
+    }
+
+    if (verifiedLagSec === null) {
       liveHeadHysteresisBehind = false;
-    } else if (badgeAtHead && (!video || !video.paused) && lagSec < 16) {
-      liveHeadHysteresisBehind = false;
-    } else if (liveHeadHysteresisBehind) {
-      if (lagSec <= 10 || (badgeAtHead && (!video || !video.paused) && lagSec <= 13)) {
+      return {
+        isAtLiveHead: true,
+        dvrLagSec: 0,
+        isPaused,
+      };
+    }
+
+    if (liveHeadHysteresisBehind) {
+      if (!isPaused && verifiedLagSec <= 9) {
         liveHeadHysteresisBehind = false;
       }
     } else {
-      if (lagSec >= 15 || (video && video.paused && lagSec >= 5)) {
+      if (verifiedLagSec >= 12 || (isPaused && verifiedLagSec >= 5)) {
         liveHeadHysteresisBehind = true;
       }
     }
 
     return {
       isAtLiveHead: !liveHeadHysteresisBehind,
-      dvrLagSec: Math.round(lagSec),
-      liveEdgeSec: effectiveLiveEdge,
-      isPaused: Boolean(video && video.paused),
+      dvrLagSec: Math.round(verifiedLagSec),
+      isPaused,
     };
   }
 
   function maybeRestoreDvrCatchupSpeed() {
-    if (!isSupportedWatchPage() || !config.enabled || !config.perChannelSpeedEnabled) return;
-    if (isApplyingProgrammatically) return;
+    if (!isSupportedWatchPage() || !config.enabled || isApplyingProgrammatically) return;
     const now = Date.now();
-    if (now - lastDvrRestoreAt < 2000) return;
+    if (now - lastDvrRestoreAt < 400 || dvrRestoreAttempts >= 4) return;
 
     const player = getMoviePlayer();
     const video = getMainVideo();
@@ -596,12 +752,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isLiveBroadcast(player, video)) return;
 
     const target = Number(config.targetSpeed) || 1.0;
-    if (target <= 1.01) return;
+    if (Math.abs(target - 1.0) <= 0.02) return;
 
     const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
     if (!dvr.isAtLiveHead && Math.abs(video.playbackRate - target) > 0.03) {
       lastDvrRestoreAt = now;
-      applyPlaybackSpeed(target);
+      dvrRestoreAttempts += 1;
+      applyPlaybackSpeed(target, false, true);
     }
   }
 
@@ -634,16 +791,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    const rate = Math.max(0.25, Number(video.playbackRate) || 1.0);
+    let playerRate = null;
+    try {
+      if (player && typeof player.getPlaybackRate === 'function') {
+        const pr = Number(player.getPlaybackRate());
+        if (Number.isFinite(pr) && pr > 0) playerRate = pr;
+      }
+    } catch (_) {}
+    const mediaRate = Math.max(0.25, Number(video.playbackRate) || 1.0);
+
     if (isLiveBroadcast(player, video)) {
       const dvr = measureLiveDvrState(player, video, videoId);
+      let liveRate = 1.0;
+      if (!dvr.isAtLiveHead) {
+        if (dvr.isPaused) {
+          liveRate = config.enabled
+            ? Number(config.targetSpeed) || playerRate || mediaRate
+            : playerRate || mediaRate;
+        } else if (isApplyingProgrammatically) {
+          liveRate = lastAppliedSpeed;
+        } else if (Math.abs(mediaRate - 1.0) > 0.02) {
+          liveRate = mediaRate;
+        } else if (playerRate !== null && Math.abs(playerRate - 1.0) > 0.02) {
+          liveRate = playerRate;
+        } else {
+          liveRate = mediaRate;
+        }
+      }
+
       const liveSig = [
         videoId,
         'live',
         dvr.isAtLiveHead ? 'head' : 'behind',
         dvr.isAtLiveHead ? 0 : dvr.dvrLagSec,
         dvr.isPaused ? 'p' : 'r',
-        rate.toFixed(2),
+        liveRate.toFixed(2),
       ].join('|');
 
       if (!force && liveSig === lastRemainingSignature) return;
@@ -653,7 +835,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       postToContent('TIME_REMAINING_UPDATE', {
         videoId,
         rawRemainingSec: null,
-        playbackRate: Math.round(rate * 100) / 100,
+        playbackRate: Math.round(liveRate * 100) / 100,
         isLive: true,
         isAtLiveHead: dvr.isAtLiveHead,
         dvrLagSec: dvr.dvrLagSec,
@@ -663,6 +845,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
+    const rate = mediaRate;
     const invalidDuration = !Number.isFinite(video.duration) || video.duration <= 0;
     const rawRemainingSec = invalidDuration
       ? null
@@ -792,34 +975,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
   }
 
-  function applyPlaybackSpeed(speed, forceResetOnBrowse = false) {
+  function applyPlaybackSpeed(speed, forceResetOnBrowse = false, fromDvrRestore = false) {
     const numericSpeed = Math.min(4.0, Math.max(0.25, Math.round(Number(speed) * 100) / 100 || 1.0));
     const player = getMoviePlayer();
     const video = getMainVideo();
     if (!forceResetOnBrowse && isAdPlaying(player)) return;
 
+    const liveActive = !forceResetOnBrowse && Boolean(video && isLiveBroadcast(player, video));
+    if (liveActive) {
+      const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+      if (dvr.isAtLiveHead && numericSpeed > 1.01) {
+        lastAppliedSpeed = numericSpeed;
+        emitTimeRemaining(true);
+        return;
+      }
+    }
+
+    if (!fromDvrRestore) {
+      dvrRestoreAttempts = 0;
+    }
+
     isApplyingProgrammatically = true;
     clearTimeout(programmaticTimer);
+    clearTimeout(postSpeedVerifyTimer);
     lastAppliedSpeed = numericSpeed;
+
+    try {
+      if (player && typeof player.setPlaybackRate === 'function') {
+        const avail =
+          typeof player.getAvailablePlaybackRates === 'function'
+            ? player.getAvailablePlaybackRates()
+            : null;
+        if (Array.isArray(avail) && avail.length > 0) {
+          const exactAvail = avail.find((r) => Math.abs(Number(r) - numericSpeed) < 0.01);
+          if (exactAvail !== undefined) {
+            player.setPlaybackRate(Number(exactAvail));
+          } else if (liveActive) {
+            const closestAvail = avail.reduce((best, curr) =>
+              Math.abs(Number(curr) - numericSpeed) < Math.abs(Number(best) - numericSpeed)
+                ? curr
+                : best
+            );
+            player.setPlaybackRate(Number(closestAvail));
+          }
+        } else if (
+          numericSpeed >= 0.25 &&
+          numericSpeed <= 2.0 &&
+          Math.abs(Math.round(numericSpeed * 4) - numericSpeed * 4) < 0.001
+        ) {
+          player.setPlaybackRate(numericSpeed);
+        }
+      }
+    } catch (_) {}
 
     if (video && Math.abs(video.playbackRate - numericSpeed) > 0.008) {
       video.playbackRate = numericSpeed;
     }
 
-    try {
-      if (
-        player &&
-        typeof player.setPlaybackRate === 'function' &&
-        numericSpeed >= 0.25 &&
-        numericSpeed <= 2.0 &&
-        Math.abs(Math.round(numericSpeed * 20) - numericSpeed * 20) < 0.001
-      ) {
-        player.setPlaybackRate(numericSpeed);
-      }
-    } catch (_) {}
-
     if (!forceResetOnBrowse) {
       emitTimeRemaining(true);
+      postSpeedVerifyTimer = setTimeout(() => {
+        const vNow = getMainVideo();
+        const pNow = getMoviePlayer();
+        if (vNow && !isAdPlaying(pNow)) {
+          const nowLive = isLiveBroadcast(pNow, vNow);
+          const nowDvr = nowLive ? measureLiveDvrState(pNow, vNow, getCurrentVideoId(pNow)) : null;
+          if ((!nowLive || (nowDvr && !nowDvr.isAtLiveHead)) && !vNow.paused) {
+            if (Math.abs(vNow.playbackRate - numericSpeed) > 0.025) {
+              vNow.playbackRate = numericSpeed;
+            }
+          }
+          emitTimeRemaining(true);
+        }
+      }, 90);
     }
 
     programmaticTimer = setTimeout(() => {
@@ -975,6 +1203,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'seeked',
       () => {
+        dvrRestoreAttempts = 0;
         maybeRestoreDvrCatchupSpeed();
         emitTimeRemaining(true);
       },
@@ -1048,6 +1277,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'play',
       () => {
+        dvrRestoreAttempts = 0;
         suppressNativeAutoplayAndPlaylist();
         enforceConfiguredSpeedNow();
         maybeRestoreDvrCatchupSpeed();
@@ -1060,6 +1290,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       'playing',
       () => {
         enforceConfiguredSpeedNow();
+        maybeRestoreDvrCatchupSpeed();
         emitTimeRemaining(false);
       },
       { signal: bridgeSignal }
@@ -1076,13 +1307,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (
           isLiveBroadcast(player, video) &&
           Math.abs(newRate - 1.0) < 0.025 &&
-          Date.now() > recentGearInteractionUntil
+          Date.now() > recentNativeSpeedGestureUntil
         ) {
           const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
-          if (dvr.isAtLiveHead) {
-            emitTimeRemaining(true);
-            return;
+          emitTimeRemaining(true);
+          if (
+            !dvr.isAtLiveHead &&
+            config.enabled &&
+            Math.abs((Number(config.targetSpeed) || 1.0) - 1.0) > 0.025
+          ) {
+            setTimeout(maybeRestoreDvrCatchupSpeed, 120);
           }
+          return;
         }
 
         emitTimeRemaining(true);
@@ -1187,22 +1423,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             jumpedViaBadge = true;
           }
           if (video) {
-            let targetEdge = null;
-            if (video.seekable && video.seekable.length > 0) {
+            if (!jumpedViaBadge) {
+              let targetEdge = null;
               try {
-                targetEdge = video.seekable.end(video.seekable.length - 1);
+                if (!psHasMseCeiling && player && typeof player.getProgressState === 'function') {
+                  const ps = player.getProgressState();
+                  if (ps && Number.isFinite(ps.seekableEnd) && ps.seekableEnd > 0) {
+                    targetEdge = ps.seekableEnd;
+                  }
+                }
               } catch (_) {}
-            }
-            if (!jumpedViaBadge && targetEdge !== null && Number.isFinite(targetEdge)) {
-              const safeEdge = Math.max(0, targetEdge - 0.5);
-              try {
-                if (player && typeof player.seekTo === 'function') {
-                  player.seekTo(safeEdge, true);
-                } else {
+              if (
+                targetEdge === null &&
+                liveAnchorWallMs > 0 &&
+                liveAnchorVideoSec !== null
+              ) {
+                targetEdge =
+                  liveAnchorVideoSec + Math.max(0, (Date.now() - liveAnchorWallMs) / 1000);
+              }
+              if (targetEdge === null && video.buffered && video.buffered.length > 0) {
+                try {
+                  targetEdge = video.buffered.end(video.buffered.length - 1);
+                } catch (_) {}
+              }
+              if (targetEdge !== null && Number.isFinite(targetEdge)) {
+                const safeEdge = Math.max(0, targetEdge - 0.25);
+                try {
+                  if (player && typeof player.seekTo === 'function') {
+                    player.seekTo(safeEdge, true);
+                  } else {
+                    video.currentTime = safeEdge;
+                  }
+                } catch (_) {
                   video.currentTime = safeEdge;
                 }
-              } catch (_) {
-                video.currentTime = safeEdge;
               }
             }
             if (video.paused) {
@@ -1314,6 +1568,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       heartbeatInterval = null;
     }
     clearTimeout(programmaticTimer);
+    clearTimeout(postSpeedVerifyTimer);
   };
 
   broadcastChannelMetadata(true);
@@ -1646,19 +1901,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
       const lagLabel = formatCompactDuration(lagSec);
       const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-      const liveRate =
-        typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
+      const liveRate = state.settings.enabled
+        ? effectiveSpeed
+        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
           ? remainingState.playbackRate
-          : effectiveSpeed;
+          : 1.0;
 
-      if (!remainingState.isPaused && liveRate > 1.02) {
+      if (liveRate > 1.02) {
         const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
         const catchUpLabel = formatCompactDuration(catchUpSec);
+        const titlePrefix = remainingState.isPaused
+          ? \`Paused \${lagLabel} behind live · Resuming at \${formatDisplaySpeed(liveRate)}× catches up in \${catchUpLabel}\`
+          : \`\${lagLabel} behind live · Catching up at \${formatDisplaySpeed(liveRate)}×\`;
         return {
           visible: true,
           mode: 'live-catchup',
-          text: \`Live in \${catchUpLabel} @ \${formatDisplaySpeed(liveRate)}×\`,
-          title: \`\${lagLabel} behind live · Click to jump to live edge\`,
+          text: \`−\${lagLabel} · Live in \${catchUpLabel} @ \${formatDisplaySpeed(liveRate)}×\`,
+          title: \`\${titlePrefix} · Click to jump to live edge\`,
           clickable: true,
         };
       }
@@ -1667,7 +1926,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         visible: true,
         mode: 'live-behind',
         text: \`\${lagLabel} behind Live\`,
-        title: \`\${remainingState.isPaused ? 'Paused · ' : ''}Click to jump back to live edge\`,
+        title: \`\${remainingState.isPaused ? 'Paused · ' : ''}Increase speed above 1× to catch up, or click to jump to live edge\`,
         clickable: true,
       };
     }
@@ -2350,9 +2609,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentChannel = extractDomChannelFallback();
         }
         const video = document.querySelector('video.html5-main-video');
-        const liveVideoSpeed = video ? Math.round(video.playbackRate * 100) / 100 : activeSpeed;
         const baseline = getBaselineSpeedForChannel(currentChannel);
+        const liveClampedOrPaused =
+          remainingState.isLive && (remainingState.isAtLiveHead || remainingState.isPaused);
+        const liveVideoSpeed = liveClampedOrPaused
+          ? getEffectiveSpeedForChannel(currentChannel)
+          : video
+            ? Math.round(video.playbackRate * 100) / 100
+            : activeSpeed;
         if (
+          !liveClampedOrPaused &&
           currentChannel &&
           hasActiveSessionOverride(currentChannel.videoId) &&
           Math.abs(liveVideoSpeed - baseline) < 0.015
@@ -2364,9 +2630,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const rule = findMatchingRule(currentChannel);
         const isSession = hasActiveSessionOverride(currentChannel && currentChannel.videoId);
+        const reportedSpeed = state.settings.enabled
+          ? getEffectiveSpeedForChannel(currentChannel)
+          : liveVideoSpeed || activeSpeed;
         sendResponse({
           channel: currentChannel,
-          activeSpeed: liveVideoSpeed || activeSpeed,
+          activeSpeed: reportedSpeed,
           matchedRule: rule,
           baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
@@ -2380,6 +2649,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sessionOverride = { videoId: null, speed: null };
           saveChannelSpeed(targetMeta, msg.speed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
+              if (!remainingState.isLive || !remainingState.isAtLiveHead) {
+                remainingState.playbackRate = clampSpeed(msg.speed);
+              }
               pushConfigToBridge(msg.speed, true);
               postToBridge('COMMAND', { action: 'SET_SPEED', speed: msg.speed });
               renderInPageBar();
