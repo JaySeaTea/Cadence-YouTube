@@ -472,7 +472,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   );
 
   function getMoviePlayer() {
-    return document.getElementById('movie_player');
+    return (
+      document.querySelector('ytd-watch-flexy #movie_player') ||
+      document.querySelector('#ytd-player #movie_player') ||
+      document.getElementById('movie_player')
+    );
   }
 
   function getMainVideo() {
@@ -1592,6 +1596,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       } else if (type === 'COMMAND') {
         if (payload.action === 'SET_SPEED') {
+          const requestedSpeed = Number(payload.speed) || 1.0;
+          const player = getMoviePlayer();
+          const video = getMainVideo();
+          if (
+            payload.fromUserGesture &&
+            requestedSpeed > 1.01 &&
+            video &&
+            isLiveBroadcast(player, video)
+          ) {
+            const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+            if (dvr.isAtLiveHead) {
+              config.targetSpeed = 1.0;
+              window.__CADENCE_LAST_CONFIG__ = config;
+              applyLiveHeadRateClamp(player, video);
+              postToContent('LIVE_HEAD_SPEED_BLOCKED', {
+                videoId: getCurrentVideoId(player) || '',
+                attemptedSpeed: requestedSpeed,
+              });
+              emitTimeRemaining(true);
+              return;
+            }
+          }
           config.targetSpeed = payload.speed;
           window.__CADENCE_LAST_CONFIG__ = config;
           applyPlaybackSpeed(payload.speed);
@@ -1867,8 +1893,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   };
   let lastToastedVideoId = null;
   let toastTimeout = null;
+  let barToastTimeout = null;
+  let barToastVisible = false;
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
+
+  const WARNING_ICON_SVG =
+    '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+    '<path d="M8 2.25L14.25 13.25H1.75L8 2.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+    '<path d="M8 6.5V9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+    '<circle cx="8" cy="11.5" r="0.75" fill="currentColor"/>' +
+    '</svg>';
 
   function clearBarMountRetry() {
     if (barMountRetryTimer) {
@@ -1878,10 +1913,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     barMountAttempts = 0;
   }
 
+  function hideBarToast(removeDom = false) {
+    if (barToastTimeout) {
+      clearTimeout(barToastTimeout);
+      barToastTimeout = null;
+    }
+    barToastVisible = false;
+    const existingToast = document.getElementById('cadence-bar-toast');
+    if (existingToast) {
+      if (removeDom) {
+        existingToast.remove();
+      } else {
+        existingToast.classList.remove('cadence-visible');
+      }
+    }
+  }
+
   function teardownInstance() {
     if (isDestroyed) return;
     isDestroyed = true;
     clearTimeout(toastTimeout);
+    hideBarToast(true);
     clearBarMountRetry();
     try {
       lifecycleController.abort();
@@ -2096,12 +2148,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  function isLiveAtHeadForChannel(meta) {
-    if (!remainingState.isLive || !remainingState.isAtLiveHead) return false;
-    if (meta && meta.videoId && remainingState.videoId && meta.videoId !== remainingState.videoId) {
+  function getWatchPlayerElement() {
+    return (
+      document.querySelector('ytd-watch-flexy #movie_player') ||
+      document.querySelector('#ytd-player #movie_player') ||
+      document.getElementById('movie_player')
+    );
+  }
+
+  function isDomLiveHeadFallback() {
+    if (!isWatchLocation()) return false;
+    const player = getWatchPlayerElement();
+    if (!player) return false;
+    if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
       return false;
     }
-    return true;
+    const video =
+      player.querySelector('video.html5-main-video') ||
+      document.querySelector('ytd-watch-flexy video.html5-main-video');
+    if (video && video.paused) return false;
+    const liveTime = player.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
+    );
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (!liveTime || !(badge instanceof HTMLElement) || badge.hasAttribute('hidden')) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {}
+    return Boolean(
+      badge.disabled === true ||
+        badge.hasAttribute('disabled') ||
+        badge.getAttribute('aria-disabled') === 'true' ||
+        badge.classList.contains('ytp-live-badge-is-livehead')
+    );
+  }
+
+  function isLiveAtHeadForChannel(meta) {
+    if (remainingState.isLive) {
+      if (!remainingState.isAtLiveHead) return false;
+      if (meta && meta.videoId && remainingState.videoId && meta.videoId !== remainingState.videoId) {
+        return false;
+      }
+      return true;
+    }
+    if (remainingState.hidden) {
+      return isDomLiveHeadFallback();
+    }
+    return false;
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -2275,27 +2371,144 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
   }
 
-  function showPlayerToast(label, forceShow = false) {
+  function positionBarToast() {
+    const toastEl = document.getElementById('cadence-bar-toast');
+    const bar = document.getElementById('cadence-owner-bar');
+    if (!toastEl || !bar || !isWatchLocation()) {
+      if (toastEl) toastEl.classList.remove('cadence-visible');
+      return false;
+    }
+    const barRect = bar.getBoundingClientRect();
+    if (barRect.width === 0 && barRect.height === 0) {
+      toastEl.classList.remove('cadence-visible');
+      return false;
+    }
+    const anchorEl = bar.querySelector('.cadence-bar-buttons') || bar;
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const toastWidth = toastEl.offsetWidth || 214;
+    const toastHeight = toastEl.offsetHeight || 28;
+    const viewportW = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 768;
+
+    if (barRect.bottom < 48 || barRect.top > viewportH - 12) {
+      toastEl.classList.remove('cadence-visible');
+      return false;
+    }
+
+    const centeredLeft = anchorRect.left + anchorRect.width / 2 - toastWidth / 2;
+    const clampedLeft = Math.round(
+      Math.max(12, Math.min(viewportW - toastWidth - 12, centeredLeft))
+    );
+    let targetTop = Math.round(barRect.top - toastHeight - 7);
+    if (targetTop < 62) {
+      targetTop = Math.round(barRect.bottom + 7);
+    }
+
+    toastEl.style.left = \`\${clampedLeft}px\`;
+    toastEl.style.top = \`\${targetTop}px\`;
+    return true;
+  }
+
+  function showBarToast(label, durationMs = 2400) {
+    if (isDestroyed || !isExtensionContextValid()) {
+      teardownInstance();
+      return;
+    }
+    if (!state.settings.enabled || !state.settings.showInPageControlBar) return;
+    if (!document.body) return;
+
+    let toastEl = document.getElementById('cadence-bar-toast');
+    if (toastEl && toastEl.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
+      toastEl.remove();
+      toastEl = null;
+    }
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.id = 'cadence-bar-toast';
+      toastEl.className = 'cadence-bar-toast';
+      toastEl.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toastEl);
+    }
+
+    toastEl.innerHTML = \`\${WARNING_ICON_SVG}<span class="cadence-bar-toast-text"></span>\`;
+    const textSpan = toastEl.querySelector('.cadence-bar-toast-text');
+    if (textSpan) textSpan.textContent = label;
+
+    barToastVisible = true;
+    const positioned = positionBarToast();
+    if (positioned) {
+      toastEl.classList.add('cadence-visible');
+    }
+
+    clearTimeout(barToastTimeout);
+    barToastTimeout = setTimeout(() => {
+      barToastVisible = false;
+      toastEl.classList.remove('cadence-visible');
+    }, durationMs);
+  }
+
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (barToastVisible) {
+        const ok = positionBarToast();
+        const toastEl = document.getElementById('cadence-bar-toast');
+        if (ok && toastEl) toastEl.classList.add('cadence-visible');
+      }
+    },
+    { capture: true, passive: true, signal: lifecycleSignal }
+  );
+
+  window.addEventListener(
+    'resize',
+    () => {
+      if (barToastVisible) {
+        positionBarToast();
+      }
+    },
+    { passive: true, signal: lifecycleSignal }
+  );
+
+  function showPlayerToast(label, forceShow = false, isWarning = false) {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
     }
     if (!state.settings.enabled || (!forceShow && !state.settings.showSpeedToast)) return;
-    const player = document.getElementById('movie_player');
+    const player = getWatchPlayerElement();
     if (!player) return;
 
     let toast = player.querySelector('.cadence-player-toast');
+    if (toast && toast.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
+      toast.remove();
+      toast = null;
+    }
     if (!toast) {
       toast = document.createElement('div');
       toast.className = 'cadence-player-toast';
+      toast.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
+      toast.setAttribute('role', 'status');
+      toast.setAttribute('aria-live', 'polite');
       player.appendChild(toast);
     }
-    toast.textContent = label;
+    toast.classList.toggle('is-warning', Boolean(isWarning));
+    if (isWarning) {
+      toast.innerHTML = \`\${WARNING_ICON_SVG}<span></span>\`;
+      const span = toast.querySelector('span');
+      if (span) span.textContent = label;
+    } else {
+      toast.textContent = label;
+    }
     toast.classList.add('cadence-visible');
     clearTimeout(toastTimeout);
-    toastTimeout = setTimeout(() => {
-      toast.classList.remove('cadence-visible');
-    }, 1800);
+    toastTimeout = setTimeout(
+      () => {
+        toast.classList.remove('cadence-visible');
+      },
+      isWarning ? 2400 : 1800
+    );
   }
 
   function showStoppedBanner(hasPlaylist) {
@@ -2303,7 +2516,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       teardownInstance();
       return;
     }
-    const player = document.getElementById('movie_player');
+    const player = getWatchPlayerElement();
     if (!player) return;
     let banner = player.querySelector('.cadence-stopped-banner');
     if (banner && banner.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
@@ -2412,9 +2625,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pushConfigToBridge(1.0, true);
       postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
       renderInPageBar();
-      showPlayerToast('Stream is currently at live end', true);
+      showBarToast('Stream is currently at live end');
+      showPlayerToast('Stream is currently at live end', true, true);
       return;
     }
+
+    hideBarToast();
 
     if (liveAtHead && Math.abs(cleanSpeed - 1.0) < 0.015) {
       sessionOverride = { videoId: null, speed: null };
@@ -2438,7 +2654,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
       remainingState.playbackRate = effectiveBaseline;
       pushConfigToBridge(effectiveBaseline, true);
-      postToBridge('COMMAND', { action: 'SET_SPEED', speed: effectiveBaseline });
+      postToBridge('COMMAND', {
+        action: 'SET_SPEED',
+        speed: effectiveBaseline,
+        fromUserGesture: true,
+      });
       renderInPageBar();
       const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
       showPlayerToast(
@@ -2456,7 +2676,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     remainingState.playbackRate = cleanSpeed;
 
     pushConfigToBridge(cleanSpeed, true);
-    postToBridge('COMMAND', { action: 'SET_SPEED', speed: cleanSpeed });
+    postToBridge('COMMAND', {
+      action: 'SET_SPEED',
+      speed: cleanSpeed,
+      fromUserGesture: true,
+    });
     renderInPageBar();
 
     const suffix = matchedRule
@@ -2475,6 +2699,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (!currentChannel) return;
 
+    hideBarToast();
     const matchedRule = findMatchingRule(currentChannel);
     sessionOverride = {
       videoId: null,
@@ -2513,6 +2738,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (!isWatchLocation()) {
       clearBarMountRetry();
+      hideBarToast(true);
       if (existing) existing.remove();
       return;
     }
@@ -2522,6 +2748,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (!state.settings.enabled || !state.settings.showInPageControlBar || !currentChannel) {
       clearBarMountRetry();
+      hideBarToast(true);
       if (existing) existing.remove();
       return;
     }
@@ -2551,8 +2778,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+    const liveAtHead = isLiveAtHeadForChannel(currentChannel);
     const isLiveRuleClamped =
-      !isSessionActive && isLiveAtHeadForChannel(currentChannel) && baselineSpeed > 1.01;
+      !isSessionActive && liveAtHead && baselineSpeed > 1.01;
+    const isStepUpLiveBlocked = liveAtHead && effectiveSpeed + 0.05 > 1.01;
+    const liveBlockedTooltip = 'Unavailable while synced at live end — rewind stream to speed up';
     const modePrefix = isSessionActive ? 'Session' : matchedRule ? 'Rule' : 'Default';
     const tooltip = isSessionActive
       ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
@@ -2568,20 +2798,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       </span>
       <div class="cadence-bar-buttons">
         \${quickSpeeds
-          .map(
-            (spd) => \`
-          <button type="button" data-speed="\${spd}" class="cadence-speed-chip \${Math.abs(effectiveSpeed - spd) < 0.015 ? 'active' : ''}" title="Set \${formatDisplaySpeed(spd)}× for this video session only">
+          .map((spd) => {
+            const isActive = Math.abs(effectiveSpeed - spd) < 0.015;
+            const isBlocked = liveAtHead && spd > 1.01;
+            const chipClasses = [
+              'cadence-speed-chip',
+              isActive ? 'active' : '',
+              isBlocked ? 'is-live-blocked' : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            const chipTitle = isBlocked
+              ? liveBlockedTooltip
+              : \`Set \${formatDisplaySpeed(spd)}× for this video session only\`;
+            return \`
+          <button type="button" data-speed="\${spd}" class="\${chipClasses}"\${isBlocked ? ' aria-disabled="true"' : ''} title="\${chipTitle}">
             \${formatDisplaySpeed(spd)}×
           </button>
-        \`
-          )
+        \`;
+          })
           .join('')}
       </div>
       <span class="cadence-bar-divider" aria-hidden="true"></span>
       <div class="cadence-bar-Fine">
         <button type="button" data-step="-0.05" class="cadence-step-chip" title="Slow down by 0.05× for this video session">−0.05</button>
-        <button type="button" data-step="0.05" class="cadence-step-chip" title="Speed up by 0.05× for this video session">+0.05</button>
-        <button type="button" data-action="reset" class="cadence-reset-chip \${isSessionActive ? 'is-active' : ''}" \${!isSessionActive ? 'disabled' : ''} title="Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(isLiveAtHeadForChannel(currentChannel) && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)">Reset</button>
+        <button type="button" data-step="0.05" class="cadence-step-chip\${isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${isStepUpLiveBlocked ? liveBlockedTooltip : 'Speed up by 0.05× for this video session'}">+0.05</button>
+        <button type="button" data-action="reset" class="cadence-reset-chip \${isSessionActive ? 'is-active' : ''}" \${!isSessionActive ? 'disabled' : ''} title="Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)">Reset</button>
       </div>
       <span class="cadence-remaining-wrap" style="display:none;">
         <span class="cadence-bar-divider" aria-hidden="true"></span>
@@ -2635,6 +2877,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         'click',
         () => {
           if (remainingSlotBtn.disabled) return;
+          hideBarToast();
           if (
             currentChannel &&
             hasActiveSessionOverride(currentChannel.videoId) &&
@@ -2655,6 +2898,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         { signal: lifecycleSignal }
       );
     }
+
+    if (barToastVisible) {
+      positionBarToast();
+    }
   }
 
   function handleLeftWatchPage() {
@@ -2672,6 +2919,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
     lastToastedVideoId = null;
     clearBarMountRetry();
+    hideBarToast(true);
 
     const existingBar = document.getElementById('cadence-owner-bar');
     if (existingBar) existingBar.remove();
@@ -2773,11 +3021,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             renderInPageBar();
           } else if (prevLiveAtHead && !nowLiveAtHead && remainingState.isLive) {
+            hideBarToast();
             if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
               pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
             }
             renderInPageBar();
           } else if (prevIsLive !== remainingState.isLive) {
+            if (!remainingState.isLive) hideBarToast();
             if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
               pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
             }
@@ -2799,13 +3049,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (state.settings.enabled) {
             pushConfigToBridge(1.0, Boolean(state.settings.perChannelSpeedEnabled));
             renderInPageBar();
-            showPlayerToast('Stream is currently at live end', true);
+            showBarToast('Stream is currently at live end');
+            showPlayerToast('Stream is currently at live end', true, true);
           }
         } else if (type === 'NAVIGATION_PREVIEW' && payload && payload.videoId) {
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
           }
           if (remainingState.videoId !== payload.videoId) {
+            hideBarToast();
             remainingState = {
               videoId: payload.videoId,
               rawRemainingSec: null,
@@ -2845,6 +3097,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else if (type === 'VIDEO_DETECTED' && payload) {
           const prevVideoId = currentChannel ? currentChannel.videoId : null;
           if (payload.videoId && payload.videoId !== prevVideoId) {
+            hideBarToast();
             if (sessionOverride.videoId !== payload.videoId) {
               sessionOverride = { videoId: null, speed: null };
             }
@@ -2884,9 +3137,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pushConfigToBridge(1.0, true);
             postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
             renderInPageBar();
-            showPlayerToast('Stream is currently at live end', true);
+            showBarToast('Stream is currently at live end');
+            showPlayerToast('Stream is currently at live end', true, true);
             return;
           }
+          hideBarToast();
 
           if (state.settings.autoRememberManualSpeed) {
             sessionOverride = { videoId: null, speed: null };
@@ -2961,7 +3216,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!currentChannel || !currentChannel.channelName) {
           currentChannel = extractDomChannelFallback();
         }
-        const video = document.querySelector('video.html5-main-video');
+        const video =
+          document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+          document.querySelector('#movie_player video.html5-main-video') ||
+          document.querySelector('video.html5-main-video');
         const baseline = getBaselineSpeedForChannel(currentChannel);
         const liveAtHead = isLiveAtHeadForChannel(currentChannel);
         const liveClampedOrPaused =
@@ -2993,7 +3251,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           matchedRule: rule,
           baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
-          isLive: Boolean(remainingState.isLive),
+          isLive: Boolean(remainingState.isLive || liveAtHead),
           isAtLiveHead: liveAtHead,
         });
         return false;
@@ -3012,7 +3270,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pushConfigToBridge(1.0, true);
         postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
         renderInPageBar();
-        showPlayerToast('Stream is currently at live end', true);
+        showBarToast('Stream is currently at live end');
+        showPlayerToast('Stream is currently at live end', true, true);
         sendResponse({ ok: true });
         return false;
       }
@@ -3027,10 +3286,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pushConfigToBridge(1.0, true);
             postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
             renderInPageBar();
-            showPlayerToast('Stream is currently at live end', true);
+            showBarToast('Stream is currently at live end');
+            showPlayerToast('Stream is currently at live end', true, true);
             sendResponse({ ok: false, blockedAtLiveHead: true });
             return false;
           }
+          hideBarToast();
           sessionOverride = { videoId: null, speed: null };
           saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
@@ -3223,7 +3484,7 @@ html[dark] .cadence-bar-label.is-session strong {
   cursor: pointer;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background 140ms ease, color 140ms ease, opacity 140ms ease;
 }
 
 .cadence-speed-chip:hover {
@@ -3255,6 +3516,17 @@ html[dark] .cadence-bar-label.is-session strong {
   background: rgba(148, 163, 184, 0.22);
 }
 
+.cadence-speed-chip.is-live-blocked:not(.active),
+.cadence-step-chip.is-live-blocked {
+  opacity: 0.42;
+}
+
+.cadence-speed-chip.is-live-blocked:not(.active):hover,
+.cadence-step-chip.is-live-blocked:hover {
+  opacity: 0.68;
+  background: rgba(245, 158, 11, 0.14);
+}
+
 .cadence-reset-chip:disabled {
   opacity: 0.42;
   cursor: default;
@@ -3264,29 +3536,86 @@ html[dark] .cadence-bar-label.is-session strong {
   border-color: rgba(220, 38, 38, 0.55);
 }
 
+.cadence-toast-warn-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: #f59e0b;
+}
+
+.cadence-bar-toast {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2200;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: #111827;
+  border: 1px solid rgba(245, 158, 11, 0.52);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.36);
+  color: #fde68a;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cadence-bar-toast.cadence-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .cadence-player-toast {
   position: absolute;
   top: 18px;
   right: 18px;
-  z-index: 65;
+  z-index: 1200;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 7px 12px;
   border-radius: 6px;
-  background: rgba(15, 23, 42, 0.88);
+  background: rgba(15, 23, 42, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: #f8fafc;
   font-family: Roboto, Arial, sans-serif;
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   opacity: 0;
   transform: translateY(-4px);
-  transition: opacity 150ms ease, transform 150ms ease;
+  transition: opacity 150ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cadence-player-toast.is-warning {
+  background: rgba(17, 24, 39, 0.95);
+  border-color: rgba(245, 158, 11, 0.52);
+  color: #fde68a;
 }
 
 .cadence-player-toast.cadence-visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cadence-bar-toast,
+  .cadence-player-toast {
+    transition: none;
+  }
 }
 
 .cadence-stopped-banner {
@@ -3739,8 +4068,14 @@ html[dark] .cadence-bar-label.is-session strong {
         target: { tabId },
         world: 'MAIN',
         func: () => {
-          const player = document.getElementById('movie_player');
-          const video = document.querySelector('video.html5-main-video');
+          const player =
+            document.querySelector('ytd-watch-flexy #movie_player') ||
+            document.querySelector('#ytd-player #movie_player') ||
+            document.getElementById('movie_player');
+          const video =
+            document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+            document.querySelector('#movie_player video.html5-main-video') ||
+            document.querySelector('video.html5-main-video');
           const urlVideoId = new URLSearchParams(location.search).get('v') || '';
           let videoId = urlVideoId;
           let channelId = '';
@@ -3914,8 +4249,14 @@ html[dark] .cadence-bar-label.is-session strong {
           world: 'MAIN',
           args: [currentSpeed],
           func: (spd) => {
-            const p = document.getElementById('movie_player');
-            const v = document.querySelector('video.html5-main-video');
+            const p =
+              document.querySelector('ytd-watch-flexy #movie_player') ||
+              document.querySelector('#ytd-player #movie_player') ||
+              document.getElementById('movie_player');
+            const v =
+              document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+              document.querySelector('#movie_player video.html5-main-video') ||
+              document.querySelector('video.html5-main-video');
             if (v) v.playbackRate = spd;
             try {
               if (
@@ -4064,8 +4405,14 @@ html[dark] .cadence-bar-label.is-session strong {
         world: 'MAIN',
         args: [clean],
         func: (spd) => {
-          const p = document.getElementById('movie_player');
-          const v = document.querySelector('video.html5-main-video');
+          const p =
+            document.querySelector('ytd-watch-flexy #movie_player') ||
+            document.querySelector('#ytd-player #movie_player') ||
+            document.getElementById('movie_player');
+          const v =
+            document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+            document.querySelector('#movie_player video.html5-main-video') ||
+            document.querySelector('video.html5-main-video');
           if (v) v.playbackRate = spd;
           try {
             if (

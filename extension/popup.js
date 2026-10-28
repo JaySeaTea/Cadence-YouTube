@@ -115,8 +115,14 @@
         target: { tabId },
         world: 'MAIN',
         func: () => {
-          const player = document.getElementById('movie_player');
-          const video = document.querySelector('video.html5-main-video');
+          const player =
+            document.querySelector('ytd-watch-flexy #movie_player') ||
+            document.querySelector('#ytd-player #movie_player') ||
+            document.getElementById('movie_player');
+          const video =
+            document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+            document.querySelector('#movie_player video.html5-main-video') ||
+            document.querySelector('video.html5-main-video');
           const urlVideoId = new URLSearchParams(location.search).get('v') || '';
           let videoId = urlVideoId;
           let channelId = '';
@@ -290,8 +296,14 @@
           world: 'MAIN',
           args: [currentSpeed],
           func: (spd) => {
-            const p = document.getElementById('movie_player');
-            const v = document.querySelector('video.html5-main-video');
+            const p =
+              document.querySelector('ytd-watch-flexy #movie_player') ||
+              document.querySelector('#ytd-player #movie_player') ||
+              document.getElementById('movie_player');
+            const v =
+              document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+              document.querySelector('#movie_player video.html5-main-video') ||
+              document.querySelector('video.html5-main-video');
             if (v) v.playbackRate = spd;
             try {
               if (
@@ -440,8 +452,14 @@
         world: 'MAIN',
         args: [clean],
         func: (spd) => {
-          const p = document.getElementById('movie_player');
-          const v = document.querySelector('video.html5-main-video');
+          const p =
+            document.querySelector('ytd-watch-flexy #movie_player') ||
+            document.querySelector('#ytd-player #movie_player') ||
+            document.getElementById('movie_player');
+          const v =
+            document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+            document.querySelector('#movie_player video.html5-main-video') ||
+            document.querySelector('video.html5-main-video');
           if (v) v.playbackRate = spd;
           try {
             if (

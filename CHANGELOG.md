@@ -4,6 +4,15 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-10-28
+
+### Added
+- **Floating Amber Live-End Toast on Below-Video Toolbar**: Clicking any speed above `1.0×` (`1.25×`–`2.0×` or `+0.05` at `1.0×`) on the below-video speed bar while synced at the live broadcast head (`● Live`) now displays a floating amber warning toast (`"Stream is currently at live end"`) anchored directly above the toolbar alongside the upper-right video player warning toast, matching the toolbar popup's amber notice without shifting page layout.
+- **Subtle Live-End Dimming for `> 1.0×` Toolbar Controls**: Subtly dimmed speed chips above `1.0×` (`1.25×`, `1.5×`, `1.75×`, `2.0×`) and `+0.05` (when at `1.0×`) on the below-video toolbar while synced at `● Live` (`aria-disabled="true"` with explanatory tooltip), keeping them clickable to surface the live-end notice while restoring full contrast immediately when behind live.
+
+### Fixed
+- **Watch-Page `#movie_player` Toast Targeting & Bridge Fallback**: Scoped `#movie_player` lookups to `ytd-watch-flexy #movie_player` across `content.js`, `page-bridge.js`, and `popup.js` so hidden `ytd-video-preview` hover players never intercept upper-right player corner toasts, and added a direct live-badge fallback plus MAIN-world `SET_SPEED` live-head block event so live-end feedback never misses on newly opened streams.
+
 ## [1.3.3] - 2026-10-28
 
 ### Added

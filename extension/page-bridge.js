@@ -267,7 +267,11 @@
   );
 
   function getMoviePlayer() {
-    return document.getElementById('movie_player');
+    return (
+      document.querySelector('ytd-watch-flexy #movie_player') ||
+      document.querySelector('#ytd-player #movie_player') ||
+      document.getElementById('movie_player')
+    );
   }
 
   function getMainVideo() {
@@ -1387,6 +1391,28 @@
         }
       } else if (type === 'COMMAND') {
         if (payload.action === 'SET_SPEED') {
+          const requestedSpeed = Number(payload.speed) || 1.0;
+          const player = getMoviePlayer();
+          const video = getMainVideo();
+          if (
+            payload.fromUserGesture &&
+            requestedSpeed > 1.01 &&
+            video &&
+            isLiveBroadcast(player, video)
+          ) {
+            const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+            if (dvr.isAtLiveHead) {
+              config.targetSpeed = 1.0;
+              window.__CADENCE_LAST_CONFIG__ = config;
+              applyLiveHeadRateClamp(player, video);
+              postToContent('LIVE_HEAD_SPEED_BLOCKED', {
+                videoId: getCurrentVideoId(player) || '',
+                attemptedSpeed: requestedSpeed,
+              });
+              emitTimeRemaining(true);
+              return;
+            }
+          }
           config.targetSpeed = payload.speed;
           window.__CADENCE_LAST_CONFIG__ = config;
           applyPlaybackSpeed(payload.speed);

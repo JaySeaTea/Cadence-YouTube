@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   FastForward,
   Pause,
   Play,
@@ -101,6 +102,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [stoppedByCadence, setStoppedByCadence] = useState<boolean>(false);
   const [autoAdvancingCountdown, setAutoAdvancingCountdown] = useState<boolean>(false);
   const [playerToast, setPlayerToast] = useState<string | null>(null);
+  const [playerToastWarning, setPlayerToastWarning] = useState<boolean>(false);
+  const [barToast, setBarToast] = useState<string | null>(null);
   const [popupToast, setPopupToast] = useState<string | null>(null);
   const [showNativeGearMenu, setShowNativeGearMenu] = useState<boolean>(false);
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
@@ -112,6 +115,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const sessionOverrideRef = useRef<number | null>(null);
   const baselineSpeedRef = useRef<number>(1.0);
   const toastTimerRef = useRef<number | null>(null);
+  const barToastTimerRef = useRef<number | null>(null);
   const popupToastTimerRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextPulseTimeRef = useRef<number>(0);
@@ -145,13 +149,32 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   sessionOverrideRef.current = sessionOverrideSpeed;
   baselineSpeedRef.current = baselineSpeed;
 
-  const triggerToast = (message: string, forceShow = false) => {
+  const clearBarToast = () => {
+    if (barToastTimerRef.current) {
+      window.clearTimeout(barToastTimerRef.current);
+      barToastTimerRef.current = null;
+    }
+    setBarToast(null);
+  };
+
+  const triggerBarToast = (message: string) => {
+    if (!settings.enabled || !settings.showInPageControlBar) return;
+    setBarToast(message);
+    if (barToastTimerRef.current) window.clearTimeout(barToastTimerRef.current);
+    barToastTimerRef.current = window.setTimeout(() => {
+      setBarToast(null);
+    }, 2400);
+  };
+
+  const triggerToast = (message: string, forceShow = false, isWarning = false) => {
     if (!settings.enabled) return;
     if (!forceShow && !settings.showSpeedToast) return;
     setPlayerToast(message);
+    setPlayerToastWarning(isWarning);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => {
       setPlayerToast(null);
+      setPlayerToastWarning(false);
     }, 2400);
   };
 
@@ -207,6 +230,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     setAutoAdvancingCountdown(false);
     setShowNativeGearMenu(false);
     setPlayerToast(null);
+    setPlayerToastWarning(false);
+    clearBarToast();
     setPopupToast(null);
     wasBehindLiveRef.current = false;
     const defaultSpd = settings.defaultSpeed || 1.0;
@@ -233,6 +258,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
     setCurrentVideoIndex(index);
     setSessionOverrideSpeed(null);
+    clearBarToast();
     setPopupToast(null);
     if (nextVid.isLiveStream) {
       const startEdge = nextVid.initialLiveEdgeSec || 3600;
@@ -438,6 +464,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const effectiveSpeed =
     isLiveStream && isAtLiveHead && playbackSpeed > 1.01 ? 1.0 : playbackSpeed;
 
+  useEffect(() => {
+    if ((!isLiveStream || !isAtLiveHead) && barToast) {
+      clearBarToast();
+    }
+  }, [isLiveStream, isAtLiveHead, barToast]);
+
   const handleSessionBarSpeedChange = (newSpeed: number) => {
     const clean = clampSpeed(newSpeed);
 
@@ -447,19 +479,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           setSessionOverrideSpeed(null);
           setPlaybackSpeed(baselineSpeed);
         }
-        triggerToast('Stream is currently at live end', true);
+        triggerBarToast('Stream is currently at live end');
+        triggerToast('Stream is currently at live end', true, true);
         onAddLog(
           'Blocked speed increase at live end',
-          `Held 1.0× on "${currentVideo.title}" — stream is currently at live end`
+          `Held 1.0× on "${currentVideo.title}" — surfaced toolbar & player live-end notice`
         );
         return;
       }
+      clearBarToast();
       if (Math.abs(clean - 1.0) < 0.015) {
         setSessionOverrideSpeed(null);
         setPlaybackSpeed(baselineSpeed);
         triggerToast('1.0× · Live');
         return;
       }
+    } else {
+      clearBarToast();
     }
 
     const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
@@ -500,6 +536,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   const handleResetSessionBarSpeed = () => {
+    clearBarToast();
     setSessionOverrideSpeed(null);
     setPlaybackSpeed(baselineSpeed);
     const displayRate = isLiveStream && isAtLiveHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed;
@@ -528,19 +565,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           setSessionOverrideSpeed(null);
           setPlaybackSpeed(baselineSpeed);
         }
-        triggerToast('Stream is currently at live end', true);
+        triggerBarToast('Stream is currently at live end');
+        triggerToast('Stream is currently at live end', true, true);
         onAddLog(
           'Blocked player speed > 1.0× at live end',
           `Reset to 1.0× on "${currentVideo.title}" — stream is currently at live end`
         );
         return;
       }
+      clearBarToast();
       if (Math.abs(clean - 1.0) < 0.015) {
         setSessionOverrideSpeed(null);
         setPlaybackSpeed(baselineSpeed);
         triggerToast('1.0× · Live');
         return;
       }
+    } else {
+      clearBarToast();
     }
 
     if (settings.enabled && settings.autoRememberManualSpeed) {
@@ -597,13 +638,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         setPlaybackSpeed(baselineSpeed);
       }
       triggerPopupToast('Stream is currently at live end');
-      triggerToast('Stream is currently at live end', true);
+      triggerBarToast('Stream is currently at live end');
+      triggerToast('Stream is currently at live end', true, true);
       onAddLog(
         'Blocked popup speed > 1.0× at live end',
         `Kept 1.0× via ${origin} — stream is currently at live end`
       );
       return;
     }
+    clearBarToast();
     setPopupToast(null);
     setSessionOverrideSpeed(null);
     setPlaybackSpeed(clean);
@@ -622,6 +665,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleRewindDvr = (secondsBehind: number) => {
     if (!isLiveStream) return;
+    clearBarToast();
     const target = Math.max(0, liveEdgeRef.current - secondsBehind);
     wasBehindLiveRef.current = secondsBehind >= 3;
     syncTime(target);
@@ -644,6 +688,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleJumpToLive = () => {
     if (!isLiveStream) return;
+    clearBarToast();
     wasBehindLiveRef.current = false;
     syncTime(liveEdgeRef.current);
     setIsPlaying(true);
@@ -999,8 +1044,22 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
                   {/* Cadence Auto-Speed Player Toast */}
                   {playerToast && (
-                    <div className="px-3 py-1.5 rounded-md bg-slate-950/90 border border-white/15 text-xs font-medium text-white tabular-nums shadow-sm">
-                      {playerToast}
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium whitespace-nowrap tabular-nums shadow-sm ${
+                        playerToastWarning
+                          ? 'bg-[#111827]/95 border-amber-500/50 text-amber-200'
+                          : 'bg-slate-950/90 border-white/15 text-white'
+                      }`}
+                    >
+                      {playerToastWarning && (
+                        <AlertTriangle
+                          className="w-3.5 h-3.5 text-amber-400 shrink-0"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>{playerToast}</span>
                     </div>
                   )}
                 </div>
@@ -1261,7 +1320,22 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
                   {/* Injected Cadence Session-Only Below-Video Control Bar */}
                   {settings.enabled && settings.showInPageControlBar && (
-                    <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0B0F19] border border-slate-700/90">
+                    <div className="relative flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0B0F19] border border-slate-700/90">
+                      {/* Floating Amber Toolbar Toast */}
+                      {barToast && (
+                        <div
+                          role="status"
+                          aria-live="polite"
+                          className="absolute bottom-[calc(100%+7px)] left-1/2 -translate-x-1/2 z-30 pointer-events-none inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#111827] border border-amber-500/50 text-[11.5px] font-medium text-amber-200 whitespace-nowrap tabular-nums shadow-lg"
+                        >
+                          <AlertTriangle
+                            className="w-3.5 h-3.5 text-amber-400 shrink-0"
+                            aria-hidden="true"
+                          />
+                          <span>{barToast}</span>
+                        </div>
+                      )}
+
                       <span
                         className="text-xs text-slate-400 tabular-nums whitespace-nowrap"
                         title={
@@ -1290,19 +1364,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       <div className="flex items-center gap-1 flex-wrap">
                         {[0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((spd) => {
                           const active = Math.abs(effectiveSpeed - spd) < 0.015;
+                          const isLiveBlocked = isLiveStream && isAtLiveHead && spd > 1.01;
                           return (
                             <button
                               key={spd}
                               type="button"
+                              aria-disabled={isLiveBlocked ? true : undefined}
                               onClick={() => handleSessionBarSpeedChange(spd)}
-                              className={`px-2 py-1 rounded text-xs font-mono tabular-nums font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                              className={`px-2 py-1 rounded text-xs font-mono tabular-nums font-medium transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
                                 active
                                   ? 'bg-red-600 text-white'
-                                  : 'text-slate-300 hover:bg-slate-800'
+                                  : isLiveBlocked
+                                    ? 'text-slate-300 opacity-42 hover:opacity-70 hover:bg-amber-500/10'
+                                    : 'text-slate-300 hover:bg-slate-800'
                               }`}
                               title={
-                                isLiveStream && isAtLiveHead && spd > 1.01
-                                  ? 'Stream is currently at live end — speeds above 1.0× are blocked while synced live'
+                                isLiveBlocked
+                                  ? 'Unavailable while synced at live end — rewind stream to speed up'
                                   : `Set ${formatSpeed(spd)}× for this video session only`
                               }
                             >
@@ -1326,18 +1404,29 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         >
                           −0.05
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleSessionBarSpeedChange(effectiveSpeed + 0.05)}
-                          className="px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-                          title={
-                            isLiveStream && isAtLiveHead
-                              ? 'Stream is currently at live end — speeds above 1.0× are blocked while synced live'
-                              : 'Speed up by 0.05× for this video session only'
-                          }
-                        >
-                          +0.05
-                        </button>
+                        {(() => {
+                          const isStepUpLiveBlocked =
+                            isLiveStream && isAtLiveHead && effectiveSpeed + 0.05 > 1.01;
+                          return (
+                            <button
+                              type="button"
+                              aria-disabled={isStepUpLiveBlocked ? true : undefined}
+                              onClick={() => handleSessionBarSpeedChange(effectiveSpeed + 0.05)}
+                              className={`px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                                isStepUpLiveBlocked
+                                  ? 'opacity-42 hover:opacity-70 hover:bg-amber-500/10'
+                                  : 'hover:bg-slate-800'
+                              }`}
+                              title={
+                                isStepUpLiveBlocked
+                                  ? 'Unavailable while synced at live end — rewind stream to speed up'
+                                  : 'Speed up by 0.05× for this video session only'
+                              }
+                            >
+                              +0.05
+                            </button>
+                          );
+                        })()}
                         <button
                           type="button"
                           onClick={handleResetSessionBarSpeed}
@@ -1347,7 +1436,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                               ? 'border-red-500/60 text-slate-100 hover:bg-slate-800 cursor-pointer'
                               : 'border-slate-800 text-slate-500 cursor-default opacity-50'
                           }`}
-                          title={`Reset to ${matchedRule ? 'Channel Rule' : 'Default'} (${formatSpeed(baselineSpeed)}×)`}
+                          title={`Reset to ${matchedRule ? 'Channel Rule' : 'Default'} (${formatSpeed(
+                            isLiveStream && isAtLiveHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed
+                          )}×)`}
                         >
                           Reset
                         </button>
