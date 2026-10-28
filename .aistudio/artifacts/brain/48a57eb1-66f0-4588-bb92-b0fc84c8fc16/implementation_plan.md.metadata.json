@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Cadence v1.3.1 (Issue #10): replaces false 1-hour MSE live stream countdowns with tiered HTML5/DOM live detection, adds a live-edge indicator, real-time \"Live in Xm @ R×\" catch-up math with clickable Jump to Live resync, guards Stop-at-End and live-head 1.0× clamping, and adds an interactive Live DVR test scenario to the Workbench simulator.",
-  "updatedAt":  "2026-10-28T03:35:04.565327962Z",
+  "summary":  "Revised Cadence v1.3.3 implementation plan addressing Issues #13, #11, and #12, updated with explicit zero-overhead timer reuse, hidden-tab visibility gating, display-bucket message deduplication, and OS system sleep/wake reconciliation (Date.now() wall-clock continuity, DVR window ceiling clamping, post-wake manifest reconnection, and ended-broadcast fallback).",
+  "updatedAt":  "2026-10-28T21:31:48.838844312Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

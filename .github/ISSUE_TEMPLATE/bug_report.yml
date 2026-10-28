@@ -53,8 +53,8 @@ body:
     id: version
     attributes:
       label: Cadence Version
-      placeholder: v1.3.0
-      value: v1.3.0
+      placeholder: v1.3.3
+      value: v1.3.3
 
   - type: textarea
     id: logs-or-screenshots

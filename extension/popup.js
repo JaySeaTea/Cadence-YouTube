@@ -49,12 +49,24 @@
   const readoutEl = document.getElementById('active-speed-readout');
   const channelNameEl = document.getElementById('channel-name');
   const channelHandleEl = document.getElementById('channel-handle');
+  const popupToastEl = document.getElementById('popup-toast');
   const controlsWrapEl = document.getElementById('controls-wrap');
   const presetGridEl = document.getElementById('preset-buttons');
   const speedGridEl = document.getElementById('speed-buttons');
   const stepperValEl = document.getElementById('stepper-value');
   const stepDownBtn = document.getElementById('step-down');
   const stepUpBtn = document.getElementById('step-up');
+  let popupToastTimer = null;
+
+  function showPopupToast(message) {
+    if (!popupToastEl) return;
+    popupToastEl.textContent = message;
+    popupToastEl.classList.add('visible');
+    clearTimeout(popupToastTimer);
+    popupToastTimer = setTimeout(() => {
+      popupToastEl.classList.remove('visible');
+    }, 2400);
+  }
 
   toggleSpeed.checked = Boolean(settings.perChannelSpeedEnabled);
   toggleRemember.checked = Boolean(settings.autoRememberManualSpeed);
@@ -110,6 +122,8 @@
           let channelId = '';
           let channelName = '';
           let handle = '';
+          let isLive = false;
+          let isAtLiveHead = false;
 
           try {
             if (player && typeof player.getPlayerResponse === 'function') {
@@ -123,13 +137,32 @@
                 videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
+                if (resp.videoDetails.isLive === true) isLive = true;
               }
             }
-            if (!channelName && player && typeof player.getVideoData === 'function') {
+            if (player && typeof player.getVideoData === 'function') {
               const vd = player.getVideoData();
               if (vd && vd.video_id && (!urlVideoId || vd.video_id === urlVideoId)) {
                 videoId = vd.video_id;
-                channelName = vd.author || '';
+                if (!channelName) channelName = vd.author || '';
+                if (vd.isLive === true) isLive = true;
+              }
+            }
+            const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+            const liveTime = document.querySelector('.ytp-time-display.ytp-live');
+            if (badge && liveTime && !badge.hasAttribute('hidden')) {
+              isLive = true;
+              isAtLiveHead = Boolean(
+                badge.disabled === true ||
+                  badge.hasAttribute('disabled') ||
+                  badge.getAttribute('aria-disabled') === 'true' ||
+                  badge.classList.contains('ytp-live-badge-is-livehead')
+              );
+            }
+            if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
+              const ps = player.getProgressState();
+              if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
+                isAtLiveHead = true;
               }
             }
           } catch (_) {}
@@ -154,6 +187,7 @@
           }
 
           if (!channelName && !handle && !channelId) return null;
+          const rawRate = video ? Math.round(video.playbackRate * 100) / 100 : 1.0;
           return {
             channel: {
               videoId: videoId || 'active',
@@ -161,7 +195,9 @@
               channelName: channelName || handle,
               handle,
             },
-            activeSpeed: video ? Math.round(video.playbackRate * 100) / 100 : 1.0,
+            activeSpeed: isLive && isAtLiveHead && rawRate > 1.01 ? 1.0 : rawRate,
+            isLive,
+            isAtLiveHead,
           };
         },
       });
@@ -212,10 +248,15 @@
   }
 
   const activeChannel = detected.channel;
+  const isLive = Boolean(detected.isLive);
+  let isAtLiveHead = Boolean(detected.isLive && detected.isAtLiveHead);
   let currentRule = findRuleForChannel(activeChannel);
   let sessionOverrideSpeed =
     typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
   let currentSpeed = Number(detected.activeSpeed) || 1.0;
+  if (isLive && isAtLiveHead && currentSpeed > 1.01) {
+    currentSpeed = 1.0;
+  }
 
   function resolveRuleBaseline(rule) {
     if (!settings.enabled || !settings.perChannelSpeedEnabled) return 1.0;
@@ -234,6 +275,7 @@
   }
 
   if (
+    !(isLive && isAtLiveHead) &&
     sessionOverrideSpeed === null &&
     currentRule &&
     settings.enabled &&
@@ -294,7 +336,12 @@
     if (sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
       sessionOverrideSpeed = null;
     }
-    if (sessionOverrideSpeed !== null) {
+    if (isLive && isAtLiveHead) {
+      statusEl.textContent =
+        currentRule && baseline > 1.01
+          ? `Live End (1.0×) · Rule ${formatSpeed(baseline)}×`
+          : 'Live Broadcast · At Live End';
+    } else if (sessionOverrideSpeed !== null) {
       statusEl.textContent = currentRule
         ? `Session Override · Rule is ${formatSpeed(baseline)}×`
         : `Session Override · Default ${formatSpeed(baseline)}×`;
@@ -326,8 +373,30 @@
 
   async function assignSpeedFromPopup(newSpeed, presetId) {
     const clean = Math.round(Math.min(4.0, Math.max(0.25, Number(newSpeed) || 1.0)) * 100) / 100;
+    if (isLive && isAtLiveHead && clean > 1.01) {
+      currentSpeed = 1.0;
+      sessionOverrideSpeed = null;
+      renderActiveSpeedUI();
+      showPopupToast('Stream is currently at live end');
+      chrome.tabs
+        .sendMessage(tab.id, { type: 'CADENCE_ENFORCE_LIVE_HEAD_LOCK' })
+        .catch(() => {});
+      chrome.runtime
+        .sendMessage({
+          type: 'CADENCE_UPDATE_BADGE',
+          tabId: tab.id,
+          enabled: Boolean(settings.enabled && settings.perChannelSpeedEnabled),
+          speed: 1.0,
+        })
+        .catch(() => {});
+      return;
+    }
+
     currentSpeed = clean;
     sessionOverrideSpeed = null;
+    if (isLive && clean < 0.99) {
+      isAtLiveHead = false;
+    }
 
     const existingIdx = rules.findIndex(
       (r) =>

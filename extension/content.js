@@ -289,13 +289,29 @@
     return false;
   }
 
-  function getEffectiveSpeedForChannel(meta) {
+  function isLiveAtHeadForChannel(meta) {
+    if (!remainingState.isLive || !remainingState.isAtLiveHead) return false;
+    if (meta && meta.videoId && remainingState.videoId && meta.videoId !== remainingState.videoId) {
+      return false;
+    }
+    return true;
+  }
+
+  function getConfiguredSpeedForChannel(meta) {
     if (!state.settings.enabled) return 1.0;
     clearSessionOverrideIfMatchesBaseline(meta);
     if (meta && hasActiveSessionOverride(meta.videoId)) {
       return sessionOverride.speed;
     }
     return getBaselineSpeedForChannel(meta);
+  }
+
+  function getEffectiveSpeedForChannel(meta) {
+    const configured = getConfiguredSpeedForChannel(meta);
+    if (isLiveAtHeadForChannel(meta) && configured > 1.01) {
+      return 1.0;
+    }
+    return configured;
   }
 
   function computeDurationSlotModel() {
@@ -382,26 +398,44 @@
     if (!wrapEl || !slotBtn || !dotEl || !timeEl) return;
 
     if (!model.visible || !model.text) {
-      wrapEl.style.display = 'none';
+      if (wrapEl.style.display !== 'none') {
+        wrapEl.style.display = 'none';
+      }
       return;
     }
 
-    wrapEl.style.display = 'inline-flex';
-    timeEl.textContent = model.text;
-    slotBtn.title = model.title || '';
-    slotBtn.disabled = !model.clickable;
+    if (wrapEl.style.display !== 'inline-flex') {
+      wrapEl.style.display = 'inline-flex';
+    }
+    if (timeEl.textContent !== model.text) {
+      timeEl.textContent = model.text;
+    }
+    const nextTitle = model.title || '';
+    if (slotBtn.title !== nextTitle) {
+      slotBtn.title = nextTitle;
+    }
+    const shouldDisable = !model.clickable;
+    if (slotBtn.disabled !== shouldDisable) {
+      slotBtn.disabled = shouldDisable;
+    }
     slotBtn.classList.toggle('is-clickable', Boolean(model.clickable));
     slotBtn.classList.toggle('is-live-head', model.mode === 'live-head');
 
     if (model.mode === 'live-head') {
-      dotEl.style.display = 'inline-block';
-      dotEl.className = 'cadence-live-dot is-head';
+      if (dotEl.style.display !== 'inline-block') dotEl.style.display = 'inline-block';
+      if (dotEl.className !== 'cadence-live-dot is-head') {
+        dotEl.className = 'cadence-live-dot is-head';
+      }
     } else if (model.mode === 'live-catchup' || model.mode === 'live-behind') {
-      dotEl.style.display = 'inline-block';
-      dotEl.className = 'cadence-live-dot is-behind';
+      if (dotEl.style.display !== 'inline-block') dotEl.style.display = 'inline-block';
+      if (dotEl.className !== 'cadence-live-dot is-behind') {
+        dotEl.className = 'cadence-live-dot is-behind';
+      }
     } else {
-      dotEl.style.display = 'none';
-      dotEl.className = 'cadence-live-dot';
+      if (dotEl.style.display !== 'none') dotEl.style.display = 'none';
+      if (dotEl.className !== 'cadence-live-dot') {
+        dotEl.className = 'cadence-live-dot';
+      }
     }
   }
 
@@ -434,12 +468,12 @@
     });
   }
 
-  function showPlayerToast(label) {
+  function showPlayerToast(label, forceShow = false) {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
     }
-    if (!state.settings.enabled || !state.settings.showSpeedToast) return;
+    if (!state.settings.enabled || (!forceShow && !state.settings.showSpeedToast)) return;
     const player = document.getElementById('movie_player');
     if (!player) return;
 
@@ -563,6 +597,28 @@
     if (!currentChannel || !currentChannel.videoId) return;
 
     const cleanSpeed = clampSpeed(nextSpeed);
+    const liveAtHead = isLiveAtHeadForChannel(currentChannel);
+
+    if (liveAtHead && cleanSpeed > 1.01) {
+      sessionOverride = { videoId: null, speed: null };
+      remainingState.playbackRate = 1.0;
+      pushConfigToBridge(1.0, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+      renderInPageBar();
+      showPlayerToast('Stream is currently at live end', true);
+      return;
+    }
+
+    if (liveAtHead && Math.abs(cleanSpeed - 1.0) < 0.015) {
+      sessionOverride = { videoId: null, speed: null };
+      remainingState.playbackRate = 1.0;
+      pushConfigToBridge(1.0, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+      renderInPageBar();
+      showPlayerToast('1.0× · Live');
+      return;
+    }
+
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const wasOverridden = hasActiveSessionOverride(currentChannel.videoId);
@@ -572,17 +628,16 @@
         videoId: null,
         speed: null,
       };
-      if (!remainingState.isLive || !remainingState.isAtLiveHead) {
-        remainingState.playbackRate = baselineSpeed;
-      }
-      pushConfigToBridge(baselineSpeed, true);
-      postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
+      const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
+      remainingState.playbackRate = effectiveBaseline;
+      pushConfigToBridge(effectiveBaseline, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: effectiveBaseline });
       renderInPageBar();
       const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
       showPlayerToast(
         wasOverridden
-          ? `Restored ${formatDisplaySpeed(baselineSpeed)}× (${baselineLabel})`
-          : `${formatDisplaySpeed(baselineSpeed)}× · ${baselineLabel}`
+          ? `Restored ${formatDisplaySpeed(effectiveBaseline)}× (${baselineLabel})`
+          : `${formatDisplaySpeed(effectiveBaseline)}× · ${baselineLabel}`
       );
       return;
     }
@@ -591,9 +646,7 @@
       videoId: currentChannel.videoId,
       speed: cleanSpeed,
     };
-    if (!remainingState.isLive || !remainingState.isAtLiveHead) {
-      remainingState.playbackRate = cleanSpeed;
-    }
+    remainingState.playbackRate = cleanSpeed;
 
     pushConfigToBridge(cleanSpeed, true);
     postToBridge('COMMAND', { action: 'SET_SPEED', speed: cleanSpeed });
@@ -616,20 +669,18 @@
     if (!currentChannel) return;
 
     const matchedRule = findMatchingRule(currentChannel);
-    const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     sessionOverride = {
       videoId: null,
       speed: null,
     };
-    if (!remainingState.isLive || !remainingState.isAtLiveHead) {
-      remainingState.playbackRate = baselineSpeed;
-    }
+    const effectiveResetSpeed = getEffectiveSpeedForChannel(currentChannel);
+    remainingState.playbackRate = effectiveResetSpeed;
 
-    pushConfigToBridge(baselineSpeed, true);
-    postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
+    pushConfigToBridge(effectiveResetSpeed, true);
+    postToBridge('COMMAND', { action: 'SET_SPEED', speed: effectiveResetSpeed });
     renderInPageBar();
     showPlayerToast(
-      `Reset to ${formatDisplaySpeed(baselineSpeed)}× (${matchedRule ? 'Channel Rule' : 'Default'})`
+      `Reset to ${formatDisplaySpeed(effectiveResetSpeed)}× (${matchedRule ? 'Channel Rule' : 'Default'})`
     );
   }
 
@@ -693,10 +744,14 @@
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+    const isLiveRuleClamped =
+      !isSessionActive && isLiveAtHeadForChannel(currentChannel) && baselineSpeed > 1.01;
     const modePrefix = isSessionActive ? 'Session' : matchedRule ? 'Rule' : 'Default';
     const tooltip = isSessionActive
       ? `Session override for this video only · Baseline is ${formatDisplaySpeed(baselineSpeed)}×`
-      : 'Session-only speed bar · Does not overwrite saved channel rules';
+      : isLiveRuleClamped
+        ? `Live stream at live end · Saved ${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge`
+        : 'Session-only speed bar · Does not overwrite saved channel rules';
     const durationModel = computeDurationSlotModel();
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
@@ -719,7 +774,7 @@
       <div class="cadence-bar-Fine">
         <button type="button" data-step="-0.05" class="cadence-step-chip" title="Slow down by 0.05× for this video session">−0.05</button>
         <button type="button" data-step="0.05" class="cadence-step-chip" title="Speed up by 0.05× for this video session">+0.05</button>
-        <button type="button" data-action="reset" class="cadence-reset-chip ${isSessionActive ? 'is-active' : ''}" ${!isSessionActive ? 'disabled' : ''} title="Reset to ${matchedRule ? 'channel rule' : 'default'} (${formatDisplaySpeed(baselineSpeed)}×)">Reset</button>
+        <button type="button" data-action="reset" class="cadence-reset-chip ${isSessionActive ? 'is-active' : ''}" ${!isSessionActive ? 'disabled' : ''} title="Reset to ${matchedRule ? 'channel rule' : 'default'} (${formatDisplaySpeed(isLiveAtHeadForChannel(currentChannel) && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)">Reset</button>
       </div>
       <span class="cadence-remaining-wrap" style="display:none;">
         <span class="cadence-bar-divider" aria-hidden="true"></span>
@@ -773,8 +828,22 @@
         'click',
         () => {
           if (remainingSlotBtn.disabled) return;
+          if (
+            currentChannel &&
+            hasActiveSessionOverride(currentChannel.videoId) &&
+            sessionOverride.speed > 1.01
+          ) {
+            sessionOverride = { videoId: null, speed: null };
+          }
+          remainingState.isAtLiveHead = true;
+          remainingState.dvrLagSec = 0;
+          remainingState.isPaused = false;
+          remainingState.playbackRate = 1.0;
+          const headSpeed = getEffectiveSpeedForChannel(currentChannel);
+          pushConfigToBridge(headSpeed, true);
           postToBridge('COMMAND', { action: 'JUMP_TO_LIVE' });
-          showPlayerToast('Jumped to Live');
+          renderInPageBar();
+          showPlayerToast('Jumped to Live · 1.0×');
         },
         { signal: lifecycleSignal }
       );
@@ -868,6 +937,8 @@
         if (type === 'LEFT_WATCH_PAGE') {
           handleLeftWatchPage();
         } else if (type === 'TIME_REMAINING_UPDATE' && payload) {
+          const prevLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
+          const prevIsLive = Boolean(remainingState.isLive);
           remainingState = {
             videoId: payload.videoId || null,
             rawRemainingSec:
@@ -880,7 +951,49 @@
             isPaused: Boolean(payload.isPaused),
             hidden: Boolean(payload.hidden),
           };
-          updateRemainingReadoutInPlace();
+          const nowLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
+          const hasAboveOneOverride = Boolean(
+            currentChannel &&
+              hasActiveSessionOverride(currentChannel.videoId) &&
+              sessionOverride.speed > 1.01
+          );
+          if (nowLiveAtHead && (!prevLiveAtHead || hasAboveOneOverride || activeSpeed > 1.01)) {
+            if (hasAboveOneOverride) {
+              sessionOverride = { videoId: null, speed: null };
+            }
+            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
+              pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
+            }
+            renderInPageBar();
+          } else if (prevLiveAtHead && !nowLiveAtHead && remainingState.isLive) {
+            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
+              pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
+            }
+            renderInPageBar();
+          } else if (prevIsLive !== remainingState.isLive) {
+            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
+              pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
+            }
+            renderInPageBar();
+          } else {
+            updateRemainingReadoutInPlace();
+          }
+        } else if (type === 'LIVE_HEAD_SPEED_BLOCKED') {
+          if (
+            currentChannel &&
+            hasActiveSessionOverride(currentChannel.videoId) &&
+            sessionOverride.speed > 1.01
+          ) {
+            sessionOverride = { videoId: null, speed: null };
+          }
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          remainingState.playbackRate = 1.0;
+          if (state.settings.enabled) {
+            pushConfigToBridge(1.0, Boolean(state.settings.perChannelSpeedEnabled));
+            renderInPageBar();
+            showPlayerToast('Stream is currently at live end', true);
+          }
         } else if (type === 'NAVIGATION_PREVIEW' && payload && payload.videoId) {
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
@@ -958,6 +1071,15 @@
           if (!currentChannel) return;
 
           const cleanManualSpeed = clampSpeed(payload.speed);
+          if (isLiveAtHeadForChannel(currentChannel) && cleanManualSpeed > 1.01) {
+            sessionOverride = { videoId: null, speed: null };
+            remainingState.playbackRate = 1.0;
+            pushConfigToBridge(1.0, true);
+            postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+            renderInPageBar();
+            showPlayerToast('Stream is currently at live end', true);
+            return;
+          }
 
           if (state.settings.autoRememberManualSpeed) {
             sessionOverride = { videoId: null, speed: null };
@@ -982,13 +1104,14 @@
 
             if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
               sessionOverride = { videoId: null, speed: null };
-              pushConfigToBridge(baselineSpeed, true);
+              const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
+              pushConfigToBridge(effectiveBaseline, true);
               renderInPageBar();
               const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
               showPlayerToast(
                 wasOverridden
-                  ? `Restored ${formatDisplaySpeed(baselineSpeed)}× (${baselineLabel})`
-                  : `${formatDisplaySpeed(baselineSpeed)}× · ${baselineLabel}`
+                  ? `Restored ${formatDisplaySpeed(effectiveBaseline)}× (${baselineLabel})`
+                  : `${formatDisplaySpeed(effectiveBaseline)}× · ${baselineLabel}`
               );
             } else {
               sessionOverride = {
@@ -1033,6 +1156,7 @@
         }
         const video = document.querySelector('video.html5-main-video');
         const baseline = getBaselineSpeedForChannel(currentChannel);
+        const liveAtHead = isLiveAtHeadForChannel(currentChannel);
         const liveClampedOrPaused =
           remainingState.isLive && (remainingState.isAtLiveHead || remainingState.isPaused);
         const liveVideoSpeed = liveClampedOrPaused
@@ -1062,23 +1186,53 @@
           matchedRule: rule,
           baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
+          isLive: Boolean(remainingState.isLive),
+          isAtLiveHead: liveAtHead,
         });
+        return false;
+      }
+      if (msg && msg.type === 'CADENCE_ENFORCE_LIVE_HEAD_LOCK') {
+        if (
+          currentChannel &&
+          hasActiveSessionOverride(currentChannel.videoId) &&
+          sessionOverride.speed > 1.01
+        ) {
+          sessionOverride = { videoId: null, speed: null };
+        }
+        remainingState.isLive = true;
+        remainingState.isAtLiveHead = true;
+        remainingState.playbackRate = 1.0;
+        pushConfigToBridge(1.0, true);
+        postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+        renderInPageBar();
+        showPlayerToast('Stream is currently at live end', true);
+        sendResponse({ ok: true });
         return false;
       }
       if (msg && msg.type === 'CADENCE_SET_CHANNEL_SPEED') {
         const targetMeta = msg.channel || currentChannel || extractDomChannelFallback();
         if (targetMeta) {
           currentChannel = targetMeta;
+          const requestedSpeed = clampSpeed(msg.speed);
+          if (isLiveAtHeadForChannel(targetMeta) && requestedSpeed > 1.01) {
+            sessionOverride = { videoId: null, speed: null };
+            remainingState.playbackRate = 1.0;
+            pushConfigToBridge(1.0, true);
+            postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+            renderInPageBar();
+            showPlayerToast('Stream is currently at live end', true);
+            sendResponse({ ok: false, blockedAtLiveHead: true });
+            return false;
+          }
           sessionOverride = { videoId: null, speed: null };
-          saveChannelSpeed(targetMeta, msg.speed, msg.presetId || 'custom').then((ok) => {
+          saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
-              if (!remainingState.isLive || !remainingState.isAtLiveHead) {
-                remainingState.playbackRate = clampSpeed(msg.speed);
-              }
-              pushConfigToBridge(msg.speed, true);
-              postToBridge('COMMAND', { action: 'SET_SPEED', speed: msg.speed });
+              const appliedSpeed = getEffectiveSpeedForChannel(targetMeta);
+              remainingState.playbackRate = appliedSpeed;
+              pushConfigToBridge(appliedSpeed, true);
+              postToBridge('COMMAND', { action: 'SET_SPEED', speed: appliedSpeed });
               renderInPageBar();
-              showPlayerToast(`Saved ${formatDisplaySpeed(msg.speed)}× for ${targetMeta.channelName}`);
+              showPlayerToast(`Saved ${formatDisplaySpeed(requestedSpeed)}× for ${targetMeta.channelName}`);
             }
             try {
               sendResponse({ ok: Boolean(ok) });

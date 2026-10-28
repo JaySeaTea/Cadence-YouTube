@@ -4,6 +4,15 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-10-28
+
+### Added
+- **Live-End `1.0×` Speed Lock & Toast Notification (#13)**: Blocked speed increases above `1.0×` whenever a live broadcast is synced at the live head (`● Live`) across the below-video speed bar, Extension Toolbar Popup, YouTube player gear menu / `Shift+>` shortcuts, and Web Workbench—displaying `"Stream is currently at live end"` while keeping playback, bar chips, and toolbar badge at `1.0×`. Speeds below `1.0×` remain available to drift into DVR, and saved Channel Rules above `1.0×` clamp non-destructively at the live head and restore automatically when behind live.
+
+### Fixed
+- **Reset Active Speed & Badge to `1.0×` After Jump to Live (#11)**: Cleared `> 1.0×` session speed overrides and resynced the below-video speed bar, popup readout, and Chrome toolbar badge back to `1.0×` whenever returning to the live head via Cadence's catch-up pill, YouTube's native `.ytp-live-badge` (`LIVE` button), scrubbing the timeline slider to the live edge, or catching up organically at elevated speed.
+- **Accurate Behind-Live DVR Lag Across Pause, Resume & System Sleep (#12)**: Replaced stale post-pause `.ytp-live-badge` / `getProgressState().seekableEnd` reads with a monotonic `Date.now()` wall-clock live-head anchor (`liveAnchorVideoSec + elapsedSec`) gated by advancing `seekableEnd` ticks so pausing at `Live` and resuming minutes later immediately reflects true lag and pressing Play while behind live never dips to a stale buffered horizon (`3m → 38s → 3m`). Added hidden-tab timer gating, display-bucket message deduplication, and `visibilitychange` / OS sleep-wake DVR window cap reconciliation.
+
 ## [1.3.2] - 2026-10-27
 
 ### Fixed

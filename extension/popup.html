@@ -71,6 +71,21 @@
         color: #94a3b8;
         margin-top: 2px;
       }
+      .popup-toast {
+        display: none;
+        margin-top: 8px;
+        padding: 6px 9px;
+        border-radius: 6px;
+        background: #111827;
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        color: #fde68a;
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.35;
+      }
+      .popup-toast.visible {
+        display: block;
+      }
       .controls-wrap {
         margin-top: 10px;
         display: none;
@@ -193,6 +208,7 @@
       </div>
       <div class="channel-title" id="channel-name">Open a YouTube video</div>
       <div class="channel-handle" id="channel-handle"></div>
+      <div class="popup-toast" id="popup-toast" role="status" aria-live="polite"></div>
 
       <div class="controls-wrap" id="controls-wrap">
         <div class="preset-grid" id="preset-buttons"></div>
