@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Cadence v1.3.0 addressing GitHub Issues #7, #8, #9, and #3: automatic clearing of Session Override indicators when speed returns to baseline, removal of deprecated Live Stream URL/mode special-casing in favor of unified /watch Channel Rules and Playlists, dynamic extension version display across the Toolbar Popup, Options Page, and Web Workbench, and a real-time speed-adjusted remaining duration readout in the below-video bar.",
-  "updatedAt":  "2026-10-27T14:38:09.685816914Z",
+  "summary":  "Implementation plan for Cadence v1.3.1 (Issue #10): replaces false 1-hour MSE live stream countdowns with tiered HTML5/DOM live detection, adds a live-edge indicator, real-time \"Live in Xm @ R×\" catch-up math with clickable Jump to Live resync, guards Stop-at-End and live-head 1.0× clamping, and adds an interactive Live DVR test scenario to the Workbench simulator.",
+  "updatedAt":  "2026-10-28T03:35:04.565327962Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

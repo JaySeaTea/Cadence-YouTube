@@ -1,109 +1,154 @@
-# Cadence v1.3.0 — Session Override Auto-Reset, Watch Simplification, Version Readout & Remaining Time
+# Cadence v1.3.1 — Live Broadcast Detection & Real-Time "Back to Live" Catch-Up (Issue #10)
 
-This `v1.3.0` release resolves two UX bugs (`#7` and `#8`) and delivers two cohesive watch-bar and extension UI enhancements (`#9` and `#3`) while keeping player routing and DOM hooks lean, fast, and easy to verify.
+Fixes the false 1-hour resetting countdown on YouTube Live Streams by introducing grounded multi-tier live broadcast detection, an active `Live` status readout at the broadcast head, a real-time wall-clock catch-up countdown (`Live in 20m @ 1.5×`) with one-click Jump to Live resync when watching from the DVR buffer, and an interactive Live DVR test mode inside the Workbench simulator.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Please review the behaviors below for Issues **#7, #8, #9, and #3**. Click **Proceed** to build `v1.3.0`, or share any tweaks you would like first.
+> All three UX choices from our clarification round are locked into this `v1.3.1` specification, alongside defensive fallbacks so Cadence never depends on a single undocumented YouTube player property.
 
-- **Bug #7 — Automatic Session Override Reset**: Whenever playback speed is adjusted via **either** YouTube's built-in gear menu **or** the below-video speed bar to match the active channel's baseline speed (its saved Channel Rule or the `1.0×` Default), Cadence automatically clears the `Session` / `Session Override` state, disables the `Reset` button, and restores normal `Rule` or `Default` indicators in both the watch bar and Toolbar Popup.
-- **Bug #8 — Unified `/watch` Scope (Remove "Live Stream" Mode)**: Removes all `/live` URL branching, `Live Stream` context tabs, and livestream-specific copy across the Chrome extension and Web Simulator so Cadence focuses strictly on standard `/watch?v=...` videos, Channel Rules, and Playlists regardless of whether an upload is standard, a Premiere, or a live broadcast.
-- **Feature #9 — Version Readout (`v1.3.0`)**: Displays the active extension version dynamically (sourced directly from the extension manifest in Chrome and synced in the Web Workbench) in the **Toolbar Popup**, **Extension Options Page**, and **Web Workbench** for instant verification after updates.
-- **Feature #3 — Real-Time Remaining Duration (`@ Speed`)**: Displays a subtle, speed-adjusted remaining duration readout (e.g., `24m left` or `1h 12m left` scaled by current playback rate, switching to seconds in the final minute, and hidden automatically if a broadcast has no finite duration) inside the below-video speed bar on YouTube and in the Web Simulator.
+- **Confirmed Decision 1 — Compact Catch-Up Readout**: When watching behind the live edge at speeds above `1.0×`, the below-video bar displays a compact wall-clock catch-up countdown (`Live in 20m @ 1.5×`), accounting for the moving live broadcast horizon (`lagSec / (rate - 1.0)`). Hovering reveals the exact buffer lag in a tooltip.
+- **Confirmed Decision 2 — Clickable Jump to Live Action**: Whenever a viewer is behind the live edge (catching up, paused, or watching at `≤ 1.0×`), the duration readout upgrades from static text into a subtle interactive button that jumps straight back to the live broadcast head when clicked.
+- **Confirmed Decision 3 — Interactive Live DVR Workbench Scenario**: The web Workbench simulator gains a dedicated Live Broadcast DVR scenario so you can test live-edge clamping, pausing/drifting behind live, `> 1.0×` catch-up math, and one-click Jump to Live before testing on YouTube.
+- **Defensive Player Safeguards Included**: Active live broadcasts also bypass *Stop After Video Ends* (preventing MSE rolling segment boundaries from pausing a live stream) and ignore YouTube's automatic `1.0×` rate clamp at the live head so saved channel rules and session overrides are never falsely tripped.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**:
-  1. Makes temporary session overrides self-cleaning whenever you return to your normal channel or default speed by any control surface (`#7`).
-  2. Streamlines URL matching and simulator modes around YouTube's standard `/watch` watch pages and playlists without redundant livestream modes (`#8`).
-  3. Surfaces the exact installed Cadence version (`v1.3.0`) inside the Toolbar Popup, Options Page, and Web Workbench (`#9`).
-  4. Computes real wall-clock time remaining at your current playback speed (`(duration - currentTime) / playbackRate`) directly inside the below-video control bar (`#3`).
-- **Target Audience / Persona**: Viewers managing structured per-channel playback speeds and playlists on desktop/Chromebook who want accurate status feedback, instant version confirmation after `git pull` reloads, and effortless real-time duration awareness on long lectures and podcasts.
-- **Key Value**: Eliminates lingering override badges and unused livestream clutter while adding zero-overhead remaining-time awareness and version visibility.
+- **What It Does**: Distinguishes active YouTube live broadcasts from standard videos and archived past-stream replays. On active broadcasts, Cadence replaces the misleading 1-hour Media Source Extensions (MSE) rolling buffer countdown with context-aware live telemetry: `● Live` when synced at the broadcast head, `10m behind Live` when paused or watching at `≤ 1.0×`, and `Live in 20m @ 1.5×` when actively closing the DVR gap above `1.0×`.
+- **Target Audience / Persona**: YouTube viewers who watch live lectures, news briefings, technical streams, and podcasts—often pausing a broadcast for 10–20 minutes and accelerating playback to catch back up to real time without skipping content.
+- **Key Value**: Eliminates bogus 60-minute MSE buffer countdowns while turning DVR playback speed into a predictable, clickable catch-up instrument.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-- **Key User Flows**:
-  1. **Self-Clearing Session Speed (`#7`)**: On an unlisted channel (`Default · 1.0×`) or a saved channel (`Rule · 1.5×`), you temporarily speed up to `1.75×` via YouTube's player gear menu or the below-video bar—both surfaces show `Session · 1.75×` / `Session Override`. Later, you dial speed back to `1.0×` (or `1.5×`) using either the gear menu or the bar; Cadence immediately recognizes parity with the baseline speed and reverts the bar label to `Default · 1.0×` (or `Rule · 1.5×`), dims `Reset`, and clears `Session Override` in the popup.
-  2. **Glanceable Real-Time Remaining Duration (`#3`)**: Watching a `60:00` video at `1.5×` from the beginning shows `40m left` quietly inside the below-video bar. Clicking `2.0×` immediately updates the readout to `30m left` in real time without shifting button positions.
-  3. **Unified Watch & Playlist Contexts (`#8`)**: In both the Chrome extension and Web Simulator, playback contexts focus cleanly on `YouTube Home`, `Watch Later`, `Creator Playlist`, and `Single Video` over standard `/watch?v=...` URLs.
-  4. **Instant Version Check (`#9`)**: Opening the Cadence Toolbar Popup, the All Channel Rules Options page, or the Web Workbench displays `v1.3.0` in subtle tabular metadata so you can verify an unpacked reload in one glance.
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Crisp dark-studio utility instrumentation with calm, unboxed typographic metadata and zero decorative clutter.
-  - *Color Palette & Mood*: Deep cool slate canvas (`--background`: `#0B0F19`), elevated dark slate surfaces (`--card`: `#111827`) with `1px` structural borders (`#1E293B`), high-contrast slate typography (`#F1F5F9` primary, `#94A3B8` muted metadata), and crimson active speed states (`--accent`: `#DC2626`).
-  - *Typography & Hierarchy*: `Plus Jakarta Sans` display headings, `Public Sans` body/control labels, and `JetBrains Mono` (`tabular-nums`) across all speed readouts, version strings (`v1.3.0`), and remaining-time counters so numerals never cause horizontal layout jitter.
-  - *Component Styling & Layout*: Single-elevation containers, unboxed metadata separated by `·` dividers (strictly zero static pills), and `whitespace-nowrap shrink-0` single-line controls.
+### Key User Flows
+
+1. **Opening an Active Live Broadcast (At Live Head)**
+   - The viewer opens a live `/watch?v=...` broadcast.
+   - Instead of showing `60m left`, the right-hand slot of the below-video Cadence bar displays a clean, read-only **`● Live`** indicator.
+   - Because future broadcast frames do not exist yet, YouTube clamps playback at the live head to `1.0×`; Cadence recognizes this live-head clamp and preserves the channel's baseline status cleanly without flagging a false *Session Override*.
+
+2. **Pausing or Scrubbing Back into the Live DVR Buffer**
+   - The viewer pauses the live stream or scrubs backward by 10 minutes.
+   - Even while the video element is paused, a lightweight 1 Hz live-drift timer updates how far behind the live broadcast the viewer has drifted (`10m behind Live` → `11m behind Live`).
+   - The readout renders as a subtle interactive button (`cursor-pointer`, hover border/highlight, tooltip *"Click to jump back to live edge"*).
+
+3. **Accelerating Playback to Catch Up (`> 1.0×`)**
+   - The viewer resumes playback at `1.5×` (either automatically from their saved Channel Rule once behind the live head or via the session speed bar).
+   - Cadence computes net catch-up velocity (`1.5× - 1.0× = 0.5×` buffer gained per real second) and displays **`Live in 20m @ 1.5×`**, counting down smoothly in real wall-clock time (`tabular-nums`).
+   - Clicking **`Live in 20m @ 1.5×`** at any moment triggers an immediate resync to the live broadcast head and transitions the indicator back to **`● Live`**.
+   - Alternatively, letting the countdown reach `0s` naturally arrives at the live head, where YouTube settles at `1.0×` and the indicator transitions seamlessly to **`● Live`**.
+
+4. **Testing in the Web Workbench Simulator (`v1.3.1`)**
+   - Selecting the **Live Stream DVR** scenario in the Workbench switches the simulated player into an active broadcast with a live-edge scrubber, quick DVR offset controls (`Rewind 10m`, `Rewind 2m`, `At Live Edge`), live drift while paused, real-time catch-up math across all speed buttons, and clickable Jump to Live resync.
+
+### Visual Identity & Theme
+
+- **Aesthetic Direction**: Utilitarian broadcast precision—quiet, native-feeling YouTube dark chrome integration paired with crisp SaaS console clarity in the Workbench.
+- **Color Palette & Mood**:
+  - Dominant dark slate canvas (`#0F172A` / `#0B0F19` bar surface) with cool hairline borders (`border-slate-700/90` and `rgba(255, 255, 255, 0.14)`).
+  - Semantic broadcast accent: True live state uses YouTube-native crimson (`#DC2626` / `#EF4444`) strictly for the active live broadcast dot paired with explicit `Live` text (never color alone). Interactive behind-live catch-up buttons use high-legibility slate text (`#E2E8F0`) with subtle hover surface contrast (`hover:bg-slate-800`) and amber/crimson focus-visible rings.
+- **Typography & Hierarchy**:
+  - Workbench structure in `Plus Jakarta Sans` / `DM Sans`; all duration counters, speed multipliers, and DVR offsets strictly set in monospace tabular numerals (`JetBrains Mono` / `tabular-nums`) so second-by-second countdowns never cause horizontal layout jitter.
+  - Single-line control discipline (`whitespace-nowrap shrink-0`) across every button and status readout in both the injected bar and Workbench.
 - **Interactive Feedback & Motion**:
-  - Immediate (`<100ms`) recalculation of remaining time whenever speed or scrub position changes; calm rounded hours/minutes format (`1h 14m left`, `24m left`, and `42s left` under 1 minute) so peripheral vision isn't distracted by a constantly ticking stopwatch.
+  - Instantaneous `< 150ms` hover and press transitions using opacity and background-color shifts only—no layout-shifting animations or decorative pulsing effects on static elements.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Baseline-Parity Comparison Across All Speed Control Surfaces (`#7`)**
-  - *Chosen Approach*: Centralize a single baseline check (`Math.abs(newSpeed - baselineSpeed) < 0.015`) shared by both the below-video bar handler and the native player `ratechange` listener. Whenever `true`, `sessionOverride` resets to `{ videoId: null, speed: null }`.
-  - *Why*: Guarantees identical, predictable indicator state regardless of whether you used YouTube's gear menu, keyboard shortcuts (`<`/`>`), or Cadence's below-video bar to return to your normal speed.
-  - *Alternatives Considered*: Requiring an explicit click on `Reset` even when speed already equaled baseline caused confusing stale `Session Override` labels.
+- **Decision 1: Multi-Tier Grounded Live Detection Over Single-Method Reliance**
+  - *Chosen Approach*: Combine (1) visible player chrome DOM inspection (`.ytp-time-display.ytp-live` and `.ytp-live-badge`), (2) guarded `#movie_player` metadata verification (`getVideoData().isLive` / `getPlayerResponse().videoDetails.isLive` matched against the current video ID), and (3) W3C `HTMLMediaElement.seekable` range inspection.
+  - *Why*: Protects against YouTube internal method renames while accurately separating **active live broadcasts** from **archived stream VODs** (where `isLiveContent` stays `true` forever, which would mislabel finished replays if checked naively).
+  - *Alternatives Considered*: Querying the external YouTube Data API v3—rejected because it requires user API keys, network latency, and quota for state already present in the browser player.
 
-- **Decision 2: Targeted Text-Node Updates for Remaining Duration (`#3`)**
-  - *Chosen Approach*: Render a dedicated `.cadence-remaining-time` text node inside the below-video bar and update **only its `textContent`** on `timeupdate` (throttled to 1-second intervals) and immediately on `ratechange` / `seeked`, hiding the readout automatically if `video.duration` is non-finite or if YouTube reports an active unbounded broadcast (`getVideoStats` / live badge).
-  - *Why*: Avoids rebuilding the bar's button DOM while you are clicking speed chips, keeps CPU overhead virtually zero, and handles live broadcasts on `/watch?v=...` gracefully without needing separate URL rules.
-  - *Alternatives Considered*: Re-rendering `bar.innerHTML` on every `timeupdate` tick would swallow button clicks between `mousedown` and `mouseup`.
+- **Decision 2: Hysteresis Threshold + Extrapolated Pause Drift for DVR Lag**
+  - *Chosen Approach*: Enter "Behind Live" mode when DVR lag reaches `≥ 15s` (and YouTube's native live badge is enabled/not at live head), and snap back to `● Live` when lag drops to `≤ 10s` or the native badge reports live-head sync. While paused on a live stream, extrapolate live-edge advancement at `1.0s/sec` if the MSE buffer pauses segment updates.
+  - *Why*: Live DASH streams naturally sit 3–10 seconds behind segment ingestion; hysteresis prevents flickering between `● Live` and `Live in ...` on routine segment boundaries, while wall-clock pause extrapolation guarantees accurate lag growth even when `<video>` stops firing `timeupdate`.
 
-- **Decision 3: Dynamic Manifest Version Lookup (`#9`)**
-  - *Chosen Approach*: Read `chrome.runtime.getManifest().version` at runtime in the Popup and Options page, paired with a single shared `EXTENSION_VERSION = '1.3.0'` constant in the codebase for the manifest generator and Web Workbench.
-  - *Why*: Eliminates any possibility of a future release bumping the manifest version while forgetting to update a hardcoded HTML label.
+- **Decision 3: Live-Head `1.0×` Clamp Immunity**
+  - *Chosen Approach*: Ignore automatic `ratechange → 1.0×` events that occur while synced at the live head so Cadence does not record a false manual *Session Override* or overwrite saved channel speeds. When the viewer rewinds into the DVR buffer (`≥ 15s` behind), re-apply their configured channel/session speed automatically so catch-up works hands-free.
+  - *Why*: Directly preserves the integrity of Issue #7's Session Override state machine on channels whose saved speed is above `1.0×`.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
-- **Architecture & Component Diagram**:
+### Architecture & Component Diagram
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Cadence v1.3.0 Runtime Flow                          │
-│                                                                              │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │ YouTube Watch Page (/watch?v=...) — MAIN World Bridge                  │  │
-│  │ • Zero-lag speed lock on loadstart + verified videoId matching         │  │
-│  │ • Samples finite duration, currentTime & playbackRate (1s throttled)   │  │
-│  │ • Emits VIDEO_DETECTED, MANUAL_RATE_CHANGE & TIME_REMAINING_UPDATE     │  │
-│  └───────────────────────────────────┬────────────────────────────────────┘  │
-│                                      ▼                                       │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │ Isolated Content Controller & Watch Bar (#cadence-owner-bar)           │  │
-│  │ • Baseline Parity Guard: if |newSpeed - baselineSpeed| < 0.015         │  │
-│  │   ──▶ auto-clears sessionOverride (fixes #7 across Bar & Gear Menu)    │  │
-│  │ • Updates .cadence-remaining-time span in-place ("24m left" @ speed)   │  │
-│  └──────────────────┬──────────────────────────────────┬──────────────────┘  │
-│                     ▼                                  ▼                     │
-│  ┌───────────────────────────────────┐  ┌─────────────────────────────────┐  │
-│  │ Toolbar Popup (v1.3.0 Readout)    │  │ Options & Web Workbench (v1.3.0)│  │
-│  │ • Reads getManifest().version     │  │ • Reads getManifest().version   │  │
-│  │ • Reflects clean Rule / Default / │  │ • Unified /watch & Playlist     │  │
-│  │   Session status in real time     │  │   simulation (no /live clutter) │  │
-│  └───────────────────────────────────┘  └─────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                   YouTube Watch Page (MAIN World Bridge)                   │
+│                                                                            │
+│  ┌──────────────────────────┐    ┌──────────────────────────────────────┐  │
+│  │ Tiered Live Detector     │───▶│ DVR & Remaining Telemetry Engine     │  │
+│  │ • .ytp-time-display.live │    │ • VOD: rawRemaining = dur - current  │  │
+│  │ • .ytp-live-badge state  │    │ • Live Edge: video.seekable.end()    │  │
+│  │ • videoDetails.isLive    │    │   + getProgressState().seekableEnd   │  │
+│  │   (videoId-verified)     │    │ • Pause Drift: 1Hz wall-clock tick   │  │
+│  └────────────┬─────────────┘    └──────────────────┬───────────────────┘  │
+│               │                                     │                      │
+│               ▼                                     ▼                      │
+│  ┌──────────────────────────┐            TIME_REMAINING_UPDATE             │
+│  │ Playback Safeguards      │          { isLive, isAtLiveHead,             │
+│  │ • Bypass Stop-at-End     │            dvrLagSec, canJumpToLive, ... }   │
+│  │ • Ignore live-head 1.0×  │                       │                      │
+│  │   auto-clamp ratechange  │                       │                      │
+│  └──────────────────────────┘                       ▼                      │
+└─────────────────────────────────────────────────────┼──────────────────────┘
+                                                      │ window.postMessage
+┌─────────────────────────────────────────────────────┼──────────────────────┐
+│               Extension Isolated Content Script & UI Bar                   │
+│                                                     ▼                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ Below-Video Duration / Live Slot                                     │  │
+│  │ • VOD:          "24m left @ 1.5×" (read-only span)                   │  │
+│  │ • Live @ Head:  "● Live" (live dot + label)                          │  │
+│  │ • Live > 1.0×:  "Live in 20m @ 1.5×" (clickable button ──▶ JUMP_LIVE)│  │
+│  │ • Live ≤ 1.0×:  "10m behind Live"    (clickable button ──▶ JUMP_LIVE)│  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│                Web Workbench Simulator & Extension Packager                │
+│                                                                            │
+│  ┌──────────────────────────┐    ┌──────────────────────────────────────┐  │
+│  │ Simulated Broadcast Mode │───▶│ Shared Live Catch-Up Math & Controls │  │
+│  │ • Live DVR Stream item   │    │ • Live head growth (+1s / real sec)  │  │
+│  │ • Quick DVR seek presets │    │ • Catch-up: lagSec / (rate - 1.0)    │  │
+│  │ • Live-head 1.0× clamp   │    │ • Clickable Jump to Live resync      │  │
+│  └──────────────────────────┘    └──────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Data Model & State**:
-  - **Single Canonical Version Constant (`EXTENSION_VERSION = '1.3.0'`)**: Drives the generated Manifest V3 `version` field, Install Guide download labels, Workbench footer/popup preview, and dynamic `chrome.runtime.getManifest().version` readouts in Chrome.
-  - **Simplified `PlaylistContextMode`**: Scoped cleanly to `'youtube_home' | 'watch_later' | 'creator_playlist' | 'standalone'` (removing `'live_stream'`).
-  - **Remaining Time State**: Computed from `{ remainingRealSeconds, speed, hasFiniteDuration }` where `remainingRealSeconds = Math.max(0, (duration - currentTime) / playbackRate)` (suppressed when `isAd` is true or when YouTube's player marks the stream as an unbounded live broadcast via `.ytp-live` / `isLive`).
+### Data Model & State
 
-- **Interactive Component & State Mapping**:
-  - **Below-Video Bar & Native Gear Menu (`#7` + `#3`)**:
-    - Adjusting speed via quick chips (`0.75×`–`2.0×`), fine steppers (`±0.05`), or YouTube's gear menu checks `Math.abs(targetSpeed - baselineSpeed) < 0.015`:
-      - If **equal to baseline**: sets `sessionOverride = { videoId: null, speed: null }`, switches label back to `Rule · X.X×` or `Default · 1.0×`, disables `Reset`, and shows toast `Restored X.X× (Channel Rule)` or `Restored 1.0× (Default)`.
-      - If **different from baseline**: sets `sessionOverride = { videoId, speed }`, switches label to `Session · X.X×`, enables `Reset`, and immediately recalculates the remaining duration readout (`24m left`) for the new speed.
-  - **Toolbar Popup & Options Page (`#9`)**:
-    - Toolbar Popup header/footer displays `Cadence` alongside subtle `v1.3.0` metadata and reflects cleared `Session Override` state immediately whenever speed matches baseline.
-    - Options page header displays `Cadence for YouTube · v1.3.0` dynamically via `chrome.runtime.getManifest().version`.
-  - **Unified `/watch` Matching (`#8`)**:
-    - Background badge guard, content script route checks, popup active-tab detection, and simulator URL bar all target standard `/watch` URLs (`youtube.com/watch?v=...` and `&list=...`), removing `/live` route checks and simulator livestream tabs.
+- **Extended `TIME_REMAINING_UPDATE` Bridge Payload**:
+  - `videoId`: Active YouTube video identifier.
+  - `hidden`: `true` during active ad playback or invalid/unloaded media; `false` for valid VODs and active live streams.
+  - `isLive`: `true` strictly for active live broadcasts (never archived VODs).
+  - `isAtLiveHead`: `true` when synced with the live broadcast head (via native `.ytp-live-badge` live-head state or hysteresis lag `≤ 10s`).
+  - `dvrLagSec`: Non-negative seconds behind the live edge (`null` for standard VODs or non-DVR live streams at head).
+  - `isPaused`: Current `video.paused` boolean so the UI knows whether playback is actively closing the DVR gap or drifting behind.
+  - `rawRemainingSec`: Standard remaining seconds for finite VODs (`null` when `isLive` is `true`).
+  - `playbackRate`: Active playback rate rounded to 2 decimals.
+- **Workbench `SimulatedVideo` Extension**:
+  - Optional `isLiveStream?: boolean` and `initialDvrWindowSec?: number` fields on simulated catalog entries so standard VOD items and the new Live DVR broadcast item coexist seamlessly in the queue.
+
+### Interactive Component & State Mapping
+
+- **Live State Transitions & Catch-Up Formatting**:
+  - When `isLive && isAtLiveHead`: Renders non-interactive `● Live` indicator.
+  - When `isLive && !isAtLiveHead && !isPaused && playbackRate > 1.02`: Computes `catchUpSec = Math.round(dvrLagSec / (playbackRate - 1.0))` and renders an interactive `<button>` reading `Live in <duration> @ <rate>×` with tooltip showing `<lag> behind live · Click to jump to live edge`.
+  - When `isLive && !isAtLiveHead && (isPaused || playbackRate <= 1.02)`: Renders an interactive `<button>` reading `<lag> behind Live` with tooltip `Click to jump back to live edge`.
+- **`JUMP_TO_LIVE` Bridge Command**:
+  - Clicking the interactive behind-live button dispatches `JUMP_TO_LIVE` from the content script to the `MAIN` world bridge.
+  - The bridge first invokes YouTube's native `.ytp-live-badge.click()` if available and enabled (ensuring YouTube's internal DVR state and live badge synchronize cleanly), falling back to seeking `video.currentTime` / `player.seekTo` to `seekableEnd`, resuming playback if paused, and immediately broadcasting an updated `TIME_REMAINING_UPDATE`.
+- **DVR Rewind Auto-Speed Restoration**:
+  - If a channel rule specifies `> 1.0×` (e.g., `1.5×`) and YouTube clamped the player to `1.0×` at the live head, scrubbing or pausing `≥ 15s` behind live automatically restores the configured `1.5×` target speed upon play so catch-up starts immediately without manual intervention.
+- **Version Alignment (`v1.3.1`)**:
+  - Updates version string to `1.3.1` across the extension manifest, toolbar popup header, options header, Workbench header/packager, and downloadable/synced extension bundle.

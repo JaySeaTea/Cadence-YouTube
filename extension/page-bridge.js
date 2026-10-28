@@ -28,8 +28,14 @@
   let pendingCardHint = null;
   let heldAtEndVideoId = window.__CADENCE_HELD_VIDEO_ID__ || null;
   let userInitiatedNavUntil = 0;
+  let recentGearInteractionUntil = 0;
   let lastRemainingEmitAt = 0;
   let lastRemainingSignature = '';
+  let liveStateVideoId = '';
+  let liveHeadHysteresisBehind = false;
+  let lastLiveEdgeSec = null;
+  let lastLiveEdgeSampleAt = 0;
+  let lastDvrRestoreAt = 0;
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -126,6 +132,9 @@
       ) {
         markUserNavigationIntent();
       }
+      if (target.closest('.ytp-settings-button, .ytp-settings-menu, .ytp-panel-menu, .ytp-menuitem')) {
+        recentGearInteractionUntil = Date.now() + 2500;
+      }
 
       if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
         const hint = extractCardPreviewHint(target);
@@ -215,6 +224,182 @@
     return '';
   }
 
+  function getLiveBadgeElement(player) {
+    const root = player || document;
+    const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (!(badge instanceof HTMLElement)) return null;
+    if (badge.hasAttribute('hidden')) return null;
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return null;
+    } catch (_) {}
+    return badge;
+  }
+
+  function isLiveBadgeAtHead(badge) {
+    if (!badge) return false;
+    return Boolean(
+      badge.disabled === true ||
+        badge.hasAttribute('disabled') ||
+        badge.getAttribute('aria-disabled') === 'true' ||
+        badge.classList.contains('ytp-live-badge-is-livehead')
+    );
+  }
+
+  function isLiveBroadcast(player, video) {
+    if (isAdPlaying(player)) return false;
+
+    const root = player || document;
+    const liveTimeDisplay = root.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
+    );
+    const visibleBadge = getLiveBadgeElement(player);
+    if (liveTimeDisplay && visibleBadge) {
+      return true;
+    }
+
+    const currentVid = getCurrentVideoId(player);
+    try {
+      if (player && typeof player.getVideoData === 'function') {
+        const vd = player.getVideoData();
+        if (vd && (!currentVid || !vd.video_id || vd.video_id === currentVid)) {
+          if (vd.isLive === true) return true;
+        }
+      }
+      if (player && typeof player.getPlayerResponse === 'function') {
+        const resp = player.getPlayerResponse();
+        const details = resp && resp.videoDetails;
+        if (details && (!currentVid || !details.videoId || details.videoId === currentVid)) {
+          if (details.isLive === true) return true;
+          const liveMicro =
+            resp.microformat &&
+            resp.microformat.playerMicroformatRenderer &&
+            resp.microformat.playerMicroformatRenderer.liveBroadcastDetails;
+          if (liveMicro && liveMicro.isLiveNow === true) return true;
+        }
+      }
+    } catch (_) {}
+
+    if (video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function resetLiveTrackingState(videoId = '') {
+    liveStateVideoId = videoId;
+    liveHeadHysteresisBehind = false;
+    lastLiveEdgeSec = null;
+    lastLiveEdgeSampleAt = 0;
+  }
+
+  function measureLiveDvrState(player, video, currentVid) {
+    const now = Date.now();
+    if (currentVid && currentVid !== liveStateVideoId) {
+      resetLiveTrackingState(currentVid);
+    }
+
+    let rawSeekableStart = null;
+    let rawSeekableEnd = null;
+
+    if (video && video.seekable && video.seekable.length > 0) {
+      try {
+        const startVal = video.seekable.start(0);
+        const endVal = video.seekable.end(video.seekable.length - 1);
+        if (Number.isFinite(startVal) && Number.isFinite(endVal) && endVal >= startVal) {
+          rawSeekableStart = startVal;
+          rawSeekableEnd = endVal;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      if (player && typeof player.getProgressState === 'function') {
+        const ps = player.getProgressState();
+        if (ps && Number.isFinite(ps.seekableEnd) && ps.seekableEnd > 0) {
+          if (rawSeekableEnd === null || ps.seekableEnd > rawSeekableEnd) {
+            rawSeekableEnd = ps.seekableEnd;
+          }
+          if (rawSeekableStart === null && Number.isFinite(ps.seekableStart)) {
+            rawSeekableStart = ps.seekableStart;
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (rawSeekableEnd !== null && Number.isFinite(rawSeekableEnd)) {
+      if (lastLiveEdgeSec === null || rawSeekableEnd > lastLiveEdgeSec + 0.2 || (video && !video.paused)) {
+        lastLiveEdgeSec = rawSeekableEnd;
+        lastLiveEdgeSampleAt = now;
+      }
+    }
+
+    let effectiveLiveEdge = rawSeekableEnd;
+    if (video && video.paused && lastLiveEdgeSec !== null && lastLiveEdgeSampleAt > 0) {
+      const extrapolated = lastLiveEdgeSec + Math.max(0, (now - lastLiveEdgeSampleAt) / 1000);
+      effectiveLiveEdge =
+        effectiveLiveEdge !== null ? Math.max(effectiveLiveEdge, extrapolated) : extrapolated;
+    }
+
+    const badge = getLiveBadgeElement(player);
+    const badgeAtHead = isLiveBadgeAtHead(badge);
+    const dvrWindowSec =
+      rawSeekableStart !== null && effectiveLiveEdge !== null
+        ? Math.max(0, effectiveLiveEdge - rawSeekableStart)
+        : 0;
+
+    let lagSec = 0;
+    if (video && effectiveLiveEdge !== null && Number.isFinite(effectiveLiveEdge)) {
+      lagSec = Math.max(0, effectiveLiveEdge - video.currentTime);
+    }
+
+    const hasDvrWindow =
+      dvrWindowSec >= 25 || lagSec >= 15 || Boolean(video && video.paused && dvrWindowSec >= 8);
+
+    if (!hasDvrWindow && badgeAtHead && (!video || !video.paused)) {
+      liveHeadHysteresisBehind = false;
+    } else if (badgeAtHead && (!video || !video.paused) && lagSec < 16) {
+      liveHeadHysteresisBehind = false;
+    } else if (liveHeadHysteresisBehind) {
+      if (lagSec <= 10 || (badgeAtHead && (!video || !video.paused) && lagSec <= 13)) {
+        liveHeadHysteresisBehind = false;
+      }
+    } else {
+      if (lagSec >= 15 || (video && video.paused && lagSec >= 5)) {
+        liveHeadHysteresisBehind = true;
+      }
+    }
+
+    return {
+      isAtLiveHead: !liveHeadHysteresisBehind,
+      dvrLagSec: Math.round(lagSec),
+      liveEdgeSec: effectiveLiveEdge,
+      isPaused: Boolean(video && video.paused),
+    };
+  }
+
+  function maybeRestoreDvrCatchupSpeed() {
+    if (!isSupportedWatchPage() || !config.enabled || !config.perChannelSpeedEnabled) return;
+    if (isApplyingProgrammatically) return;
+    const now = Date.now();
+    if (now - lastDvrRestoreAt < 2000) return;
+
+    const player = getMoviePlayer();
+    const video = getMainVideo();
+    if (!video || video.paused || isAdPlaying(player)) return;
+    if (!isLiveBroadcast(player, video)) return;
+
+    const target = Number(config.targetSpeed) || 1.0;
+    if (target <= 1.01) return;
+
+    const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+    if (!dvr.isAtLiveHead && Math.abs(video.playbackRate - target) > 0.03) {
+      lastDvrRestoreAt = now;
+      applyPlaybackSpeed(target);
+    }
+  }
+
   function emitTimeRemaining(force = false) {
     if (!isSupportedWatchPage()) return;
     const now = Date.now();
@@ -224,21 +409,62 @@
     const video = getMainVideo();
     if (!video) return;
 
+    const videoId = getCurrentVideoId(player) || '';
     const adActive = isAdPlaying(player);
-    const isUnboundedBroadcast =
-      adActive ||
-      Boolean(player && player.classList && player.classList.contains('ytp-live')) ||
-      !Number.isFinite(video.duration) ||
-      video.duration <= 0;
+    if (adActive) {
+      const adSig = videoId + '|ad';
+      if (!force && adSig === lastRemainingSignature) return;
+      lastRemainingEmitAt = now;
+      lastRemainingSignature = adSig;
+      postToContent('TIME_REMAINING_UPDATE', {
+        videoId,
+        rawRemainingSec: null,
+        playbackRate: 1.0,
+        isLive: false,
+        isAtLiveHead: false,
+        dvrLagSec: null,
+        isPaused: Boolean(video.paused),
+        hidden: true,
+      });
+      return;
+    }
 
     const rate = Math.max(0.25, Number(video.playbackRate) || 1.0);
-    const rawRemainingSec = isUnboundedBroadcast
+    if (isLiveBroadcast(player, video)) {
+      const dvr = measureLiveDvrState(player, video, videoId);
+      const liveSig = [
+        videoId,
+        'live',
+        dvr.isAtLiveHead ? 'head' : 'behind',
+        dvr.isAtLiveHead ? 0 : dvr.dvrLagSec,
+        dvr.isPaused ? 'p' : 'r',
+        rate.toFixed(2),
+      ].join('|');
+
+      if (!force && liveSig === lastRemainingSignature) return;
+      lastRemainingEmitAt = now;
+      lastRemainingSignature = liveSig;
+
+      postToContent('TIME_REMAINING_UPDATE', {
+        videoId,
+        rawRemainingSec: null,
+        playbackRate: Math.round(rate * 100) / 100,
+        isLive: true,
+        isAtLiveHead: dvr.isAtLiveHead,
+        dvrLagSec: dvr.dvrLagSec,
+        isPaused: dvr.isPaused,
+        hidden: false,
+      });
+      return;
+    }
+
+    const invalidDuration = !Number.isFinite(video.duration) || video.duration <= 0;
+    const rawRemainingSec = invalidDuration
       ? null
       : Math.max(0, video.duration - video.currentTime);
-    const videoId = getCurrentVideoId(player) || '';
     const realBucket =
       rawRemainingSec === null ? 'na' : Math.round(rawRemainingSec / rate);
-    const sig = [videoId, realBucket, rate.toFixed(2)].join('|');
+    const sig = [videoId, 'vod', realBucket, rate.toFixed(2)].join('|');
 
     if (!force && sig === lastRemainingSignature) return;
     lastRemainingEmitAt = now;
@@ -248,7 +474,11 @@
       videoId,
       rawRemainingSec,
       playbackRate: Math.round(rate * 100) / 100,
-      hidden: isUnboundedBroadcast,
+      isLive: false,
+      isAtLiveHead: false,
+      dvrLagSec: null,
+      isPaused: Boolean(video.paused),
+      hidden: invalidDuration,
     });
   }
 
@@ -405,6 +635,7 @@
     window.__CADENCE_HELD_VIDEO_ID__ = null;
     lastRemainingEmitAt = 0;
     lastRemainingSignature = '';
+    resetLiveTrackingState('');
     const defaultSpd = Number(config.defaultSpeed) || 1.0;
     config.targetSpeed = defaultSpd;
     window.__CADENCE_LAST_CONFIG__ = config;
@@ -468,7 +699,7 @@
     if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return;
     const player = getMoviePlayer();
     const video = getMainVideo();
-    if (!video || isAdPlaying(player) || video.loop) return;
+    if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return;
 
     const duration = video.duration;
     if (!Number.isFinite(duration) || duration <= 2.5) return;
@@ -509,6 +740,15 @@
   function enforceConfiguredSpeedNow() {
     if (!isSupportedWatchPage()) return;
     if (config.enabled && config.perChannelSpeedEnabled) {
+      const player = getMoviePlayer();
+      const video = getMainVideo();
+      if (video && isLiveBroadcast(player, video)) {
+        const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+        if (dvr.isAtLiveHead && Number(config.targetSpeed) > 1.01) {
+          emitTimeRemaining(true);
+          return;
+        }
+      }
       applyPlaybackSpeed(config.targetSpeed);
     }
   }
@@ -529,6 +769,15 @@
 
     video.addEventListener(
       'seeked',
+      () => {
+        maybeRestoreDvrCatchupSpeed();
+        emitTimeRemaining(true);
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
+      'pause',
       () => {
         emitTimeRemaining(true);
       },
@@ -554,6 +803,9 @@
           return;
         }
         const urlVid = getUrlVideoId();
+        if (urlVid && urlVid !== liveStateVideoId) {
+          resetLiveTrackingState(urlVid);
+        }
         if (urlVid && urlVid !== lockedVideoId) {
           const hasMatchingHint =
             pendingCardHint &&
@@ -593,6 +845,7 @@
       () => {
         suppressNativeAutoplayAndPlaylist();
         enforceConfiguredSpeedNow();
+        maybeRestoreDvrCatchupSpeed();
         emitTimeRemaining(true);
       },
       { signal: bridgeSignal }
@@ -614,6 +867,19 @@
         const player = getMoviePlayer();
         if (isApplyingProgrammatically || isAdPlaying(player)) return;
         const newRate = Math.round(video.playbackRate * 100) / 100;
+
+        if (
+          isLiveBroadcast(player, video) &&
+          Math.abs(newRate - 1.0) < 0.025 &&
+          Date.now() > recentGearInteractionUntil
+        ) {
+          const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
+          if (dvr.isAtLiveHead) {
+            emitTimeRemaining(true);
+            return;
+          }
+        }
+
         emitTimeRemaining(true);
         if (Math.abs(newRate - lastAppliedSpeed) >= 0.025) {
           lastAppliedSpeed = newRate;
@@ -706,6 +972,46 @@
             const nextBtn = document.querySelector('.ytp-next-button');
             if (nextBtn instanceof HTMLElement) nextBtn.click();
           }
+        } else if (payload.action === 'JUMP_TO_LIVE') {
+          const player = getMoviePlayer();
+          const video = getMainVideo();
+          const badge = getLiveBadgeElement(player);
+          let jumpedViaBadge = false;
+          if (badge && !isLiveBadgeAtHead(badge)) {
+            badge.click();
+            jumpedViaBadge = true;
+          }
+          if (video) {
+            let targetEdge = null;
+            if (video.seekable && video.seekable.length > 0) {
+              try {
+                targetEdge = video.seekable.end(video.seekable.length - 1);
+              } catch (_) {}
+            }
+            if (!jumpedViaBadge && targetEdge !== null && Number.isFinite(targetEdge)) {
+              const safeEdge = Math.max(0, targetEdge - 0.5);
+              try {
+                if (player && typeof player.seekTo === 'function') {
+                  player.seekTo(safeEdge, true);
+                } else {
+                  video.currentTime = safeEdge;
+                }
+              } catch (_) {
+                video.currentTime = safeEdge;
+              }
+            }
+            if (video.paused) {
+              video.play().catch(() => {});
+              try {
+                if (player && typeof player.playVideo === 'function') {
+                  player.playVideo();
+                }
+              } catch (_) {}
+            }
+          }
+          liveHeadHysteresisBehind = false;
+          emitTimeRemaining(true);
+          setTimeout(() => emitTimeRemaining(true), 80);
         } else if (payload.action === 'FORCE_DETECT') {
           broadcastChannelMetadata(true);
           emitTimeRemaining(true);
@@ -789,6 +1095,7 @@
   heartbeatInterval = setInterval(() => {
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
+    maybeRestoreDvrCatchupSpeed();
     emitTimeRemaining(false);
   }, 250);
 

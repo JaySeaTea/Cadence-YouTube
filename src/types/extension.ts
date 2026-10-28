@@ -47,6 +47,8 @@ export interface SimulatedVideo {
   thumbnailUrl: string;
   suggestedCategory: Exclude<CategoryPresetId, 'custom'>;
   summary: string;
+  isLiveStream?: boolean;
+  initialLiveEdgeSec?: number;
 }
 
 export interface ExtensionEventLog {

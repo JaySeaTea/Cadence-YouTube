@@ -51,6 +51,11 @@
   let remainingState = {
     videoId: null,
     rawRemainingSec: null,
+    playbackRate: null,
+    isLive: false,
+    isAtLiveHead: false,
+    dvrLagSec: null,
+    isPaused: false,
     hidden: true,
   };
   let lastToastedVideoId = null;
@@ -133,27 +138,27 @@
     return Math.round(Math.min(4.0, Math.max(0.25, Number(val) || 1.0)) * 100) / 100;
   }
 
+  function formatCompactDuration(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec < 60) {
+      return `${safeSec}s`;
+    }
+    const totalMins = Math.max(1, Math.round(safeSec / 60));
+    if (totalMins < 60) {
+      return `${totalMins}m`;
+    }
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  }
+
   function formatRemainingReadout(rawRemainingSec, speed) {
     if (typeof rawRemainingSec !== 'number' || !Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) {
       return '';
     }
     const safeRate = Math.max(0.25, Number(speed) || 1.0);
     const totalSec = Math.max(0, Math.round(rawRemainingSec / safeRate));
-
-    let durationPart = '';
-    if (totalSec < 60) {
-      durationPart = `${totalSec}s left`;
-    } else {
-      const totalMins = Math.max(1, Math.round(totalSec / 60));
-      if (totalMins < 60) {
-        durationPart = `${totalMins}m left`;
-      } else {
-        const hrs = Math.floor(totalMins / 60);
-        const mins = totalMins % 60;
-        durationPart = mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
-      }
-    }
-    return `${durationPart} @ ${formatDisplaySpeed(safeRate)}×`;
+    return `${formatCompactDuration(totalSec)} left @ ${formatDisplaySpeed(safeRate)}×`;
   }
 
   function isWatchLocation() {
@@ -293,35 +298,113 @@
     return getBaselineSpeedForChannel(meta);
   }
 
-  function computeCurrentRemainingText() {
-    if (
-      !currentChannel ||
-      currentChannel.isAd ||
-      remainingState.hidden ||
-      typeof remainingState.rawRemainingSec !== 'number'
-    ) {
-      return '';
+  function computeDurationSlotModel() {
+    if (!currentChannel || currentChannel.isAd || remainingState.hidden) {
+      return { visible: false, mode: 'hidden', text: '', title: '', clickable: false };
     }
     if (
       remainingState.videoId &&
       currentChannel.videoId &&
       remainingState.videoId !== currentChannel.videoId
     ) {
-      return '';
+      return { visible: false, mode: 'hidden', text: '', title: '', clickable: false };
     }
+
+    if (remainingState.isLive) {
+      if (remainingState.isAtLiveHead) {
+        return {
+          visible: true,
+          mode: 'live-head',
+          text: 'Live',
+          title: 'Live broadcast · Synced at live edge',
+          clickable: false,
+        };
+      }
+
+      const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
+      const lagLabel = formatCompactDuration(lagSec);
+      const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+      const liveRate =
+        typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
+          ? remainingState.playbackRate
+          : effectiveSpeed;
+
+      if (!remainingState.isPaused && liveRate > 1.02) {
+        const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
+        const catchUpLabel = formatCompactDuration(catchUpSec);
+        return {
+          visible: true,
+          mode: 'live-catchup',
+          text: `Live in ${catchUpLabel} @ ${formatDisplaySpeed(liveRate)}×`,
+          title: `${lagLabel} behind live · Click to jump to live edge`,
+          clickable: true,
+        };
+      }
+
+      return {
+        visible: true,
+        mode: 'live-behind',
+        text: `${lagLabel} behind Live`,
+        title: `${remainingState.isPaused ? 'Paused · ' : ''}Click to jump back to live edge`,
+        clickable: true,
+      };
+    }
+
+    if (typeof remainingState.rawRemainingSec !== 'number') {
+      return { visible: false, mode: 'hidden', text: '', title: '', clickable: false };
+    }
+
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-    return formatRemainingReadout(remainingState.rawRemainingSec, effectiveSpeed);
+    const vodText = formatRemainingReadout(remainingState.rawRemainingSec, effectiveSpeed);
+    if (!vodText) {
+      return { visible: false, mode: 'hidden', text: '', title: '', clickable: false };
+    }
+
+    return {
+      visible: true,
+      mode: 'vod',
+      text: vodText,
+      title: 'Real wall-clock time remaining at active playback speed',
+      clickable: false,
+    };
+  }
+
+  function applyDurationModelToBar(bar, model) {
+    if (!bar) return;
+    const wrapEl = bar.querySelector('.cadence-remaining-wrap');
+    const slotBtn = bar.querySelector('.cadence-remaining-slot');
+    const dotEl = bar.querySelector('.cadence-live-dot');
+    const timeEl = bar.querySelector('.cadence-remaining-time');
+    if (!wrapEl || !slotBtn || !dotEl || !timeEl) return;
+
+    if (!model.visible || !model.text) {
+      wrapEl.style.display = 'none';
+      return;
+    }
+
+    wrapEl.style.display = 'inline-flex';
+    timeEl.textContent = model.text;
+    slotBtn.title = model.title || '';
+    slotBtn.disabled = !model.clickable;
+    slotBtn.classList.toggle('is-clickable', Boolean(model.clickable));
+    slotBtn.classList.toggle('is-live-head', model.mode === 'live-head');
+
+    if (model.mode === 'live-head') {
+      dotEl.style.display = 'inline-block';
+      dotEl.className = 'cadence-live-dot is-head';
+    } else if (model.mode === 'live-catchup' || model.mode === 'live-behind') {
+      dotEl.style.display = 'inline-block';
+      dotEl.className = 'cadence-live-dot is-behind';
+    } else {
+      dotEl.style.display = 'none';
+      dotEl.className = 'cadence-live-dot';
+    }
   }
 
   function updateRemainingReadoutInPlace() {
     const bar = document.getElementById('cadence-owner-bar');
     if (!bar) return;
-    const wrapEl = bar.querySelector('.cadence-remaining-wrap');
-    const timeEl = bar.querySelector('.cadence-remaining-time');
-    if (!wrapEl || !timeEl) return;
-    const text = computeCurrentRemainingText();
-    timeEl.textContent = text;
-    wrapEl.style.display = text ? 'inline-flex' : 'none';
+    applyDurationModelToBar(bar, computeDurationSlotModel());
   }
 
   function pushConfigToBridge(targetSpeed, showOnBadge = true) {
@@ -485,6 +568,9 @@
         videoId: null,
         speed: null,
       };
+      if (!remainingState.isLive || !remainingState.isAtLiveHead) {
+        remainingState.playbackRate = baselineSpeed;
+      }
       pushConfigToBridge(baselineSpeed, true);
       postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
       renderInPageBar();
@@ -501,6 +587,9 @@
       videoId: currentChannel.videoId,
       speed: cleanSpeed,
     };
+    if (!remainingState.isLive || !remainingState.isAtLiveHead) {
+      remainingState.playbackRate = cleanSpeed;
+    }
 
     pushConfigToBridge(cleanSpeed, true);
     postToBridge('COMMAND', { action: 'SET_SPEED', speed: cleanSpeed });
@@ -528,6 +617,9 @@
       videoId: null,
       speed: null,
     };
+    if (!remainingState.isLive || !remainingState.isAtLiveHead) {
+      remainingState.playbackRate = baselineSpeed;
+    }
 
     pushConfigToBridge(baselineSpeed, true);
     postToBridge('COMMAND', { action: 'SET_SPEED', speed: baselineSpeed });
@@ -601,7 +693,7 @@
     const tooltip = isSessionActive
       ? `Session override for this video only · Baseline is ${formatDisplaySpeed(baselineSpeed)}×`
       : 'Session-only speed bar · Does not overwrite saved channel rules';
-    const initialRemainingText = computeCurrentRemainingText();
+    const durationModel = computeDurationSlotModel();
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     bar.innerHTML = `
@@ -625,11 +717,16 @@
         <button type="button" data-step="0.05" class="cadence-step-chip" title="Speed up by 0.05× for this video session">+0.05</button>
         <button type="button" data-action="reset" class="cadence-reset-chip ${isSessionActive ? 'is-active' : ''}" ${!isSessionActive ? 'disabled' : ''} title="Reset to ${matchedRule ? 'channel rule' : 'default'} (${formatDisplaySpeed(baselineSpeed)}×)">Reset</button>
       </div>
-      <span class="cadence-remaining-wrap" style="display:${initialRemainingText ? 'inline-flex' : 'none'};">
+      <span class="cadence-remaining-wrap" style="display:none;">
         <span class="cadence-bar-divider" aria-hidden="true"></span>
-        <span class="cadence-remaining-time" title="Real wall-clock time remaining at active playback speed">${initialRemainingText}</span>
+        <button type="button" class="cadence-remaining-slot" disabled>
+          <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
+          <span class="cadence-remaining-time"></span>
+        </button>
       </span>
     `;
+
+    applyDurationModelToBar(bar, durationModel);
 
     bar.querySelectorAll('.cadence-speed-chip').forEach((btn) => {
       btn.addEventListener(
@@ -665,12 +762,34 @@
         { signal: lifecycleSignal }
       );
     }
+
+    const remainingSlotBtn = bar.querySelector('.cadence-remaining-slot');
+    if (remainingSlotBtn) {
+      remainingSlotBtn.addEventListener(
+        'click',
+        () => {
+          if (remainingSlotBtn.disabled) return;
+          postToBridge('COMMAND', { action: 'JUMP_TO_LIVE' });
+          showPlayerToast('Jumped to Live');
+        },
+        { signal: lifecycleSignal }
+      );
+    }
   }
 
   function handleLeftWatchPage() {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
-    remainingState = { videoId: null, rawRemainingSec: null, hidden: true };
+    remainingState = {
+      videoId: null,
+      rawRemainingSec: null,
+      playbackRate: null,
+      isLive: false,
+      isAtLiveHead: false,
+      dvrLagSec: null,
+      isPaused: false,
+      hidden: true,
+    };
     lastToastedVideoId = null;
     clearBarMountRetry();
 
@@ -749,6 +868,12 @@
             videoId: payload.videoId || null,
             rawRemainingSec:
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
+            playbackRate:
+              typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
+            isLive: Boolean(payload.isLive),
+            isAtLiveHead: Boolean(payload.isAtLiveHead),
+            dvrLagSec: typeof payload.dvrLagSec === 'number' ? payload.dvrLagSec : null,
+            isPaused: Boolean(payload.isPaused),
             hidden: Boolean(payload.hidden),
           };
           updateRemainingReadoutInPlace();
@@ -757,7 +882,16 @@
             sessionOverride = { videoId: null, speed: null };
           }
           if (remainingState.videoId !== payload.videoId) {
-            remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
+            remainingState = {
+              videoId: payload.videoId,
+              rawRemainingSec: null,
+              playbackRate: null,
+              isLive: false,
+              isAtLiveHead: false,
+              dvrLagSec: null,
+              isPaused: false,
+              hidden: true,
+            };
           }
           const hasChannelHint = Boolean(
             payload.channelId || payload.handle || payload.channelName
@@ -791,7 +925,16 @@
               sessionOverride = { videoId: null, speed: null };
             }
             if (remainingState.videoId !== payload.videoId) {
-              remainingState = { videoId: payload.videoId, rawRemainingSec: null, hidden: true };
+              remainingState = {
+                videoId: payload.videoId,
+                rawRemainingSec: null,
+                playbackRate: null,
+                isLive: false,
+                isAtLiveHead: false,
+                dvrLagSec: null,
+                isPaused: false,
+                hidden: true,
+              };
             }
             barMountAttempts = 0;
             const existingBanner = document.querySelector('.cadence-stopped-banner');

@@ -3,6 +3,7 @@ import {
   FastForward,
   Pause,
   Play,
+  Radio,
   RotateCcw,
   SkipForward,
   SlidersHorizontal,
@@ -59,26 +60,25 @@ function clampSpeed(speed: number): number {
   return Math.round(Math.min(4.0, Math.max(0.25, speed)) * 100) / 100;
 }
 
+function formatCompactDuration(rawSec: number): string {
+  const safeSec = Math.max(0, Math.round(rawSec || 0));
+  if (safeSec < 60) {
+    return `${safeSec}s`;
+  }
+  const totalMins = Math.max(1, Math.round(safeSec / 60));
+  if (totalMins < 60) {
+    return `${totalMins}m`;
+  }
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+}
+
 function formatRemainingReadout(rawRemainingSec: number, speed: number): string {
   if (!Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) return '';
   const safeRate = Math.max(0.25, speed || 1.0);
   const totalSec = Math.max(0, Math.round(rawRemainingSec / safeRate));
-
-  let durationPart = '';
-  if (totalSec < 60) {
-    durationPart = `${totalSec}s left`;
-  } else {
-    const totalMins = Math.max(1, Math.round(totalSec / 60));
-    if (totalMins < 60) {
-      durationPart = `${totalMins}m left`;
-    } else {
-      const hrs = Math.floor(totalMins / 60);
-      const mins = totalMins % 60;
-      durationPart = mins > 0 ? `${hrs}h ${mins}m left` : `${hrs}h left`;
-    }
-  }
-
-  return `${durationPart} @ ${formatSpeed(safeRate)}×`;
+  return `${formatCompactDuration(totalSec)} left @ ${formatSpeed(safeRate)}×`;
 }
 
 export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
@@ -95,6 +95,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [currentVideoIndex, setCurrentVideoIndex] = useState<number>(1);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [currentTime, setCurrentTime] = useState<number>(1440);
+  const [liveEdgeTime, setLiveEdgeTime] = useState<number>(3600);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.5);
   const [sessionOverrideSpeed, setSessionOverrideSpeed] = useState<number | null>(null);
   const [stoppedByCadence, setStoppedByCadence] = useState<boolean>(false);
@@ -105,6 +106,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
 
   const currentTimeRef = useRef<number>(1440);
+  const liveEdgeRef = useRef<number>(3600);
   const toastTimerRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextPulseTimeRef = useRef<number>(0);
@@ -114,8 +116,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     setCurrentTime(val);
   };
 
+  const syncLiveEdge = (val: number) => {
+    liveEdgeRef.current = val;
+    setLiveEdgeTime(val);
+  };
+
   const isHomeBrowseMode = playlistMode === 'youtube_home';
   const currentVideo = SIMULATED_VIDEOS[currentVideoIndex];
+  const isLiveStream = Boolean(currentVideo.isLiveStream);
 
   const matchedRule = rules.find(
     (r) =>
@@ -205,7 +213,13 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
     setCurrentVideoIndex(index);
     setSessionOverrideSpeed(null);
-    syncTime(0);
+    if (nextVid.isLiveStream) {
+      const startEdge = nextVid.initialLiveEdgeSec || 3600;
+      syncLiveEdge(startEdge);
+      syncTime(startEdge);
+    } else {
+      syncTime(0);
+    }
     setStoppedByCadence(false);
     setAutoAdvancingCountdown(false);
     setShowNativeGearMenu(false);
@@ -277,10 +291,29 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   useEffect(() => {
-    if (!isPlaying || isHomeBrowseMode) return;
+    if (isHomeBrowseMode) return;
+    if (!isPlaying && !isLiveStream) return;
 
     const tickMs = 100;
     const interval = window.setInterval(() => {
+      if (isLiveStream) {
+        const nextEdge = liveEdgeRef.current + tickMs / 1000;
+        syncLiveEdge(nextEdge);
+
+        if (isPlaying) {
+          const lagBefore = Math.max(0, nextEdge - currentTimeRef.current);
+          const effectiveLiveRate = lagBefore <= 10 && playbackSpeed > 1.0 ? 1.0 : playbackSpeed;
+          playSubtleCadenceTick(effectiveLiveRate);
+          const candidateTime = currentTimeRef.current + (tickMs / 1000) * playbackSpeed;
+          if (candidateTime >= nextEdge) {
+            syncTime(nextEdge);
+          } else {
+            syncTime(candidateTime);
+          }
+        }
+        return;
+      }
+
       playSubtleCadenceTick(playbackSpeed);
 
       const nextTime = currentTimeRef.current + (tickMs / 1000) * playbackSpeed;
@@ -312,6 +345,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   }, [
     isPlaying,
     isHomeBrowseMode,
+    isLiveStream,
     playbackSpeed,
     currentVideo.durationSec,
     currentVideo.title,
@@ -444,12 +478,57 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   const handleSkipNearEnd = () => {
-    if (isHomeBrowseMode) return;
+    if (isHomeBrowseMode || isLiveStream) return;
     setStoppedByCadence(false);
     setAutoAdvancingCountdown(false);
     const targetTime = Math.max(0, currentVideo.durationSec - 3);
     syncTime(targetTime);
     setIsPlaying(true);
+  };
+
+  const handleRewindDvr = (secondsBehind: number) => {
+    if (!isLiveStream) return;
+    const target = Math.max(0, liveEdgeRef.current - secondsBehind);
+    syncTime(target);
+    setStoppedByCadence(false);
+    const mins = Math.round(secondsBehind / 60);
+    triggerToast(`Rewound ${mins}m into DVR buffer`);
+    onAddLog(
+      `DVR rewound ${mins}m behind live`,
+      `Playback at ${formatSpeed(playbackSpeed)}× ${
+        playbackSpeed > 1.02 && isPlaying
+          ? `catches up in ${formatCompactDuration(secondsBehind / (playbackSpeed - 1.0))}`
+          : 'holding buffer offset'
+      }`
+    );
+  };
+
+  const handleJumpToLive = () => {
+    if (!isLiveStream) return;
+    syncTime(liveEdgeRef.current);
+    setIsPlaying(true);
+    triggerToast('Jumped to Live');
+    onAddLog(
+      'Jumped to Live broadcast head',
+      `Resynced ${currentVideo.channelName} live stream · Baseline ${formatSpeed(baselineSpeed)}× preserved`
+    );
+  };
+
+  const handleQuickTestLiveDvr = () => {
+    const liveIdx = SIMULATED_VIDEOS.findIndex((v) => v.isLiveStream);
+    if (liveIdx < 0) return;
+    if (currentVideoIndex !== liveIdx || isHomeBrowseMode) {
+      selectVideo(liveIdx, true, 'standalone');
+      const startEdge = SIMULATED_VIDEOS[liveIdx].initialLiveEdgeSec || 3600;
+      syncLiveEdge(startEdge);
+      syncTime(startEdge - 600);
+      onAddLog(
+        'Opened Live DVR scenario (10m behind)',
+        `Testing real-time Back-to-Live catch-up math on "${SIMULATED_VIDEOS[liveIdx].title}"`
+      );
+    } else {
+      handleRewindDvr(600);
+    }
   };
 
   const handleReplay = () => {
@@ -468,18 +547,61 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     selectVideo(nextIdx, true);
   };
 
-  const progressPercent = Math.min(100, (currentTime / currentVideo.durationSec) * 100);
-  const rawRemainingSec = Math.max(0, currentVideo.durationSec - currentTime);
-  const remainingReadout = formatRemainingReadout(rawRemainingSec, playbackSpeed);
+  const timelineHorizon = isLiveStream ? Math.max(1, liveEdgeTime) : currentVideo.durationSec;
+  const progressPercent = Math.min(100, (currentTime / timelineHorizon) * 100);
+  const dvrLagSec = isLiveStream ? Math.max(0, Math.round(liveEdgeTime - currentTime)) : 0;
+  const isAtLiveHead = isLiveStream && (isPlaying ? dvrLagSec <= 10 : dvrLagSec < 5);
+  const actualPlayerRate =
+    isLiveStream && isAtLiveHead && playbackSpeed > 1.0 ? 1.0 : playbackSpeed;
+
+  const rawRemainingSec = isLiveStream ? 0 : Math.max(0, currentVideo.durationSec - currentTime);
+  const durationSlotModel = (() => {
+    if (isLiveStream) {
+      if (isAtLiveHead) {
+        return {
+          mode: 'live-head' as const,
+          text: 'Live',
+          title: 'Live broadcast · Synced at live edge',
+          clickable: false,
+        };
+      }
+      const lagLabel = formatCompactDuration(Math.max(1, dvrLagSec));
+      if (isPlaying && playbackSpeed > 1.02) {
+        const catchUpSec = Math.max(1, Math.round(dvrLagSec / (playbackSpeed - 1.0)));
+        return {
+          mode: 'live-catchup' as const,
+          text: `Live in ${formatCompactDuration(catchUpSec)} @ ${formatSpeed(playbackSpeed)}×`,
+          title: `${lagLabel} behind live · Click to jump to live edge`,
+          clickable: true,
+        };
+      }
+      return {
+        mode: 'live-behind' as const,
+        text: `${lagLabel} behind Live`,
+        title: `${!isPlaying ? 'Paused · ' : ''}Click to jump back to live edge`,
+        clickable: true,
+      };
+    }
+
+    const vodText = formatRemainingReadout(rawRemainingSec, playbackSpeed);
+    return {
+      mode: 'vod' as const,
+      text: vodText,
+      title: 'Real wall-clock time remaining at active playback speed',
+      clickable: false,
+    };
+  })();
 
   const playlistLabel =
     playlistMode === 'youtube_home'
       ? 'YouTube Home · Browse Feed'
       : playlistMode === 'watch_later'
-        ? 'Watch Later · 4 videos'
+        ? `Watch Later · ${SIMULATED_VIDEOS.length} videos`
         : playlistMode === 'creator_playlist'
-          ? 'Creator Series Playlist · 4 videos'
-          : 'Standalone Watch Page';
+          ? `Creator Series Playlist · ${SIMULATED_VIDEOS.length} videos`
+          : isLiveStream
+            ? 'Live Broadcast · DVR Enabled'
+            : 'Standalone Watch Page';
 
   const badgeText =
     !isHomeBrowseMode && settings.enabled && settings.perChannelSpeedEnabled
@@ -543,10 +665,24 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
           <button
             type="button"
+            onClick={handleQuickTestLiveDvr}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Switch to Live DVR broadcast 10 minutes behind live edge to test Back-to-Live catch-up math"
+          >
+            <Radio className="w-3.5 h-3.5 text-red-500" />
+            Test Live DVR (−10m)
+          </button>
+
+          <button
+            type="button"
             onClick={handleSkipNearEnd}
-            disabled={isHomeBrowseMode}
+            disabled={isHomeBrowseMode || isLiveStream}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 disabled:opacity-45 disabled:cursor-default transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            title="Jump to 3 seconds before the video ends to test playlist hard-stop"
+            title={
+              isLiveStream
+                ? 'Active live broadcasts have no end time — Stop After Video Ends is bypassed'
+                : 'Jump to 3 seconds before the video ends to test playlist hard-stop'
+            }
           >
             <FastForward className="w-3.5 h-3.5 text-red-500" />
             Test Last 3 Seconds
@@ -648,8 +784,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                             <Play className="w-7 h-7 text-red-500" />
                           </div>
                         )}
-                        <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/85 text-[11px] font-mono tabular-nums text-white">
-                          {formatTime(vid.durationSec)}
+                        <span
+                          className={`absolute bottom-2 right-2 px-1.5 py-0.5 rounded text-[11px] font-mono tabular-nums text-white ${
+                            vid.isLiveStream ? 'bg-red-600 font-semibold' : 'bg-black/85'
+                          }`}
+                        >
+                          {vid.isLiveStream ? 'LIVE' : formatTime(vid.durationSec)}
                         </span>
                       </div>
                       <div className="p-3.5 space-y-1.5">
@@ -799,7 +939,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     onClick={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-                      syncTime(ratio * currentVideo.durationSec);
+                      syncTime(ratio * timelineHorizon);
                       setStoppedByCadence(false);
                     }}
                   >
@@ -809,12 +949,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 text-white">
-                    <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between gap-3 text-white flex-wrap">
+                    <div className="flex items-center gap-2.5 flex-wrap">
                       <button
                         type="button"
                         onClick={() => {
-                          if (currentTime >= currentVideo.durationSec) {
+                          if (!isLiveStream && currentTime >= currentVideo.durationSec) {
                             handleReplay();
                           } else {
                             setIsPlaying((p) => !p);
@@ -852,9 +992,53 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         </span>
                       </button>
 
-                      <span className="text-xs font-mono tabular-nums text-white/90">
-                        {formatTime(currentTime)} / {formatTime(currentVideo.durationSec)}
-                      </span>
+                      {isLiveStream ? (
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isAtLiveHead}
+                            onClick={handleJumpToLive}
+                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+                              isAtLiveHead
+                                ? 'text-white cursor-default'
+                                : 'bg-white/10 hover:bg-white/20 text-slate-200 cursor-pointer'
+                            }`}
+                            title={
+                              isAtLiveHead
+                                ? 'Synced at live broadcast head'
+                                : 'Native YouTube LIVE button — click to jump to live head'
+                            }
+                          >
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                isAtLiveHead ? 'bg-red-500' : 'bg-slate-400'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            LIVE
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRewindDvr(600)}
+                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                            title="Simulate rewinding 10 minutes into the live DVR buffer"
+                          >
+                            −10m DVR
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRewindDvr(120)}
+                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                            title="Simulate rewinding 2 minutes into the live DVR buffer"
+                          >
+                            −2m DVR
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs font-mono tabular-nums text-white/90">
+                          {formatTime(currentTime)} / {formatTime(currentVideo.durationSec)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -862,10 +1046,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         type="button"
                         onClick={() => setShowNativeGearMenu((s) => !s)}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-xs font-mono tabular-nums text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                        title="Change speed via YouTube player gear menu"
+                        title={
+                          isLiveStream && isAtLiveHead && playbackSpeed > 1.0
+                            ? `YouTube clamps live-edge playback to 1.0× while Cadence preserves ${formatSpeed(playbackSpeed)}× rule`
+                            : 'Change speed via YouTube player gear menu'
+                        }
                       >
                         <SlidersHorizontal className="w-3.5 h-3.5" />
-                        Player: {formatSpeed(playbackSpeed)}×
+                        Player: {formatSpeed(actualPlayerRate)}×
                       </button>
                     </div>
                   </div>
@@ -987,18 +1175,41 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         </button>
                       </div>
 
-                      {remainingReadout && (
+                      {durationSlotModel.text && (
                         <>
                           <span
                             className="hidden sm:inline-block w-px h-3.5 bg-slate-700"
                             aria-hidden="true"
                           />
-                          <span
-                            className="text-[11px] font-mono tabular-nums text-slate-400 whitespace-nowrap"
-                            title="Real wall-clock time remaining at active playback speed"
+                          <button
+                            type="button"
+                            disabled={!durationSlotModel.clickable}
+                            onClick={() => {
+                              if (durationSlotModel.clickable) {
+                                handleJumpToLive();
+                              }
+                            }}
+                            className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] font-mono tabular-nums whitespace-nowrap shrink-0 transition-colors ${
+                              durationSlotModel.clickable
+                                ? 'border border-slate-700/90 text-slate-200 hover:bg-slate-800 hover:border-red-500/60 cursor-pointer'
+                                : durationSlotModel.mode === 'live-head'
+                                  ? 'border border-transparent text-slate-100 font-semibold cursor-default'
+                                  : 'border border-transparent text-slate-400 cursor-default'
+                            }`}
+                            title={durationSlotModel.title}
                           >
-                            {remainingReadout}
-                          </span>
+                            {durationSlotModel.mode !== 'vod' && (
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                  durationSlotModel.mode === 'live-head'
+                                    ? 'bg-red-500'
+                                    : 'bg-amber-500'
+                                }`}
+                                aria-hidden="true"
+                              />
+                            )}
+                            <span>{durationSlotModel.text}</span>
+                          </button>
                         </>
                       )}
                     </div>
@@ -1070,7 +1281,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                                 <span className="mx-1.5" aria-hidden="true">
                                   ·
                                 </span>
-                                <span className="tabular-nums">{formatTime(vid.durationSec)}</span>
+                                <span className="tabular-nums">
+                                  {vid.isLiveStream ? 'Streaming live' : formatTime(vid.durationSec)}
+                                </span>
                               </div>
                             </div>
                           </div>

@@ -4,6 +4,17 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-10-27
+
+### Added
+- **Live Broadcast Indicator & Real-Time `"Back to Live"` Catch-Up Countdown (#10)**: Added active live broadcast telemetry to the below-video speed bar: shows **`● Live`** when synced at the broadcast head, a real-time wall-clock catch-up countdown (**`Live in 20m @ 1.5×`**, accounting for the moving live edge via `lagSec / (rate - 1.0)`) when catching up above `1.0×`, and **`10m behind Live`** (with live pause drift) when paused or playing at `≤ 1.0×`.
+- **Clickable `"Jump to Live"` Resync (#10)**: Whenever behind the live edge on a DVR broadcast, clicking the Cadence duration readout jumps back to the live broadcast head via YouTube's native live badge / `seekable` horizon and resumes playback.
+- **Interactive Live DVR Test Scenario in Workbench (#10)**: Added a live DVR broadcast scenario (`Test Live DVR (−10m)`) with live-head `1.0×` clamping, pause drift, `−10m` / `−2m` DVR rewind controls, and one-click Jump to Live resync.
+
+### Fixed
+- **False 1-Hour Resetting Countdown on Live Streams (#10)**: Replaced single-class `.ytp-live` / `Infinity` checks with multi-tier live detection (`.ytp-time-display.ytp-live`, visible `.ytp-live-badge`, `videoId`-verified `videoDetails.isLive`, and `HTMLMediaElement.seekable` ranges) so YouTube's finite 3600-second MSE rolling horizon never triggers a false 60-minute countdown while archived past-stream VODs continue showing normal remaining duration.
+- **Live Stream Safeguards (`Stop at End` & Live-Head `1.0×` Clamp) (#10)**: Bypassed `Stop After Video Ends` on active live broadcasts and ignored YouTube's automatic `1.0×` rate clamp at the live head so saved channel rules and session overrides are never falsely tripped.
+
 ## [1.3.0] - 2026-10-27
 
 ### Added

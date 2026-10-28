@@ -52,9 +52,62 @@ html[dark] .cadence-bar-label.is-session strong {
   gap: 6px;
 }
 
+.cadence-remaining-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+  transition: background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+
+.cadence-remaining-slot:disabled {
+  opacity: 0.82;
+  cursor: default;
+}
+
+.cadence-remaining-slot.is-live-head:disabled {
+  opacity: 0.96;
+  font-weight: 600;
+}
+
+.cadence-remaining-slot.is-clickable {
+  border-color: rgba(148, 163, 184, 0.34);
+  cursor: pointer;
+  opacity: 0.96;
+}
+
+.cadence-remaining-slot.is-clickable:hover {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: rgba(220, 38, 38, 0.55);
+}
+
+.cadence-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.cadence-live-dot.is-head {
+  background: #ef4444;
+}
+
+.cadence-live-dot.is-behind {
+  background: #f59e0b;
+}
+
 .cadence-remaining-time {
   font-size: 11px;
-  opacity: 0.78;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
