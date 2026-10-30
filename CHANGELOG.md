@@ -4,6 +4,16 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-10-29
+
+### Added
+- **Ad Speed Lock (`"Speed locked during ad"`) & Automatic Post-Ad Session Override Restoration (#15)**: Locked playback speed changes in both directions (faster and slower) whenever a pre-roll or mid-roll ad (`ad-showing` / `ad-interrupting`) is playing across the below-video speed bar, Extension Toolbar Popup, YouTube player gear menu, and `Shift + >` / `Shift + <` keyboard shortcuts. Subtly dims toolbar controls during ads while keeping them clickable to surface `"Speed locked during ad"` in the floating amber toolbar toast and upper-right player warning toast, preserves any active single-video Session speed override untouched during the ad break, and automatically restores that Session override (or saved Channel Rule) the instant the ad finishes.
+- **Interactive Ad Simulation & `−15s DVR` Catch-Up Test Controls in Workbench (#15, #14, #17)**: Added a one-click **`Simulate Ad (5s)`** control (with an in-player **`Skip Ad`** button) and a **`−15s DVR`** live rewind button in the Web Workbench to test ad speed locking, post-ad session override restoration, and passive live catch-up handoff end-to-end.
+
+### Fixed
+- **Zero-Shift Fixed-Width Below-Video Toolbar Speed Readout (#16)**: Kept compact speed formatting (`1.8×`, `1×`, `1.75×`) inside CSS `inline-grid` intrinsic sizer containers (`tabular-nums`) for both the toolbar status label and remaining duration readout so stepping `+0.05` / `−0.05` (`1.75×` → `1.8×` → `1.85×`) never shifts button positions or alters the below-video toolbar width.
+- **Monotonic Live DVR Catch-Up Countdown & Native Red `LIVE` Badge Sync (#14, #17)**: Interpolated stepped `getProgressState().seekableEnd` DASH segment updates using wall-clock elapsed time and enforced a monotonic catch-up ceiling while playing unpaused above `1.0×` so behind-live and real-time catch-up counters never jump upward mid-catchup. When accelerated playback reaches YouTube's live buffer horizon, Cadence now automatically triggers YouTube's native `.ytp-live-badge` resync, re-activating YouTube's red `LIVE` badge alongside Cadence's `● Live` pill and clamping active speed cleanly to `1.0×`.
+
 ## [1.3.4] - 2026-10-28
 
 ### Added

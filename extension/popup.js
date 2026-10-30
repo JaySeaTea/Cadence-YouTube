@@ -128,6 +128,12 @@
           let channelId = '';
           let channelName = '';
           let handle = '';
+          let isAd = Boolean(
+            player &&
+              player.classList &&
+              (player.classList.contains('ad-showing') ||
+                player.classList.contains('ad-interrupting'))
+          );
           let isLive = false;
           let isAtLiveHead = false;
 
@@ -143,7 +149,7 @@
                 videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
-                if (resp.videoDetails.isLive === true) isLive = true;
+                if (!isAd && resp.videoDetails.isLive === true) isLive = true;
               }
             }
             if (player && typeof player.getVideoData === 'function') {
@@ -151,24 +157,26 @@
               if (vd && vd.video_id && (!urlVideoId || vd.video_id === urlVideoId)) {
                 videoId = vd.video_id;
                 if (!channelName) channelName = vd.author || '';
-                if (vd.isLive === true) isLive = true;
+                if (!isAd && vd.isLive === true) isLive = true;
               }
             }
-            const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-            const liveTime = document.querySelector('.ytp-time-display.ytp-live');
-            if (badge && liveTime && !badge.hasAttribute('hidden')) {
-              isLive = true;
-              isAtLiveHead = Boolean(
-                badge.disabled === true ||
-                  badge.hasAttribute('disabled') ||
-                  badge.getAttribute('aria-disabled') === 'true' ||
-                  badge.classList.contains('ytp-live-badge-is-livehead')
-              );
-            }
-            if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
-              const ps = player.getProgressState();
-              if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
-                isAtLiveHead = true;
+            if (!isAd) {
+              const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+              const liveTime = document.querySelector('.ytp-time-display.ytp-live');
+              if (badge && liveTime && !badge.hasAttribute('hidden')) {
+                isLive = true;
+                isAtLiveHead = Boolean(
+                  badge.disabled === true ||
+                    badge.hasAttribute('disabled') ||
+                    badge.getAttribute('aria-disabled') === 'true' ||
+                    badge.classList.contains('ytp-live-badge-is-livehead')
+                );
+              }
+              if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
+                const ps = player.getProgressState();
+                if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
+                  isAtLiveHead = true;
+                }
               }
             }
           } catch (_) {}
@@ -188,7 +196,7 @@
               const cMatch = href.match(/\/channel\/(UC[^/?#]+)/);
               if (cMatch && !channelId) channelId = cMatch[1];
               const txt = (ownerLink.textContent || '').trim();
-              if (txt) channelName = txt;
+              if (txt && !isAd) channelName = txt;
             }
           }
 
@@ -201,7 +209,8 @@
               channelName: channelName || handle,
               handle,
             },
-            activeSpeed: isLive && isAtLiveHead && rawRate > 1.01 ? 1.0 : rawRate,
+            activeSpeed: isAd || (isLive && isAtLiveHead && rawRate > 1.01) ? 1.0 : rawRate,
+            isAd,
             isLive,
             isAtLiveHead,
           };
@@ -254,12 +263,13 @@
   }
 
   const activeChannel = detected.channel;
-  const isLive = Boolean(detected.isLive);
-  let isAtLiveHead = Boolean(detected.isLive && detected.isAtLiveHead);
+  let isAd = Boolean(detected.isAd);
+  const isLive = Boolean(!isAd && detected.isLive);
+  let isAtLiveHead = Boolean(!isAd && detected.isLive && detected.isAtLiveHead);
   let currentRule = findRuleForChannel(activeChannel);
   let sessionOverrideSpeed =
     typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
-  let currentSpeed = Number(detected.activeSpeed) || 1.0;
+  let currentSpeed = isAd ? 1.0 : Number(detected.activeSpeed) || 1.0;
   if (isLive && isAtLiveHead && currentSpeed > 1.01) {
     currentSpeed = 1.0;
   }
@@ -274,6 +284,7 @@
 
   const initialBaseline = resolveRuleBaseline(currentRule);
   if (
+    !isAd &&
     sessionOverrideSpeed !== null &&
     Math.abs(sessionOverrideSpeed - initialBaseline) < 0.015
   ) {
@@ -281,6 +292,7 @@
   }
 
   if (
+    !isAd &&
     !(isLive && isAtLiveHead) &&
     sessionOverrideSpeed === null &&
     currentRule &&
@@ -300,6 +312,9 @@
               document.querySelector('ytd-watch-flexy #movie_player') ||
               document.querySelector('#ytd-player #movie_player') ||
               document.getElementById('movie_player');
+            if (p && p.classList && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))) {
+              return;
+            }
             const v =
               document.querySelector('ytd-watch-flexy video.html5-main-video') ||
               document.querySelector('#movie_player video.html5-main-video') ||
@@ -345,45 +360,94 @@
   function renderActiveSpeedUI() {
     currentRule = findRuleForChannel(activeChannel);
     const baseline = resolveRuleBaseline(currentRule);
-    if (sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
+    if (!isAd && sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
       sessionOverrideSpeed = null;
     }
-    if (isLive && isAtLiveHead) {
+    if (isAd) {
+      statusEl.textContent =
+        sessionOverrideSpeed !== null
+          ? `Ad Playing (1.0×) · Session ${formatSpeed(sessionOverrideSpeed)}× queued`
+          : currentRule
+            ? `Ad Playing (1.0×) · Rule ${formatSpeed(baseline)}× queued`
+            : 'Ad Playing · Speed Locked (1.0×)';
+      readoutEl.textContent = '1.0×';
+      stepperValEl.textContent = '1.0×';
+    } else if (isLive && isAtLiveHead) {
       statusEl.textContent =
         currentRule && baseline > 1.01
           ? `Live End (1.0×) · Rule ${formatSpeed(baseline)}×`
           : 'Live Broadcast · At Live End';
+      readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
+      stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
     } else if (sessionOverrideSpeed !== null) {
       statusEl.textContent = currentRule
         ? `Session Override · Rule is ${formatSpeed(baseline)}×`
         : `Session Override · Default ${formatSpeed(baseline)}×`;
+      readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
+      stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
     } else {
       statusEl.textContent = currentRule ? 'Saved Channel Rule' : 'Detected Channel · Default';
+      readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
+      stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
     }
-    readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
-    stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
 
     presetGridEl.querySelectorAll('.preset-btn').forEach((btn) => {
       const pid = btn.getAttribute('data-preset-id');
       const pspd = Number(btn.getAttribute('data-speed'));
       const isSelected =
+        !isAd &&
         sessionOverrideSpeed === null &&
         currentRule &&
         currentRule.presetId === pid &&
         Math.abs(currentSpeed - pspd) < 0.02;
+      const blocked = isAd || (isLive && isAtLiveHead && pspd > 1.01);
       btn.classList.toggle('active', Boolean(isSelected));
+      btn.classList.toggle('is-blocked', Boolean(blocked));
+      if (blocked) {
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('aria-disabled');
+      }
     });
 
     speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
       const val = Number(btn.getAttribute('data-speed'));
+      const blocked = isAd || (isLive && isAtLiveHead && val > 1.01);
       btn.classList.toggle(
         'active',
-        sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
+        !isAd && sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
       );
+      btn.classList.toggle('is-blocked', Boolean(blocked));
+      if (blocked) {
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('aria-disabled');
+      }
     });
+
+    if (stepDownBtn) {
+      stepDownBtn.classList.toggle('is-blocked', Boolean(isAd));
+      if (isAd) stepDownBtn.setAttribute('aria-disabled', 'true');
+      else stepDownBtn.removeAttribute('aria-disabled');
+    }
+    if (stepUpBtn) {
+      const upBlocked = isAd || (isLive && isAtLiveHead && currentSpeed + 0.05 > 1.01);
+      stepUpBtn.classList.toggle('is-blocked', Boolean(upBlocked));
+      if (upBlocked) stepUpBtn.setAttribute('aria-disabled', 'true');
+      else stepUpBtn.removeAttribute('aria-disabled');
+    }
   }
 
   async function assignSpeedFromPopup(newSpeed, presetId) {
+    if (isAd) {
+      renderActiveSpeedUI();
+      showPopupToast('Speed locked during ad');
+      chrome.tabs
+        .sendMessage(tab.id, { type: 'CADENCE_ENFORCE_AD_LOCK_NOTICE' })
+        .catch(() => {});
+      return;
+    }
+
     const clean = Math.round(Math.min(4.0, Math.max(0.25, Number(newSpeed) || 1.0)) * 100) / 100;
     if (isLive && isAtLiveHead && clean > 1.01) {
       currentSpeed = 1.0;
@@ -403,6 +467,20 @@
         .catch(() => {});
       return;
     }
+
+    try {
+      const preCheck = await chrome.tabs.sendMessage(tab.id, { type: 'CADENCE_GET_ACTIVE_CHANNEL' });
+      if (preCheck && preCheck.isAd) {
+        isAd = true;
+        currentSpeed = 1.0;
+        renderActiveSpeedUI();
+        showPopupToast('Speed locked during ad');
+        chrome.tabs
+          .sendMessage(tab.id, { type: 'CADENCE_ENFORCE_AD_LOCK_NOTICE' })
+          .catch(() => {});
+        return;
+      }
+    } catch (_) {}
 
     currentSpeed = clean;
     sessionOverrideSpeed = null;
@@ -456,6 +534,9 @@
             document.querySelector('ytd-watch-flexy #movie_player') ||
             document.querySelector('#ytd-player #movie_player') ||
             document.getElementById('movie_player');
+          if (p && p.classList && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))) {
+            return;
+          }
           const v =
             document.querySelector('ytd-watch-flexy video.html5-main-video') ||
             document.querySelector('#movie_player video.html5-main-video') ||

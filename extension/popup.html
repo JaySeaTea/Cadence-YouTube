@@ -166,6 +166,11 @@
         font-variant-numeric: tabular-nums;
       }
       .step-btn:hover { background: #1e293b; }
+      .preset-btn.is-blocked:not(.active),
+      .spd-btn.is-blocked:not(.active),
+      .step-btn.is-blocked {
+        opacity: 0.45;
+      }
       .step-val {
         min-width: 48px;
         text-align: center;

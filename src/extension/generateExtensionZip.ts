@@ -217,6 +217,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let config = window.__CADENCE_LAST_CONFIG__ || {
     enabled: true,
     perChannelSpeedEnabled: true,
+    hasSessionOverride: false,
     stopAfterVideoEnds: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
@@ -245,6 +246,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let resumedAtWallMs = 0;
   let lastObservedCurrentTime = null;
   let lastObservedSeekableEnd = null;
+  let lastSeekableEndWallMs = 0;
   let seekableEndAdvanceCount = 0;
   let explicitJumpToLiveUntil = 0;
   let psHasMseCeiling = false;
@@ -252,8 +254,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let lastCleanPsLagAt = 0;
   let lastUiNegativeLagSec = null;
   let lastUiNegativeLagAt = 0;
+  let catchupMaxLagSec = null;
+  let catchupActive = false;
+  let lastCatchupVideoSec = null;
+  let lastAutoLiveSyncAt = 0;
   let lastDvrRestoreAt = 0;
   let dvrRestoreAttempts = 0;
+  let wasAdPlaying = false;
+  let observedPlayerEl = null;
+  let playerClassObserver = null;
   let postSpeedVerifyTimer = null;
 
   function postToContent(type, payload) {
@@ -442,10 +451,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeEl instanceof HTMLInputElement ||
           activeEl instanceof HTMLTextAreaElement ||
           Boolean(activeEl && activeEl.isContentEditable);
-        if (!isTyping && config.enabled && (e.key === '>' || e.key === '.')) {
+        if (!isTyping && config.enabled) {
           const player = getMoviePlayer();
           const video = getMainVideo();
-          if (video && isLiveBroadcast(player, video)) {
+          if (isAdPlaying(player)) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (video && Math.abs(video.playbackRate - 1.0) > 0.02) {
+              applyLiveHeadRateClamp(player, video);
+            }
+            postToContent('AD_SPEED_BLOCKED', {
+              videoId: getCurrentVideoId(player) || '',
+            });
+            emitTimeRemaining(true);
+            return;
+          }
+          if ((e.key === '>' || e.key === '.') && video && isLiveBroadcast(player, video)) {
             const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
             if (dvr.isAtLiveHead && video.playbackRate >= 0.99) {
               setTimeout(() => {
@@ -581,6 +602,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     resumedAtWallMs = 0;
     lastObservedCurrentTime = null;
     lastObservedSeekableEnd = null;
+    lastSeekableEndWallMs = 0;
     seekableEndAdvanceCount = 0;
     explicitJumpToLiveUntil = 0;
     psHasMseCeiling = false;
@@ -588,6 +610,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastCleanPsLagAt = 0;
     lastUiNegativeLagSec = null;
     lastUiNegativeLagAt = 0;
+    catchupMaxLagSec = null;
+    catchupActive = false;
+    lastCatchupVideoSec = null;
+    lastAutoLiveSyncAt = 0;
     dvrRestoreAttempts = 0;
   }
 
@@ -610,6 +636,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     programmaticTimer = setTimeout(() => {
       isApplyingProgrammatically = false;
     }, 350);
+  }
+
+  function syncNativeLiveBadgeOnCatchup(player, video) {
+    const now = Date.now();
+    if (now < explicitJumpToLiveUntil || now - lastAutoLiveSyncAt < 3500) {
+      applyLiveHeadRateClamp(player, video);
+      return;
+    }
+    lastAutoLiveSyncAt = now;
+    explicitJumpToLiveUntil = now + 2800;
+    catchupMaxLagSec = null;
+    catchupActive = false;
+    lastCatchupVideoSec = null;
+    const badge = getLiveBadgeElement(player);
+    if (badge && !isLiveBadgeAtHead(badge)) {
+      try {
+        badge.click();
+      } catch (_) {}
+    }
+    applyLiveHeadRateClamp(player, video);
+    postToContent('LIVE_CAUGHT_UP', {
+      videoId: getCurrentVideoId(player) || '',
+    });
   }
 
   function readNegativeLiveTimeOffsetSec(player) {
@@ -673,17 +722,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } catch (_) {}
 
     if (ps && Number.isFinite(ps.seekableEnd)) {
-      if (!isPaused && lastObservedSeekableEnd !== null && ps.seekableEnd > lastObservedSeekableEnd + 0.35) {
+      if (!isPaused && lastObservedSeekableEnd !== null && ps.seekableEnd > lastObservedSeekableEnd + 0.25) {
         seekableEndAdvanceCount = Math.min(10, seekableEndAdvanceCount + 1);
+        lastSeekableEndWallMs = now;
       }
       lastObservedSeekableEnd = ps.seekableEnd;
     }
 
     let preAnchorLagSec = null;
-    if (liveAnchorWallMs > 0 && liveAnchorVideoSec !== null && currentVideoSec !== null) {
+    if (liveAnchorWallMs > 0 && liveAnchorWallMs <= now && liveAnchorVideoSec !== null && currentVideoSec !== null) {
       const preExpectedLive = liveAnchorVideoSec + Math.max(0, (now - liveAnchorWallMs) / 1000);
       preAnchorLagSec = Math.max(0, preExpectedLive - currentVideoSec);
     }
+
+    const backwardSeeked =
+      lastObservedCurrentTime !== null &&
+      currentVideoSec !== null &&
+      currentVideoSec < lastObservedCurrentTime - 1.25;
 
     const forwardSeekedNearHead =
       lastObservedCurrentTime !== null &&
@@ -699,6 +754,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ps && typeof ps.isAtLiveHead === 'boolean' ? ps.isAtLiveHead : null;
 
     let cleanPsLag = null;
+    let rawPsLagUninterpolated = null;
     let slidingDvrCapSec = null;
     if (
       !psHasMseCeiling &&
@@ -725,7 +781,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (matchesMseDurationCeiling) {
         psHasMseCeiling = true;
       } else {
-        cleanPsLag = Math.max(0, rawPsLag);
+        rawPsLagUninterpolated = Math.max(0, rawPsLag);
+        const segElapsedSec =
+          !isPaused && rawPsLagUninterpolated > 10 && lastSeekableEndWallMs > 0
+            ? Math.min(4.5, Math.max(0, (now - lastSeekableEndWallMs) / 1000))
+            : 0;
+        cleanPsLag = rawPsLagUninterpolated + segElapsedSec;
         if (
           Number.isFinite(ps.seekableStart) &&
           ps.seekableStart > 60 &&
@@ -777,6 +838,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       lastCleanPsLagAt = now;
       lastUiNegativeLagSec = 0;
       lastUiNegativeLagAt = now;
+      catchupMaxLagSec = null;
+      catchupActive = false;
+      lastCatchupVideoSec = null;
       liveHeadHysteresisBehind = false;
       dvrRestoreAttempts = 0;
       return {
@@ -885,6 +949,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         verifiedLagSec = pausedDrift;
       } else {
+        catchupMaxLagSec = null;
+        catchupActive = false;
+        lastCatchupVideoSec = null;
         liveHeadHysteresisBehind = false;
         return {
           isAtLiveHead: true,
@@ -894,14 +961,71 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
 
+    const activeMediaRate = isApplyingProgrammatically
+      ? lastAppliedSpeed
+      : video
+        ? Number(video.playbackRate) || 1.0
+        : 1.0;
+
+    if (!isPaused && activeMediaRate > 1.01) {
+      const largeBackwardJump =
+        backwardSeeked ||
+        (lastCatchupVideoSec !== null &&
+          currentVideoSec !== null &&
+          currentVideoSec < lastCatchupVideoSec - 1.25) ||
+        (catchupMaxLagSec !== null && verifiedLagSec - catchupMaxLagSec > 18);
+
+      catchupActive = true;
+      if (catchupMaxLagSec === null || largeBackwardJump) {
+        catchupMaxLagSec = verifiedLagSec;
+      } else if (verifiedLagSec > catchupMaxLagSec) {
+        verifiedLagSec = catchupMaxLagSec;
+      } else {
+        catchupMaxLagSec = verifiedLagSec;
+      }
+      if (currentVideoSec !== null) {
+        lastCatchupVideoSec = currentVideoSec;
+      }
+    } else {
+      catchupMaxLagSec = null;
+      catchupActive = false;
+      lastCatchupVideoSec = currentVideoSec;
+    }
+
+    const wasBehindBeforeTick = liveHeadHysteresisBehind;
+    const rawNearHead =
+      !isPaused &&
+      catchupActive &&
+      rawPsLagUninterpolated !== null &&
+      rawPsLagUninterpolated <= 9.5;
+    const pinnedAtLiveBufferCeiling =
+      !isPaused &&
+      catchupActive &&
+      maxBufferedEnd !== null &&
+      currentVideoSec !== null &&
+      maxBufferedEnd - currentVideoSec <= 0.65 &&
+      verifiedLagSec <= 14;
+
     if (liveHeadHysteresisBehind) {
-      if ((!isPaused && verifiedLagSec <= 9) || verifiedLagSec <= 2) {
+      if (
+        (!isPaused && (verifiedLagSec <= 9.5 || rawNearHead || pinnedAtLiveBufferCeiling)) ||
+        verifiedLagSec <= 2
+      ) {
         liveHeadHysteresisBehind = false;
       }
     } else {
       if (verifiedLagSec >= 12 || (isPaused && verifiedLagSec >= 5)) {
         liveHeadHysteresisBehind = true;
       }
+    }
+
+    if (wasBehindBeforeTick && !liveHeadHysteresisBehind && !isPaused) {
+      syncNativeLiveBadgeOnCatchup(player, video);
+      return {
+        isAtLiveHead: true,
+        dvrLagSec: 0,
+        isPaused: false,
+      };
     }
 
     return {
@@ -953,6 +1077,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         videoId,
         rawRemainingSec: null,
         playbackRate: 1.0,
+        isAd: true,
         isLive: false,
         isAtLiveHead: false,
         dvrLagSec: null,
@@ -1032,6 +1157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         videoId,
         rawRemainingSec: null,
         playbackRate: Math.round(liveRate * 100) / 100,
+        isAd: false,
         isLive: true,
         isAtLiveHead: dvr.isAtLiveHead,
         dvrLagSec: dvr.dvrLagSec,
@@ -1064,6 +1190,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       videoId,
       rawRemainingSec,
       playbackRate: Math.round(rate * 100) / 100,
+      isAd: false,
       isLive: false,
       isAtLiveHead: false,
       dvrLagSec: null,
@@ -1268,6 +1395,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     window.__CADENCE_HELD_VIDEO_ID__ = null;
     lastRemainingEmitAt = 0;
     lastRemainingSignature = '';
+    wasAdPlaying = false;
     resetLiveTrackingState('');
     const defaultSpd = Number(config.defaultSpeed) || 1.0;
     config.targetSpeed = defaultSpd;
@@ -1372,7 +1500,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function enforceConfiguredSpeedNow() {
     if (!isSupportedWatchPage()) return;
-    if (config.enabled && config.perChannelSpeedEnabled) {
+    if (config.enabled && (config.perChannelSpeedEnabled || config.hasSessionOverride)) {
       const player = getMoviePlayer();
       const video = getMainVideo();
       if (video && isLiveBroadcast(player, video)) {
@@ -1387,7 +1515,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 
+  function checkAdTransition() {
+    if (!isSupportedWatchPage()) {
+      wasAdPlaying = false;
+      return;
+    }
+    const player = getMoviePlayer();
+    if (!player) return;
+    const adNow = isAdPlaying(player);
+    if (adNow && !wasAdPlaying) {
+      wasAdPlaying = true;
+      lastDetectedKey = '';
+      const video = getMainVideo();
+      if (video && Math.abs(video.playbackRate - 1.0) > 0.02) {
+        applyLiveHeadRateClamp(player, video);
+      }
+      postToContent('AD_STATE_CHANGE', {
+        videoId: getCurrentVideoId(player) || '',
+        isAd: true,
+      });
+      emitTimeRemaining(true);
+    } else if (!adNow && wasAdPlaying) {
+      wasAdPlaying = false;
+      lastDetectedKey = '';
+      dvrRestoreAttempts = 0;
+      postToContent('AD_STATE_CHANGE', {
+        videoId: getCurrentVideoId(player) || '',
+        isAd: false,
+      });
+      broadcastChannelMetadata(true);
+      enforceConfiguredSpeedNow();
+      emitTimeRemaining(true);
+      setTimeout(() => {
+        if (isSupportedWatchPage() && !isAdPlaying(getMoviePlayer())) {
+          enforceConfiguredSpeedNow();
+          emitTimeRemaining(true);
+        }
+      }, 120);
+      setTimeout(() => {
+        if (isSupportedWatchPage() && !isAdPlaying(getMoviePlayer())) {
+          enforceConfiguredSpeedNow();
+          emitTimeRemaining(true);
+        }
+      }, 400);
+    }
+  }
+
+  function bindPlayerClassObserver() {
+    const player = getMoviePlayer();
+    if (!player || player === observedPlayerEl) return;
+    if (playerClassObserver) {
+      try {
+        playerClassObserver.disconnect();
+      } catch (_) {}
+    }
+    observedPlayerEl = player;
+    playerClassObserver = new MutationObserver(() => {
+      checkAdTransition();
+    });
+    playerClassObserver.observe(player, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+  }
+
   function bindVideoListeners() {
+    bindPlayerClassObserver();
     const video = getMainVideo();
     if (!video || video.__cadenceBridgeId === bridgeInstanceId) return;
     video.__cadenceBridgeId = bridgeInstanceId;
@@ -1395,6 +1588,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'timeupdate',
       () => {
+        checkAdTransition();
         checkNearVideoEnd();
         emitTimeRemaining(false);
       },
@@ -1502,8 +1696,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       () => {
         if (!isSupportedWatchPage()) return;
         const player = getMoviePlayer();
-        if (isApplyingProgrammatically || isAdPlaying(player)) return;
+        if (isApplyingProgrammatically) return;
         const newRate = Math.round(video.playbackRate * 100) / 100;
+        if (isAdPlaying(player)) {
+          if (Math.abs(newRate - 1.0) > 0.02 && config.enabled) {
+            applyLiveHeadRateClamp(player, video);
+            if (Date.now() <= recentNativeSpeedGestureUntil) {
+              postToContent('AD_SPEED_BLOCKED', {
+                videoId: getCurrentVideoId(player) || '',
+                attemptedSpeed: newRate,
+              });
+            }
+          }
+          emitTimeRemaining(true);
+          return;
+        }
 
         if (isLiveBroadcast(player, video)) {
           const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
@@ -1552,6 +1759,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function broadcastChannelMetadata(force = false) {
     bindVideoListeners();
+    checkAdTransition();
     if (!isSupportedWatchPage()) {
       handleNonWatchRoute();
       return;
@@ -1591,7 +1799,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         suppressNativeAutoplayAndPlaylist();
         if (!isSupportedWatchPage()) {
           applyPlaybackSpeed(config.defaultSpeed || 1.0, true);
-        } else if (config.enabled && config.perChannelSpeedEnabled && typeof payload.targetSpeed === 'number') {
+        } else if (
+          config.enabled &&
+          (config.perChannelSpeedEnabled || config.hasSessionOverride) &&
+          typeof payload.targetSpeed === 'number'
+        ) {
           applyPlaybackSpeed(payload.targetSpeed);
         }
       } else if (type === 'COMMAND') {
@@ -1599,6 +1811,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const requestedSpeed = Number(payload.speed) || 1.0;
           const player = getMoviePlayer();
           const video = getMainVideo();
+          if (isAdPlaying(player)) {
+            if (payload.fromUserGesture && config.enabled) {
+              postToContent('AD_SPEED_BLOCKED', {
+                videoId: getCurrentVideoId(player) || '',
+                attemptedSpeed: requestedSpeed,
+              });
+              emitTimeRemaining(true);
+              return;
+            }
+            config.targetSpeed = requestedSpeed;
+            window.__CADENCE_LAST_CONFIG__ = config;
+            return;
+          }
           if (
             payload.fromUserGesture &&
             requestedSpeed > 1.01 &&
@@ -1808,6 +2033,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   );
 
   heartbeatInterval = setInterval(() => {
+    checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
     maybeRestoreDvrCatchupSpeed();
@@ -1818,6 +2044,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       bridgeController.abort();
     } catch (_) {}
+    if (playerClassObserver) {
+      try {
+        playerClassObserver.disconnect();
+      } catch (_) {}
+      playerClassObserver = null;
+      observedPlayerEl = null;
+    }
     stopFastDetectionBurst();
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
@@ -1885,6 +2118,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     videoId: null,
     rawRemainingSec: null,
     playbackRate: null,
+    isAd: false,
     isLive: false,
     isAtLiveHead: false,
     dvrLagSec: null,
@@ -1895,6 +2129,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let toastTimeout = null;
   let barToastTimeout = null;
   let barToastVisible = false;
+  let barToastReason = null;
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
 
@@ -1919,6 +2154,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       barToastTimeout = null;
     }
     barToastVisible = false;
+    barToastReason = null;
     const existingToast = document.getElementById('cadence-bar-toast');
     if (existingToast) {
       if (removeDom) {
@@ -1991,6 +2227,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function formatDisplaySpeed(speed) {
     return Number(speed).toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1');
+  }
+
+  function formatCompactSpeed(speed) {
+    return String(Math.round((Number(speed) || 1.0) * 100) / 100);
+  }
+
+  function buildDurationSizerText(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/@\\s*[\\d.]+×$/, '@ 8.88×')
+      .replace(/\\b\\d([sm])\\b/g, '88$1')
+      .replace(/\\d/g, '8');
   }
 
   function clampSpeed(val) {
@@ -2138,22 +2386,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
   }
 
-  function clearSessionOverrideIfMatchesBaseline(meta) {
-    if (!meta || !hasActiveSessionOverride(meta.videoId)) return false;
-    const baseline = getBaselineSpeedForChannel(meta);
-    if (Math.abs(sessionOverride.speed - baseline) < 0.015) {
-      sessionOverride = { videoId: null, speed: null };
-      return true;
-    }
-    return false;
-  }
-
   function getWatchPlayerElement() {
     return (
       document.querySelector('ytd-watch-flexy #movie_player') ||
       document.querySelector('#ytd-player #movie_player') ||
       document.getElementById('movie_player')
     );
+  }
+
+  function isCurrentAdActive() {
+    if (!isWatchLocation()) return false;
+    if (remainingState.isAd || (currentChannel && currentChannel.isAd)) return true;
+    const player = getWatchPlayerElement();
+    return Boolean(
+      player &&
+        player.classList &&
+        (player.classList.contains('ad-showing') ||
+          player.classList.contains('ad-interrupting'))
+    );
+  }
+
+  function clearSessionOverrideIfMatchesBaseline(meta) {
+    if (!meta || meta.isAd || isCurrentAdActive() || !hasActiveSessionOverride(meta.videoId)) {
+      return false;
+    }
+    const baseline = getBaselineSpeedForChannel(meta);
+    if (Math.abs(sessionOverride.speed - baseline) < 0.015) {
+      sessionOverride = { videoId: null, speed: null };
+      return true;
+    }
+    return false;
   }
 
   function isDomLiveHeadFallback() {
@@ -2218,7 +2480,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function computeDurationSlotModel() {
-    if (!currentChannel || currentChannel.isAd || remainingState.hidden) {
+    if (!currentChannel || isCurrentAdActive() || remainingState.hidden) {
       return { visible: false, mode: 'hidden', text: '', title: '', clickable: false };
     }
     if (
@@ -2297,6 +2559,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const wrapEl = bar.querySelector('.cadence-remaining-wrap');
     const slotBtn = bar.querySelector('.cadence-remaining-slot');
     const dotEl = bar.querySelector('.cadence-live-dot');
+    const sizerEl = bar.querySelector('.cadence-remaining-sizer');
     const timeEl = bar.querySelector('.cadence-remaining-time');
     if (!wrapEl || !slotBtn || !dotEl || !timeEl) return;
 
@@ -2309,6 +2572,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (wrapEl.style.display !== 'inline-flex') {
       wrapEl.style.display = 'inline-flex';
+    }
+    const nextSizer = buildDurationSizerText(model.text);
+    if (sizerEl && sizerEl.textContent !== nextSizer) {
+      sizerEl.textContent = nextSizer;
     }
     if (timeEl.textContent !== model.text) {
       timeEl.textContent = model.text;
@@ -2354,9 +2621,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     activeSpeed = clampSpeed(targetSpeed);
+    const hasSession = Boolean(
+      currentChannel && hasActiveSessionOverride(currentChannel.videoId)
+    );
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+      hasSessionOverride: hasSession,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,
@@ -2366,7 +2637,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       enabled:
         showOnBadge &&
         isWatchLocation() &&
-        Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
+        Boolean(
+          state.settings.enabled && (state.settings.perChannelSpeedEnabled || hasSession)
+        ),
       speed: showOnBadge && isWatchLocation() ? activeSpeed : null,
     });
   }
@@ -2409,7 +2682,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  function showBarToast(label, durationMs = 2400) {
+  function showBarToast(label, durationMs = 2400, reason = 'live') {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
@@ -2437,6 +2710,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (textSpan) textSpan.textContent = label;
 
     barToastVisible = true;
+    barToastReason = reason;
     const positioned = positionBarToast();
     if (positioned) {
       toastEl.classList.add('cadence-visible');
@@ -2445,6 +2719,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     clearTimeout(barToastTimeout);
     barToastTimeout = setTimeout(() => {
       barToastVisible = false;
+      barToastReason = null;
       toastEl.classList.remove('cadence-visible');
     }, durationMs);
   }
@@ -2611,6 +2886,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       teardownInstance();
       return;
     }
+    if (isCurrentAdActive()) {
+      renderInPageBar();
+      showBarToast('Speed locked during ad', 2400, 'ad');
+      showPlayerToast('Speed locked during ad', true, true);
+      return;
+    }
     if (!currentChannel) {
       currentChannel = extractDomChannelFallback();
     }
@@ -2625,7 +2906,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pushConfigToBridge(1.0, true);
       postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
       renderInPageBar();
-      showBarToast('Stream is currently at live end');
+      showBarToast('Stream is currently at live end', 2400, 'live');
       showPlayerToast('Stream is currently at live end', true, true);
       return;
     }
@@ -2692,6 +2973,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function resetSessionSpeedFromBar() {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
+      return;
+    }
+    if (isCurrentAdActive()) {
+      renderInPageBar();
+      showBarToast('Speed locked during ad', 2400, 'ad');
+      showPlayerToast('Speed locked during ad', true, true);
       return;
     }
     if (!currentChannel) {
@@ -2774,45 +3061,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
+    const adActive = isCurrentAdActive();
     const matchedRule = findMatchingRule(currentChannel);
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-    const liveAtHead = isLiveAtHeadForChannel(currentChannel);
+    const liveAtHead = !adActive && isLiveAtHeadForChannel(currentChannel);
     const isLiveRuleClamped =
-      !isSessionActive && liveAtHead && baselineSpeed > 1.01;
-    const isStepUpLiveBlocked = liveAtHead && effectiveSpeed + 0.05 > 1.01;
+      !adActive && !isSessionActive && liveAtHead && baselineSpeed > 1.01;
+    const isStepUpLiveBlocked = !adActive && liveAtHead && effectiveSpeed + 0.05 > 1.01;
     const liveBlockedTooltip = 'Unavailable while synced at live end — rewind stream to speed up';
-    const modePrefix = isSessionActive ? 'Session' : matchedRule ? 'Rule' : 'Default';
-    const tooltip = isSessionActive
-      ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
-      : isLiveRuleClamped
-        ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
-        : 'Session-only speed bar · Does not overwrite saved channel rules';
+    const adBlockedTooltip = 'Speed locked during ad';
+    const modePrefix = adActive
+      ? 'Ad'
+      : isSessionActive
+        ? 'Session'
+        : matchedRule
+          ? 'Rule'
+          : 'Default';
+    const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
+    const tooltip = adActive
+      ? isSessionActive
+        ? \`Ad playing at 1× · Session \${formatDisplaySpeed(sessionOverride.speed)}× restores automatically after ad\`
+        : \`Ad playing at 1× · Speed locked during ad\`
+      : isSessionActive
+        ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
+        : isLiveRuleClamped
+          ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
+          : 'Session-only speed bar · Does not overwrite saved channel rules';
     const durationModel = computeDurationSlotModel();
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     bar.innerHTML = \`
-      <span class="cadence-bar-label \${isSessionActive ? 'is-session' : ''}" title="\${tooltip}">
-        \${modePrefix} · <strong>\${formatDisplaySpeed(effectiveSpeed)}×</strong>
+      <span class="cadence-bar-label \${!adActive && isSessionActive ? 'is-session' : ''}" title="\${tooltip}">
+        <span class="cadence-bar-label-sizer" aria-hidden="true">Session · <strong>8.88×</strong></span>
+        <span class="cadence-bar-label-text">\${modePrefix} · <strong>\${formatCompactSpeed(displayedBarRate)}×</strong></span>
       </span>
       <div class="cadence-bar-buttons">
         \${quickSpeeds
           .map((spd) => {
-            const isActive = Math.abs(effectiveSpeed - spd) < 0.015;
-            const isBlocked = liveAtHead && spd > 1.01;
+            const isActive = !adActive && Math.abs(effectiveSpeed - spd) < 0.015;
+            const isLiveBlocked = !adActive && liveAtHead && spd > 1.01;
+            const isDisabledVisual = adActive || isLiveBlocked;
             const chipClasses = [
               'cadence-speed-chip',
               isActive ? 'active' : '',
-              isBlocked ? 'is-live-blocked' : '',
+              adActive ? 'is-ad-blocked' : isLiveBlocked ? 'is-live-blocked' : '',
             ]
               .filter(Boolean)
               .join(' ');
-            const chipTitle = isBlocked
-              ? liveBlockedTooltip
-              : \`Set \${formatDisplaySpeed(spd)}× for this video session only\`;
+            const chipTitle = adActive
+              ? adBlockedTooltip
+              : isLiveBlocked
+                ? liveBlockedTooltip
+                : \`Set \${formatDisplaySpeed(spd)}× for this video session only\`;
             return \`
-          <button type="button" data-speed="\${spd}" class="\${chipClasses}"\${isBlocked ? ' aria-disabled="true"' : ''} title="\${chipTitle}">
+          <button type="button" data-speed="\${spd}" class="\${chipClasses}"\${isDisabledVisual ? ' aria-disabled="true"' : ''} title="\${chipTitle}">
             \${formatDisplaySpeed(spd)}×
           </button>
         \`;
@@ -2821,15 +3125,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       </div>
       <span class="cadence-bar-divider" aria-hidden="true"></span>
       <div class="cadence-bar-Fine">
-        <button type="button" data-step="-0.05" class="cadence-step-chip" title="Slow down by 0.05× for this video session">−0.05</button>
-        <button type="button" data-step="0.05" class="cadence-step-chip\${isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${isStepUpLiveBlocked ? liveBlockedTooltip : 'Speed up by 0.05× for this video session'}">+0.05</button>
-        <button type="button" data-action="reset" class="cadence-reset-chip \${isSessionActive ? 'is-active' : ''}" \${!isSessionActive ? 'disabled' : ''} title="Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)">Reset</button>
+        <button type="button" data-step="-0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Slow down by 0.05× for this video session'}">−0.05</button>
+        <button type="button" data-step="0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Speed up by 0.05× for this video session'}">+0.05</button>
+        <button type="button" data-action="reset" class="cadence-reset-chip \${!adActive && isSessionActive ? 'is-active' : ''}\${adActive ? ' is-ad-blocked' : ''}" \${!adActive && !isSessionActive ? 'disabled' : ''}\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : \`Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)\`}">Reset</button>
       </div>
       <span class="cadence-remaining-wrap" style="display:none;">
         <span class="cadence-bar-divider" aria-hidden="true"></span>
         <button type="button" class="cadence-remaining-slot" disabled>
           <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
-          <span class="cadence-remaining-time"></span>
+          <span class="cadence-remaining-time-grid">
+            <span class="cadence-remaining-sizer" aria-hidden="true"></span>
+            <span class="cadence-remaining-time"></span>
+          </span>
         </button>
       </span>
     \`;
@@ -2864,6 +3171,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resetBtn.addEventListener(
         'click',
         () => {
+          if (isCurrentAdActive()) {
+            showBarToast('Speed locked during ad', 2400, 'ad');
+            showPlayerToast('Speed locked during ad', true, true);
+            return;
+          }
           if (!hasActiveSessionOverride(currentChannel && currentChannel.videoId)) return;
           resetSessionSpeedFromBar();
         },
@@ -2911,6 +3223,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       videoId: null,
       rawRemainingSec: null,
       playbackRate: null,
+      isAd: false,
       isLive: false,
       isAtLiveHead: false,
       dvrLagSec: null,
@@ -2948,32 +3261,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (!currentChannel) return;
 
-    if (!state.settings.enabled || !state.settings.perChannelSpeedEnabled) {
+    if (
+      !state.settings.enabled ||
+      (!state.settings.perChannelSpeedEnabled &&
+        !hasActiveSessionOverride(currentChannel.videoId))
+    ) {
       pushConfigToBridge(1.0, false);
       renderInPageBar();
       return;
     }
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
+    const adActive = isCurrentAdActive();
     const rule = findMatchingRule(currentChannel);
     const speed = getEffectiveSpeedForChannel(currentChannel);
     pushConfigToBridge(speed, true);
+    if (adActive) {
+      safeSendMessage({
+        type: 'CADENCE_UPDATE_BADGE',
+        enabled:
+          isWatchLocation() &&
+          Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
+        speed: isWatchLocation() ? 1.0 : null,
+      });
+    }
     renderInPageBar();
 
     if (
       allowToast &&
+      !adActive &&
       !currentChannel.isAd &&
       !currentChannel.isPreview &&
       currentChannel.videoId &&
       lastToastedVideoId !== currentChannel.videoId
     ) {
       lastToastedVideoId = currentChannel.videoId;
-      const presetObj =
-        rule && rule.presetId !== 'custom'
-          ? state.presets.find((p) => p.id === rule.presetId)
-          : null;
-      const suffix = presetObj ? \` · \${presetObj.label}\` : rule ? ' · Channel Rule' : ' · Default';
-      showPlayerToast(\`\${formatDisplaySpeed(speed)}×\${suffix}\`);
+      if (hasActiveSessionOverride(currentChannel.videoId)) {
+        const suffix = rule
+          ? \`Rule \${formatDisplaySpeed(getBaselineSpeedForChannel(currentChannel))}× unchanged\`
+          : 'This video only';
+        showPlayerToast(\`Session \${formatDisplaySpeed(speed)}× · \${suffix}\`);
+      } else {
+        const presetObj =
+          rule && rule.presetId !== 'custom'
+            ? state.presets.find((p) => p.id === rule.presetId)
+            : null;
+        const suffix = presetObj ? \` · \${presetObj.label}\` : rule ? ' · Channel Rule' : ' · Default';
+        showPlayerToast(\`\${formatDisplaySpeed(speed)}×\${suffix}\`);
+      }
     }
   }
 
@@ -2991,7 +3326,91 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { type, payload } = event.data;
         if (type === 'LEFT_WATCH_PAGE') {
           handleLeftWatchPage();
+        } else if (type === 'AD_STATE_CHANGE' && payload) {
+          const adNow = Boolean(payload.isAd);
+          remainingState.isAd = adNow;
+          if (currentChannel) {
+            currentChannel = { ...currentChannel, isAd: adNow };
+          }
+          if (adNow) {
+            remainingState.hidden = true;
+            if (barToastReason === 'live') {
+              hideBarToast();
+            }
+            safeSendMessage({
+              type: 'CADENCE_UPDATE_BADGE',
+              enabled:
+                isWatchLocation() &&
+                Boolean(state.settings.enabled && state.settings.perChannelSpeedEnabled),
+              speed: isWatchLocation() ? 1.0 : null,
+            });
+            renderInPageBar();
+          } else {
+            if (barToastReason === 'ad') {
+              hideBarToast();
+            }
+            if (!currentChannel) {
+              currentChannel = extractDomChannelFallback();
+            }
+            if (
+              currentChannel &&
+              state.settings.enabled &&
+              (state.settings.perChannelSpeedEnabled ||
+                hasActiveSessionOverride(currentChannel.videoId))
+            ) {
+              const restoredSpeed = getEffectiveSpeedForChannel(currentChannel);
+              const restoredSession = hasActiveSessionOverride(currentChannel.videoId);
+              remainingState.playbackRate = restoredSpeed;
+              pushConfigToBridge(restoredSpeed, true);
+              postToBridge('COMMAND', { action: 'SET_SPEED', speed: restoredSpeed });
+              renderInPageBar();
+              if (restoredSession) {
+                showPlayerToast(\`Restored Session \${formatDisplaySpeed(restoredSpeed)}×\`);
+              }
+            } else {
+              renderInPageBar();
+            }
+          }
+        } else if (type === 'AD_SPEED_BLOCKED') {
+          remainingState.isAd = true;
+          if (currentChannel) {
+            currentChannel = { ...currentChannel, isAd: true };
+          }
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Speed locked during ad', 2400, 'ad');
+            showPlayerToast('Speed locked during ad', true, true);
+          }
+        } else if (type === 'LIVE_CAUGHT_UP') {
+          const hadFastRate =
+            activeSpeed > 1.01 ||
+            Boolean(
+              currentChannel &&
+                hasActiveSessionOverride(currentChannel.videoId) &&
+                sessionOverride.speed > 1.01
+            );
+          if (
+            currentChannel &&
+            hasActiveSessionOverride(currentChannel.videoId) &&
+            sessionOverride.speed > 1.01
+          ) {
+            sessionOverride = { videoId: null, speed: null };
+          }
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          remainingState.dvrLagSec = 0;
+          remainingState.isPaused = false;
+          remainingState.playbackRate = 1.0;
+          if (state.settings.enabled) {
+            const headSpeed = currentChannel ? getEffectiveSpeedForChannel(currentChannel) : 1.0;
+            pushConfigToBridge(headSpeed, Boolean(state.settings.perChannelSpeedEnabled));
+            renderInPageBar();
+            if (hadFastRate) {
+              showPlayerToast('Caught up to Live · 1.0×');
+            }
+          }
         } else if (type === 'TIME_REMAINING_UPDATE' && payload) {
+          const prevAd = Boolean(remainingState.isAd);
           const prevLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
           const prevIsLive = Boolean(remainingState.isLive);
           remainingState = {
@@ -3000,6 +3419,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
+            isAd: Boolean(payload.isAd),
             isLive: Boolean(payload.isLive),
             isAtLiveHead: Boolean(payload.isAtLiveHead),
             dvrLagSec: typeof payload.dvrLagSec === 'number' ? payload.dvrLagSec : null,
@@ -3012,7 +3432,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               hasActiveSessionOverride(currentChannel.videoId) &&
               sessionOverride.speed > 1.01
           );
-          if (nowLiveAtHead && (!prevLiveAtHead || hasAboveOneOverride || activeSpeed > 1.01)) {
+          if (prevAd !== remainingState.isAd) {
+            if (!remainingState.isAd && barToastReason === 'ad') {
+              hideBarToast();
+            }
+            if (
+              !remainingState.isAd &&
+              currentChannel &&
+              state.settings.enabled &&
+              (state.settings.perChannelSpeedEnabled ||
+                hasActiveSessionOverride(currentChannel.videoId))
+            ) {
+              const restoredSpeed = getEffectiveSpeedForChannel(currentChannel);
+              pushConfigToBridge(restoredSpeed, true);
+              postToBridge('COMMAND', { action: 'SET_SPEED', speed: restoredSpeed });
+            }
+            renderInPageBar();
+          } else if (nowLiveAtHead && (!prevLiveAtHead || hasAboveOneOverride || activeSpeed > 1.01)) {
             if (hasAboveOneOverride) {
               sessionOverride = { videoId: null, speed: null };
             }
@@ -3021,13 +3457,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             renderInPageBar();
           } else if (prevLiveAtHead && !nowLiveAtHead && remainingState.isLive) {
-            hideBarToast();
+            if (barToastReason === 'live') hideBarToast();
             if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
               pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
             }
             renderInPageBar();
           } else if (prevIsLive !== remainingState.isLive) {
-            if (!remainingState.isLive) hideBarToast();
+            if (!remainingState.isLive && barToastReason === 'live') hideBarToast();
             if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
               pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
             }
@@ -3049,7 +3485,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (state.settings.enabled) {
             pushConfigToBridge(1.0, Boolean(state.settings.perChannelSpeedEnabled));
             renderInPageBar();
-            showBarToast('Stream is currently at live end');
+            showBarToast('Stream is currently at live end', 2400, 'live');
             showPlayerToast('Stream is currently at live end', true, true);
           }
         } else if (type === 'NAVIGATION_PREVIEW' && payload && payload.videoId) {
@@ -3062,6 +3498,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               videoId: payload.videoId,
               rawRemainingSec: null,
               playbackRate: null,
+              isAd: false,
               isLive: false,
               isAtLiveHead: false,
               dvrLagSec: null,
@@ -3096,6 +3533,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         } else if (type === 'VIDEO_DETECTED' && payload) {
           const prevVideoId = currentChannel ? currentChannel.videoId : null;
+          const wasChannelAd = Boolean(currentChannel && currentChannel.isAd);
           if (payload.videoId && payload.videoId !== prevVideoId) {
             hideBarToast();
             if (sessionOverride.videoId !== payload.videoId) {
@@ -3106,6 +3544,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 videoId: payload.videoId,
                 rawRemainingSec: null,
                 playbackRate: null,
+                isAd: Boolean(payload.isAd),
                 isLive: false,
                 isAtLiveHead: false,
                 dvrLagSec: null,
@@ -3119,10 +3558,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               existingBanner.classList.remove('cadence-visible');
             }
           }
+          remainingState.isAd = Boolean(payload.isAd);
+          if (wasChannelAd && !payload.isAd && barToastReason === 'ad') {
+            hideBarToast();
+          }
           currentChannel = payload;
           applyForCurrentChannel(true);
         } else if (type === 'MANUAL_RATE_CHANGE' && payload) {
           if (!state.settings.enabled) return;
+          if (isCurrentAdActive()) {
+            renderInPageBar();
+            showBarToast('Speed locked during ad', 2400, 'ad');
+            showPlayerToast('Speed locked during ad', true, true);
+            return;
+          }
           if (payload && payload.channelName) {
             currentChannel = payload;
           } else if (!currentChannel) {
@@ -3137,7 +3586,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pushConfigToBridge(1.0, true);
             postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
             renderInPageBar();
-            showBarToast('Stream is currently at live end');
+            showBarToast('Stream is currently at live end', 2400, 'live');
             showPlayerToast('Stream is currently at live end', true, true);
             return;
           }
@@ -3220,16 +3669,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           document.querySelector('ytd-watch-flexy video.html5-main-video') ||
           document.querySelector('#movie_player video.html5-main-video') ||
           document.querySelector('video.html5-main-video');
+        const adActive = isCurrentAdActive();
         const baseline = getBaselineSpeedForChannel(currentChannel);
-        const liveAtHead = isLiveAtHeadForChannel(currentChannel);
+        const liveAtHead = !adActive && isLiveAtHeadForChannel(currentChannel);
         const liveClampedOrPaused =
-          remainingState.isLive && (remainingState.isAtLiveHead || remainingState.isPaused);
+          adActive ||
+          (remainingState.isLive && (remainingState.isAtLiveHead || remainingState.isPaused));
         const liveVideoSpeed = liveClampedOrPaused
           ? getEffectiveSpeedForChannel(currentChannel)
           : video
             ? Math.round(video.playbackRate * 100) / 100
             : activeSpeed;
         if (
+          !adActive &&
           !liveClampedOrPaused &&
           currentChannel &&
           hasActiveSessionOverride(currentChannel.videoId) &&
@@ -3242,18 +3694,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const rule = findMatchingRule(currentChannel);
         const isSession = hasActiveSessionOverride(currentChannel && currentChannel.videoId);
-        const reportedSpeed = state.settings.enabled
-          ? getEffectiveSpeedForChannel(currentChannel)
-          : liveVideoSpeed || activeSpeed;
+        const reportedSpeed = adActive
+          ? 1.0
+          : state.settings.enabled
+            ? getEffectiveSpeedForChannel(currentChannel)
+            : liveVideoSpeed || activeSpeed;
         sendResponse({
           channel: currentChannel,
           activeSpeed: reportedSpeed,
           matchedRule: rule,
           baselineSpeed: baseline,
           sessionOverrideSpeed: isSession ? sessionOverride.speed : null,
-          isLive: Boolean(remainingState.isLive || liveAtHead),
+          isAd: adActive,
+          isLive: Boolean(!adActive && (remainingState.isLive || liveAtHead)),
           isAtLiveHead: liveAtHead,
         });
+        return false;
+      }
+      if (msg && msg.type === 'CADENCE_ENFORCE_AD_LOCK_NOTICE') {
+        remainingState.isAd = true;
+        renderInPageBar();
+        showBarToast('Speed locked during ad', 2400, 'ad');
+        showPlayerToast('Speed locked during ad', true, true);
+        sendResponse({ ok: true });
         return false;
       }
       if (msg && msg.type === 'CADENCE_ENFORCE_LIVE_HEAD_LOCK') {
@@ -3270,12 +3733,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pushConfigToBridge(1.0, true);
         postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
         renderInPageBar();
-        showBarToast('Stream is currently at live end');
+        showBarToast('Stream is currently at live end', 2400, 'live');
         showPlayerToast('Stream is currently at live end', true, true);
         sendResponse({ ok: true });
         return false;
       }
       if (msg && msg.type === 'CADENCE_SET_CHANNEL_SPEED') {
+        if (isCurrentAdActive()) {
+          renderInPageBar();
+          showBarToast('Speed locked during ad', 2400, 'ad');
+          showPlayerToast('Speed locked during ad', true, true);
+          sendResponse({ ok: false, blockedDuringAd: true });
+          return false;
+        }
         const targetMeta = msg.channel || currentChannel || extractDomChannelFallback();
         if (targetMeta) {
           currentChannel = targetMeta;
@@ -3286,7 +3756,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pushConfigToBridge(1.0, true);
             postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
             renderInPageBar();
-            showBarToast('Stream is currently at live end');
+            showBarToast('Stream is currently at live end', 2400, 'live');
             showPlayerToast('Stream is currently at live end', true, true);
             sendResponse({ ok: false, blockedAtLiveHead: true });
             return false;
@@ -3381,9 +3851,28 @@ html[dark] .cadence-owner-bar {
 }
 
 .cadence-bar-label {
+  display: inline-grid;
+  align-items: center;
+  flex-shrink: 0;
   white-space: nowrap;
   opacity: 0.92;
   font-variant-numeric: tabular-nums;
+}
+
+.cadence-bar-label-sizer,
+.cadence-bar-label-text {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-bar-label-sizer {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 
 .cadence-bar-label.is-session strong {
@@ -3467,10 +3956,26 @@ html[dark] .cadence-bar-label.is-session strong {
   background: #f59e0b;
 }
 
-.cadence-remaining-time {
+.cadence-remaining-time-grid {
+  display: inline-grid;
+  align-items: center;
   font-size: 11px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.cadence-remaining-sizer,
+.cadence-remaining-time {
+  grid-area: 1 / 1;
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-remaining-sizer {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 
 .cadence-speed-chip {
@@ -3517,12 +4022,18 @@ html[dark] .cadence-bar-label.is-session strong {
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active),
-.cadence-step-chip.is-live-blocked {
+.cadence-step-chip.is-live-blocked,
+.cadence-speed-chip.is-ad-blocked,
+.cadence-step-chip.is-ad-blocked,
+.cadence-reset-chip.is-ad-blocked {
   opacity: 0.42;
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active):hover,
-.cadence-step-chip.is-live-blocked:hover {
+.cadence-step-chip.is-live-blocked:hover,
+.cadence-speed-chip.is-ad-blocked:hover,
+.cadence-step-chip.is-ad-blocked:hover,
+.cadence-reset-chip.is-ad-blocked:hover {
   opacity: 0.68;
   background: rgba(245, 158, 11, 0.14);
 }
@@ -3846,6 +4357,11 @@ html[dark] .cadence-bar-label.is-session strong {
         font-variant-numeric: tabular-nums;
       }
       .step-btn:hover { background: #1e293b; }
+      .preset-btn.is-blocked:not(.active),
+      .spd-btn.is-blocked:not(.active),
+      .step-btn.is-blocked {
+        opacity: 0.45;
+      }
       .step-val {
         min-width: 48px;
         text-align: center;
@@ -4081,6 +4597,12 @@ html[dark] .cadence-bar-label.is-session strong {
           let channelId = '';
           let channelName = '';
           let handle = '';
+          let isAd = Boolean(
+            player &&
+              player.classList &&
+              (player.classList.contains('ad-showing') ||
+                player.classList.contains('ad-interrupting'))
+          );
           let isLive = false;
           let isAtLiveHead = false;
 
@@ -4096,7 +4618,7 @@ html[dark] .cadence-bar-label.is-session strong {
                 videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
-                if (resp.videoDetails.isLive === true) isLive = true;
+                if (!isAd && resp.videoDetails.isLive === true) isLive = true;
               }
             }
             if (player && typeof player.getVideoData === 'function') {
@@ -4104,24 +4626,26 @@ html[dark] .cadence-bar-label.is-session strong {
               if (vd && vd.video_id && (!urlVideoId || vd.video_id === urlVideoId)) {
                 videoId = vd.video_id;
                 if (!channelName) channelName = vd.author || '';
-                if (vd.isLive === true) isLive = true;
+                if (!isAd && vd.isLive === true) isLive = true;
               }
             }
-            const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-            const liveTime = document.querySelector('.ytp-time-display.ytp-live');
-            if (badge && liveTime && !badge.hasAttribute('hidden')) {
-              isLive = true;
-              isAtLiveHead = Boolean(
-                badge.disabled === true ||
-                  badge.hasAttribute('disabled') ||
-                  badge.getAttribute('aria-disabled') === 'true' ||
-                  badge.classList.contains('ytp-live-badge-is-livehead')
-              );
-            }
-            if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
-              const ps = player.getProgressState();
-              if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
-                isAtLiveHead = true;
+            if (!isAd) {
+              const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+              const liveTime = document.querySelector('.ytp-time-display.ytp-live');
+              if (badge && liveTime && !badge.hasAttribute('hidden')) {
+                isLive = true;
+                isAtLiveHead = Boolean(
+                  badge.disabled === true ||
+                    badge.hasAttribute('disabled') ||
+                    badge.getAttribute('aria-disabled') === 'true' ||
+                    badge.classList.contains('ytp-live-badge-is-livehead')
+                );
+              }
+              if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
+                const ps = player.getProgressState();
+                if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
+                  isAtLiveHead = true;
+                }
               }
             }
           } catch (_) {}
@@ -4141,7 +4665,7 @@ html[dark] .cadence-bar-label.is-session strong {
               const cMatch = href.match(/\\/channel\\/(UC[^/?#]+)/);
               if (cMatch && !channelId) channelId = cMatch[1];
               const txt = (ownerLink.textContent || '').trim();
-              if (txt) channelName = txt;
+              if (txt && !isAd) channelName = txt;
             }
           }
 
@@ -4154,7 +4678,8 @@ html[dark] .cadence-bar-label.is-session strong {
               channelName: channelName || handle,
               handle,
             },
-            activeSpeed: isLive && isAtLiveHead && rawRate > 1.01 ? 1.0 : rawRate,
+            activeSpeed: isAd || (isLive && isAtLiveHead && rawRate > 1.01) ? 1.0 : rawRate,
+            isAd,
             isLive,
             isAtLiveHead,
           };
@@ -4207,12 +4732,13 @@ html[dark] .cadence-bar-label.is-session strong {
   }
 
   const activeChannel = detected.channel;
-  const isLive = Boolean(detected.isLive);
-  let isAtLiveHead = Boolean(detected.isLive && detected.isAtLiveHead);
+  let isAd = Boolean(detected.isAd);
+  const isLive = Boolean(!isAd && detected.isLive);
+  let isAtLiveHead = Boolean(!isAd && detected.isLive && detected.isAtLiveHead);
   let currentRule = findRuleForChannel(activeChannel);
   let sessionOverrideSpeed =
     typeof detected.sessionOverrideSpeed === 'number' ? detected.sessionOverrideSpeed : null;
-  let currentSpeed = Number(detected.activeSpeed) || 1.0;
+  let currentSpeed = isAd ? 1.0 : Number(detected.activeSpeed) || 1.0;
   if (isLive && isAtLiveHead && currentSpeed > 1.01) {
     currentSpeed = 1.0;
   }
@@ -4227,6 +4753,7 @@ html[dark] .cadence-bar-label.is-session strong {
 
   const initialBaseline = resolveRuleBaseline(currentRule);
   if (
+    !isAd &&
     sessionOverrideSpeed !== null &&
     Math.abs(sessionOverrideSpeed - initialBaseline) < 0.015
   ) {
@@ -4234,6 +4761,7 @@ html[dark] .cadence-bar-label.is-session strong {
   }
 
   if (
+    !isAd &&
     !(isLive && isAtLiveHead) &&
     sessionOverrideSpeed === null &&
     currentRule &&
@@ -4253,6 +4781,9 @@ html[dark] .cadence-bar-label.is-session strong {
               document.querySelector('ytd-watch-flexy #movie_player') ||
               document.querySelector('#ytd-player #movie_player') ||
               document.getElementById('movie_player');
+            if (p && p.classList && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))) {
+              return;
+            }
             const v =
               document.querySelector('ytd-watch-flexy video.html5-main-video') ||
               document.querySelector('#movie_player video.html5-main-video') ||
@@ -4298,45 +4829,94 @@ html[dark] .cadence-bar-label.is-session strong {
   function renderActiveSpeedUI() {
     currentRule = findRuleForChannel(activeChannel);
     const baseline = resolveRuleBaseline(currentRule);
-    if (sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
+    if (!isAd && sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baseline) < 0.015) {
       sessionOverrideSpeed = null;
     }
-    if (isLive && isAtLiveHead) {
+    if (isAd) {
+      statusEl.textContent =
+        sessionOverrideSpeed !== null
+          ? \`Ad Playing (1.0×) · Session \${formatSpeed(sessionOverrideSpeed)}× queued\`
+          : currentRule
+            ? \`Ad Playing (1.0×) · Rule \${formatSpeed(baseline)}× queued\`
+            : 'Ad Playing · Speed Locked (1.0×)';
+      readoutEl.textContent = '1.0×';
+      stepperValEl.textContent = '1.0×';
+    } else if (isLive && isAtLiveHead) {
       statusEl.textContent =
         currentRule && baseline > 1.01
           ? \`Live End (1.0×) · Rule \${formatSpeed(baseline)}×\`
           : 'Live Broadcast · At Live End';
+      readoutEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
+      stepperValEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
     } else if (sessionOverrideSpeed !== null) {
       statusEl.textContent = currentRule
         ? \`Session Override · Rule is \${formatSpeed(baseline)}×\`
         : \`Session Override · Default \${formatSpeed(baseline)}×\`;
+      readoutEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
+      stepperValEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
     } else {
       statusEl.textContent = currentRule ? 'Saved Channel Rule' : 'Detected Channel · Default';
+      readoutEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
+      stepperValEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
     }
-    readoutEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
-    stepperValEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
 
     presetGridEl.querySelectorAll('.preset-btn').forEach((btn) => {
       const pid = btn.getAttribute('data-preset-id');
       const pspd = Number(btn.getAttribute('data-speed'));
       const isSelected =
+        !isAd &&
         sessionOverrideSpeed === null &&
         currentRule &&
         currentRule.presetId === pid &&
         Math.abs(currentSpeed - pspd) < 0.02;
+      const blocked = isAd || (isLive && isAtLiveHead && pspd > 1.01);
       btn.classList.toggle('active', Boolean(isSelected));
+      btn.classList.toggle('is-blocked', Boolean(blocked));
+      if (blocked) {
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('aria-disabled');
+      }
     });
 
     speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
       const val = Number(btn.getAttribute('data-speed'));
+      const blocked = isAd || (isLive && isAtLiveHead && val > 1.01);
       btn.classList.toggle(
         'active',
-        sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
+        !isAd && sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
       );
+      btn.classList.toggle('is-blocked', Boolean(blocked));
+      if (blocked) {
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('aria-disabled');
+      }
     });
+
+    if (stepDownBtn) {
+      stepDownBtn.classList.toggle('is-blocked', Boolean(isAd));
+      if (isAd) stepDownBtn.setAttribute('aria-disabled', 'true');
+      else stepDownBtn.removeAttribute('aria-disabled');
+    }
+    if (stepUpBtn) {
+      const upBlocked = isAd || (isLive && isAtLiveHead && currentSpeed + 0.05 > 1.01);
+      stepUpBtn.classList.toggle('is-blocked', Boolean(upBlocked));
+      if (upBlocked) stepUpBtn.setAttribute('aria-disabled', 'true');
+      else stepUpBtn.removeAttribute('aria-disabled');
+    }
   }
 
   async function assignSpeedFromPopup(newSpeed, presetId) {
+    if (isAd) {
+      renderActiveSpeedUI();
+      showPopupToast('Speed locked during ad');
+      chrome.tabs
+        .sendMessage(tab.id, { type: 'CADENCE_ENFORCE_AD_LOCK_NOTICE' })
+        .catch(() => {});
+      return;
+    }
+
     const clean = Math.round(Math.min(4.0, Math.max(0.25, Number(newSpeed) || 1.0)) * 100) / 100;
     if (isLive && isAtLiveHead && clean > 1.01) {
       currentSpeed = 1.0;
@@ -4356,6 +4936,20 @@ html[dark] .cadence-bar-label.is-session strong {
         .catch(() => {});
       return;
     }
+
+    try {
+      const preCheck = await chrome.tabs.sendMessage(tab.id, { type: 'CADENCE_GET_ACTIVE_CHANNEL' });
+      if (preCheck && preCheck.isAd) {
+        isAd = true;
+        currentSpeed = 1.0;
+        renderActiveSpeedUI();
+        showPopupToast('Speed locked during ad');
+        chrome.tabs
+          .sendMessage(tab.id, { type: 'CADENCE_ENFORCE_AD_LOCK_NOTICE' })
+          .catch(() => {});
+        return;
+      }
+    } catch (_) {}
 
     currentSpeed = clean;
     sessionOverrideSpeed = null;
@@ -4409,6 +5003,9 @@ html[dark] .cadence-bar-label.is-session strong {
             document.querySelector('ytd-watch-flexy #movie_player') ||
             document.querySelector('#ytd-player #movie_player') ||
             document.getElementById('movie_player');
+          if (p && p.classList && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'))) {
+            return;
+          }
           const v =
             document.querySelector('ytd-watch-flexy video.html5-main-video') ||
             document.querySelector('#movie_player video.html5-main-video') ||
@@ -4975,21 +5572,21 @@ html[dark] .cadence-bar-label.is-session strong {
       path: 'page-bridge.js',
       language: 'javascript',
       description:
-        'MAIN-world bridge with monotonic sleep-resilient Live DVR lag tracking, live-head 1.0× speed clamp, pre-navigation card hints, and synchronous loadstart enforcement.',
+        'MAIN-world bridge with smooth monotonic Live DVR catch-up, automatic native LIVE badge sync, ad-lock guardrails, and zero-lag loadstart enforcement.',
       content: pageBridgeJs,
     },
     {
       path: 'content.js',
       language: 'javascript',
       description:
-        'Isolated content script with live-end >1.0× speed guardrails, automatic 1.0× sync on Jump to Live, below-video speed bar + remaining duration readout, and popup sync.',
+        'Isolated content script with ad speed locking & post-ad session override restoration, live-end guardrails, and fixed-width compact watch bar.',
       content: contentJs,
     },
     {
       path: 'content.css',
       language: 'css',
       description:
-        'Adaptive light/dark styles for the watch-page speed bar, tabular remaining-time readout, and end-stop banner.',
+        'Adaptive light/dark styles for the zero-shift fixed-width speed bar, ad/live-blocked indicators, floating amber bar toast, and end-stop banner.',
       content: contentCss,
     },
     {
@@ -5003,14 +5600,14 @@ html[dark] .cadence-bar-label.is-session strong {
       path: 'popup.html',
       language: 'html',
       description:
-        'Native dark-mode toolbar popup displaying active version, live-end status notice, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
+        'Native dark-mode toolbar popup displaying active version, ad/live status notices, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
       content: popupHtml,
     },
     {
       path: 'popup.js',
       language: 'javascript',
       description:
-        'Popup controller reading manifest version dynamically, enforcing live-end >1.0× guardrails with inline toast feedback, and saving channel rules.',
+        'Popup controller reading manifest version dynamically, enforcing ad and live-end speed guardrails with inline toast feedback, and saving channel rules.',
       content: popupJs,
     },
     {

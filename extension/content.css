@@ -20,9 +20,28 @@ html[dark] .cadence-owner-bar {
 }
 
 .cadence-bar-label {
+  display: inline-grid;
+  align-items: center;
+  flex-shrink: 0;
   white-space: nowrap;
   opacity: 0.92;
   font-variant-numeric: tabular-nums;
+}
+
+.cadence-bar-label-sizer,
+.cadence-bar-label-text {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-bar-label-sizer {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 
 .cadence-bar-label.is-session strong {
@@ -106,10 +125,26 @@ html[dark] .cadence-bar-label.is-session strong {
   background: #f59e0b;
 }
 
-.cadence-remaining-time {
+.cadence-remaining-time-grid {
+  display: inline-grid;
+  align-items: center;
   font-size: 11px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.cadence-remaining-sizer,
+.cadence-remaining-time {
+  grid-area: 1 / 1;
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-remaining-sizer {
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
 }
 
 .cadence-speed-chip {
@@ -156,12 +191,18 @@ html[dark] .cadence-bar-label.is-session strong {
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active),
-.cadence-step-chip.is-live-blocked {
+.cadence-step-chip.is-live-blocked,
+.cadence-speed-chip.is-ad-blocked,
+.cadence-step-chip.is-ad-blocked,
+.cadence-reset-chip.is-ad-blocked {
   opacity: 0.42;
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active):hover,
-.cadence-step-chip.is-live-blocked:hover {
+.cadence-step-chip.is-live-blocked:hover,
+.cadence-speed-chip.is-ad-blocked:hover,
+.cadence-step-chip.is-ad-blocked:hover,
+.cadence-reset-chip.is-ad-blocked:hover {
   opacity: 0.68;
   background: rgba(245, 158, 11, 0.14);
 }

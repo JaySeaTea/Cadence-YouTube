@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   FastForward,
+  Lock,
   Pause,
   Play,
   Radio,
@@ -57,6 +58,19 @@ function formatSpeed(speed: number): string {
   return speed.toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1');
 }
 
+function formatCompactSpeed(speed: number): string {
+  const n = Math.round(speed * 100) / 100;
+  return String(n);
+}
+
+function buildDurationSizerText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/@\s*[\d.]+×$/, '@ 8.88×')
+    .replace(/\b\d([sm])\b/g, '88$1')
+    .replace(/\d/g, '8');
+}
+
 function clampSpeed(speed: number): number {
   return Math.round(Math.min(4.0, Math.max(0.25, speed)) * 100) / 100;
 }
@@ -104,13 +118,16 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [playerToast, setPlayerToast] = useState<string | null>(null);
   const [playerToastWarning, setPlayerToastWarning] = useState<boolean>(false);
   const [barToast, setBarToast] = useState<string | null>(null);
+  const [barToastReason, setBarToastReason] = useState<'live' | 'ad' | null>(null);
   const [popupToast, setPopupToast] = useState<string | null>(null);
+  const [adRemainingSec, setAdRemainingSec] = useState<number>(0);
   const [showNativeGearMenu, setShowNativeGearMenu] = useState<boolean>(false);
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
 
   const currentTimeRef = useRef<number>(1440);
   const liveEdgeRef = useRef<number>(3600);
+  const adRemainingRef = useRef<number>(0);
   const wasBehindLiveRef = useRef<boolean>(false);
   const sessionOverrideRef = useRef<number | null>(null);
   const baselineSpeedRef = useRef<number>(1.0);
@@ -130,9 +147,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     setLiveEdgeTime(val);
   };
 
+  const syncAdRemaining = (val: number) => {
+    adRemainingRef.current = val;
+    setAdRemainingSec(val);
+  };
+
   const isHomeBrowseMode = playlistMode === 'youtube_home';
   const currentVideo = SIMULATED_VIDEOS[currentVideoIndex];
   const isLiveStream = Boolean(currentVideo.isLiveStream);
+  const isAdPlaying = !isHomeBrowseMode && adRemainingSec > 0;
 
   const matchedRule = rules.find(
     (r) =>
@@ -155,14 +178,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       barToastTimerRef.current = null;
     }
     setBarToast(null);
+    setBarToastReason(null);
   };
 
-  const triggerBarToast = (message: string) => {
+  const triggerBarToast = (message: string, reason: 'live' | 'ad' = 'live') => {
     if (!settings.enabled || !settings.showInPageControlBar) return;
     setBarToast(message);
+    setBarToastReason(reason);
     if (barToastTimerRef.current) window.clearTimeout(barToastTimerRef.current);
     barToastTimerRef.current = window.setTimeout(() => {
       setBarToast(null);
+      setBarToastReason(null);
     }, 2400);
   };
 
@@ -225,6 +251,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const handleEnterYouTubeHome = () => {
     setPlaylistMode('youtube_home');
     setIsPlaying(false);
+    syncAdRemaining(0);
     setSessionOverrideSpeed(null);
     setStoppedByCadence(false);
     setAutoAdvancingCountdown(false);
@@ -257,6 +284,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     }
 
     setCurrentVideoIndex(index);
+    syncAdRemaining(0);
     setSessionOverrideSpeed(null);
     clearBarToast();
     setPopupToast(null);
@@ -348,16 +376,91 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     }
   };
 
+  const finishSimulatedAd = (skippedManually = false) => {
+    syncAdRemaining(0);
+    if (barToastReason === 'ad') {
+      clearBarToast();
+    }
+    setPopupToast(null);
+    const activeSession = sessionOverrideRef.current;
+    const restoredTarget =
+      activeSession !== null ? activeSession : baselineSpeedRef.current;
+    const liveBehindNow =
+      isLiveStream &&
+      (wasBehindLiveRef.current || liveEdgeRef.current - currentTimeRef.current >= 3);
+    const effectivePostAd =
+      isLiveStream && !liveBehindNow && restoredTarget > 1.01 ? 1.0 : restoredTarget;
+
+    if (settings.enabled) {
+      if (activeSession !== null) {
+        triggerToast(`Restored Session ${formatSpeed(effectivePostAd)}×`);
+        onAddLog(
+          `${skippedManually ? 'Skipped ad' : 'Mid-roll ad finished'} — restored Session ${formatSpeed(effectivePostAd)}×`,
+          `Preserved session speed override across ad break on "${currentVideo.title}"`
+        );
+      } else if (settings.perChannelSpeedEnabled && Math.abs(effectivePostAd - 1.0) > 0.015) {
+        triggerToast(`${formatSpeed(effectivePostAd)}× · ${matchedRule ? 'Channel Rule' : 'Default'}`);
+        onAddLog(
+          `${skippedManually ? 'Skipped ad' : 'Ad finished'} — restored ${formatSpeed(effectivePostAd)}×`,
+          `Re-applied ${matchedRule ? 'saved channel rule' : 'default speed'} for ${currentVideo.channelName}`
+        );
+      } else {
+        onAddLog(
+          skippedManually ? 'Skipped simulated ad' : 'Simulated ad finished',
+          `Resumed "${currentVideo.title}" at ${formatSpeed(effectivePostAd)}×`
+        );
+      }
+    }
+  };
+
+  const handleStartSimulatedAd = () => {
+    if (isHomeBrowseMode) return;
+    setStoppedByCadence(false);
+    setAutoAdvancingCountdown(false);
+    setShowNativeGearMenu(false);
+    if (barToastReason === 'live') {
+      clearBarToast();
+    }
+    syncAdRemaining(5);
+    setIsPlaying(true);
+    const preservedNote =
+      sessionOverrideSpeed !== null
+        ? `Session override (${formatSpeed(sessionOverrideSpeed)}×) preserved for post-ad restore`
+        : matchedRule
+          ? `Channel rule (${formatSpeed(baselineSpeed)}×) held until ad finishes`
+          : 'Ad playing at 1.0×';
+    onAddLog('Mid-roll ad started (1.0× speed lock)', preservedNote);
+  };
+
   useEffect(() => {
     if (isHomeBrowseMode) return;
-    if (!isPlaying && !isLiveStream) return;
+    if (!isPlaying && !isLiveStream && adRemainingRef.current <= 0) return;
 
     const tickMs = 100;
     const interval = window.setInterval(() => {
       if (isLiveStream) {
         const nextEdge = liveEdgeRef.current + tickMs / 1000;
         syncLiveEdge(nextEdge);
+      }
 
+      if (adRemainingRef.current > 0) {
+        if (isLiveStream && liveEdgeRef.current - currentTimeRef.current >= 3) {
+          wasBehindLiveRef.current = true;
+        }
+        if (isPlaying) {
+          playSubtleCadenceTick(1.0);
+          const nextAd = Math.max(0, adRemainingRef.current - tickMs / 1000);
+          if (nextAd <= 0.02) {
+            finishSimulatedAd(false);
+          } else {
+            syncAdRemaining(nextAd);
+          }
+        }
+        return;
+      }
+
+      if (isLiveStream) {
+        const nextEdge = liveEdgeRef.current;
         const lagBefore = Math.max(0, nextEdge - currentTimeRef.current);
         if (!wasBehindLiveRef.current && lagBefore >= 3) {
           wasBehindLiveRef.current = true;
@@ -376,13 +479,18 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             syncTime(nextEdge);
             if (wasCatchingUp) {
               const activeSession = sessionOverrideRef.current;
+              const hadFastRate =
+                playbackSpeed > 1.01 || (activeSession !== null && activeSession > 1.01);
               if (activeSession !== null && activeSession > 1.01) {
                 setSessionOverrideSpeed(null);
                 setPlaybackSpeed(baselineSpeedRef.current);
               }
+              if (hadFastRate) {
+                triggerToast('Caught up to Live · 1.0×');
+              }
               onAddLog(
-                'Caught up to Live broadcast head',
-                `Reset active playback speed to 1.0× on "${currentVideo.title}"`
+                'Caught up to Live — synced native LIVE badge (1.0×)',
+                `Re-activated red LIVE badge and clamped playback to 1.0× on "${currentVideo.title}"`
               );
             }
           } else {
@@ -424,13 +532,18 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     isPlaying,
     isHomeBrowseMode,
     isLiveStream,
+    adRemainingSec > 0,
     playbackSpeed,
     currentVideo.durationSec,
     currentVideo.title,
+    currentVideo.channelName,
+    matchedRule,
     settings.enabled,
+    settings.perChannelSpeedEnabled,
     settings.stopAfterVideoEnds,
     playlistMode,
     audioMuted,
+    barToastReason,
   ]);
 
   useEffect(() => {
@@ -460,18 +573,38 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const dvrLagSec = isLiveStream ? Math.max(0, Math.round(rawDvrLagSec)) : 0;
   const isAtLiveHead = isLiveStream && !wasBehindLiveRef.current && dvrLagSec < 3;
   const isLiveHeadClamped =
-    settings.enabled && isLiveStream && isAtLiveHead && playbackSpeed > 1.01;
-  const effectiveSpeed =
-    isLiveStream && isAtLiveHead && playbackSpeed > 1.01 ? 1.0 : playbackSpeed;
+    !isAdPlaying && settings.enabled && isLiveStream && isAtLiveHead && playbackSpeed > 1.01;
+  const effectiveSpeed = isAdPlaying
+    ? 1.0
+    : isLiveStream && isAtLiveHead && playbackSpeed > 1.01
+      ? 1.0
+      : playbackSpeed;
 
   useEffect(() => {
-    if ((!isLiveStream || !isAtLiveHead) && barToast) {
+    if (barToastReason === 'live' && (!isLiveStream || !isAtLiveHead)) {
       clearBarToast();
     }
-  }, [isLiveStream, isAtLiveHead, barToast]);
+    if (barToastReason === 'ad' && !isAdPlaying) {
+      clearBarToast();
+    }
+  }, [isLiveStream, isAtLiveHead, isAdPlaying, barToastReason]);
 
   const handleSessionBarSpeedChange = (newSpeed: number) => {
     const clean = clampSpeed(newSpeed);
+
+    if (isAdPlaying) {
+      triggerBarToast('Speed locked during ad', 'ad');
+      triggerToast('Speed locked during ad', true, true);
+      onAddLog(
+        'Blocked speed change during ad',
+        `Held 1.0× during ad break (attempted ${formatSpeed(clean)}×)${
+          sessionOverrideSpeed !== null
+            ? ` · Session ${formatSpeed(sessionOverrideSpeed)}× preserved`
+            : ''
+        }`
+      );
+      return;
+    }
 
     if (isLiveStream && isAtLiveHead) {
       if (clean > 1.01) {
@@ -479,7 +612,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           setSessionOverrideSpeed(null);
           setPlaybackSpeed(baselineSpeed);
         }
-        triggerBarToast('Stream is currently at live end');
+        triggerBarToast('Stream is currently at live end', 'live');
         triggerToast('Stream is currently at live end', true, true);
         onAddLog(
           'Blocked speed increase at live end',
@@ -536,6 +669,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   const handleResetSessionBarSpeed = () => {
+    if (isAdPlaying) {
+      triggerBarToast('Speed locked during ad', 'ad');
+      triggerToast('Speed locked during ad', true, true);
+      onAddLog(
+        'Blocked speed reset during ad',
+        'Held 1.0× during ad break — surfaced toolbar & player ad-lock notice'
+      );
+      return;
+    }
     clearBarToast();
     setSessionOverrideSpeed(null);
     setPlaybackSpeed(baselineSpeed);
@@ -559,13 +701,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     const clean = clampSpeed(newSpeed);
     setShowNativeGearMenu(false);
 
+    if (isAdPlaying) {
+      triggerBarToast('Speed locked during ad', 'ad');
+      triggerToast('Speed locked during ad', true, true);
+      onAddLog(
+        'Blocked player speed change during ad',
+        `Held 1.0× during ad break (attempted ${formatSpeed(clean)}×)`
+      );
+      return;
+    }
+
     if (isLiveStream && isAtLiveHead) {
       if (clean > 1.01) {
         if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
           setSessionOverrideSpeed(null);
           setPlaybackSpeed(baselineSpeed);
         }
-        triggerBarToast('Stream is currently at live end');
+        triggerBarToast('Stream is currently at live end', 'live');
         triggerToast('Stream is currently at live end', true, true);
         onAddLog(
           'Blocked player speed > 1.0× at live end',
@@ -632,13 +784,23 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleAssignChannelSpeed = (speed: number, presetId: CategoryPresetId, origin: string) => {
     const clean = clampSpeed(speed);
+    if (isAdPlaying) {
+      triggerPopupToast('Speed locked during ad');
+      triggerBarToast('Speed locked during ad', 'ad');
+      triggerToast('Speed locked during ad', true, true);
+      onAddLog(
+        'Blocked popup speed change during ad',
+        `Kept 1.0× via ${origin} — speed locked during ad`
+      );
+      return;
+    }
     if (isLiveStream && isAtLiveHead && clean > 1.01) {
       if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
         setSessionOverrideSpeed(null);
         setPlaybackSpeed(baselineSpeed);
       }
       triggerPopupToast('Stream is currently at live end');
-      triggerBarToast('Stream is currently at live end');
+      triggerBarToast('Stream is currently at live end', 'live');
       triggerToast('Stream is currently at live end', true, true);
       onAddLog(
         'Blocked popup speed > 1.0× at live end',
@@ -670,14 +832,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     wasBehindLiveRef.current = secondsBehind >= 3;
     syncTime(target);
     setStoppedByCadence(false);
-    const mins = Math.round(secondsBehind / 60);
+    const offsetLabel = formatCompactDuration(secondsBehind);
     triggerToast(
       playbackSpeed > 1.02
-        ? `Rewound ${mins}m · Catching up at ${formatSpeed(playbackSpeed)}×`
-        : `Rewound ${mins}m into DVR buffer`
+        ? `Rewound ${offsetLabel} · Catching up at ${formatSpeed(playbackSpeed)}×`
+        : `Rewound ${offsetLabel} into DVR buffer`
     );
     onAddLog(
-      `DVR rewound ${mins}m behind live`,
+      `DVR rewound ${offsetLabel} behind live`,
       `Playback at ${formatSpeed(playbackSpeed)}× ${
         playbackSpeed > 1.02 && isPlaying
           ? `catches up in ${formatCompactDuration(secondsBehind / (playbackSpeed - 1.0))}`
@@ -737,11 +899,21 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   const timelineHorizon = isLiveStream ? Math.max(1, liveEdgeTime) : currentVideo.durationSec;
-  const progressPercent = Math.min(100, (currentTime / timelineHorizon) * 100);
+  const progressPercent = isAdPlaying
+    ? Math.min(100, Math.max(0, ((5 - adRemainingSec) / 5) * 100))
+    : Math.min(100, (currentTime / timelineHorizon) * 100);
   const actualPlayerRate = effectiveSpeed;
 
   const rawRemainingSec = isLiveStream ? 0 : Math.max(0, currentVideo.durationSec - currentTime);
   const durationSlotModel = (() => {
+    if (isAdPlaying) {
+      return {
+        mode: 'hidden' as const,
+        text: '',
+        title: '',
+        clickable: false,
+      };
+    }
     if (isLiveStream) {
       if (isAtLiveHead) {
         return {
@@ -794,7 +966,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             : 'Standalone Watch Page';
 
   const badgeText =
-    !isHomeBrowseMode && settings.enabled && settings.perChannelSpeedEnabled
+    !isHomeBrowseMode &&
+    settings.enabled &&
+    (settings.perChannelSpeedEnabled || sessionOverrideSpeed !== null)
       ? `${formatSpeed(effectiveSpeed)}x`
       : '';
 
@@ -855,6 +1029,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
           <button
             type="button"
+            onClick={handleStartSimulatedAd}
+            disabled={isHomeBrowseMode || isAdPlaying}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 disabled:opacity-45 disabled:cursor-default transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+            title="Simulate a 5-second YouTube mid-roll ad to test Speed locked during ad and automatic post-ad session override restoration"
+          >
+            <Lock className="w-3.5 h-3.5 text-amber-400" />
+            {isAdPlaying ? `Ad Playing (${Math.ceil(adRemainingSec)}s)` : 'Simulate Ad (5s)'}
+          </button>
+
+          <button
+            type="button"
             onClick={handleQuickTestLiveDvr}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title="Switch to Live DVR broadcast 10 minutes behind live edge to test Back-to-Live catch-up math"
@@ -866,7 +1051,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           <button
             type="button"
             onClick={handleSkipNearEnd}
-            disabled={isHomeBrowseMode || isLiveStream}
+            disabled={isHomeBrowseMode || isLiveStream || isAdPlaying}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 disabled:opacity-45 disabled:cursor-default transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             title={
               isLiveStream
@@ -1030,16 +1215,24 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 {/* Top-Left Context Indicator */}
                 <div className="absolute top-4 left-4 right-4 flex items-start justify-between gap-4 pointer-events-none">
                   <div className="text-xs font-medium text-white/90 drop-shadow-xs">
-                    <span>{currentVideo.channelName}</span>
-                    <span className="mx-1.5 opacity-60">·</span>
-                    <span className="font-mono tabular-nums">
-                      {formatSpeed(effectiveSpeed)}×{' '}
-                      {isLiveHeadClamped
-                        ? `live end (${formatSpeed(baselineSpeed)}× rule)`
-                        : sessionOverrideSpeed !== null
-                          ? 'session override'
-                          : 'active'}
-                    </span>
+                    {isAdPlaying ? (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/50 text-amber-200 font-semibold tabular-nums">
+                        Sponsored · Ad · 0:0{Math.max(1, Math.ceil(adRemainingSec))}
+                      </span>
+                    ) : (
+                      <>
+                        <span>{currentVideo.channelName}</span>
+                        <span className="mx-1.5 opacity-60">·</span>
+                        <span className="font-mono tabular-nums">
+                          {formatSpeed(effectiveSpeed)}×{' '}
+                          {isLiveHeadClamped
+                            ? `live end (${formatSpeed(baselineSpeed)}× rule)`
+                            : sessionOverrideSpeed !== null
+                              ? 'session override'
+                              : 'active'}
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   {/* Cadence Auto-Speed Player Toast */}
@@ -1063,6 +1256,25 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Simulated Mid-Roll Ad Overlay & Skip Ad Control */}
+                {isAdPlaying && (
+                  <div className="absolute right-4 bottom-16 z-20 flex items-center gap-2.5">
+                    {sessionOverrideSpeed !== null && (
+                      <span className="hidden sm:inline-block px-2.5 py-1.5 rounded-md bg-slate-950/90 border border-slate-700/90 text-[11px] font-mono tabular-nums text-slate-300">
+                        Session {formatSpeed(sessionOverrideSpeed)}× queued after ad
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => finishSimulatedAd(true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md bg-slate-950/95 hover:bg-slate-900 border border-white/25 text-xs font-semibold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-md"
+                    >
+                      Skip Ad
+                      <SkipForward className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 {/* Cadence End-of-Video Hard-Stop Overlay */}
                 {stoppedByCadence && (
@@ -1143,8 +1355,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 {/* Bottom Player Scrub Bar & Controls */}
                 <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-3 pt-6">
                   <div
-                    className="group relative h-1.5 bg-white/25 rounded-full cursor-pointer mb-3"
+                    className={`group relative h-1.5 bg-white/25 rounded-full mb-3 ${
+                      isAdPlaying ? 'cursor-default' : 'cursor-pointer'
+                    }`}
                     onClick={(e) => {
+                      if (isAdPlaying) return;
                       const rect = e.currentTarget.getBoundingClientRect();
                       const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
                       const targetTime = ratio * timelineHorizon;
@@ -1171,7 +1386,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     }}
                   >
                     <div
-                      className="h-full bg-red-600 rounded-full"
+                      className={`h-full rounded-full ${
+                        isAdPlaying ? 'bg-amber-400' : 'bg-red-600'
+                      }`}
                       style={{ width: `${progressPercent}%` }}
                     />
                   </div>
@@ -1255,10 +1472,20 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           <button
                             type="button"
                             onClick={() => handleRewindDvr(120)}
-                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                            disabled={isAdPlaying}
+                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
                             title="Simulate rewinding 2 minutes into the live DVR buffer"
                           >
                             −2m DVR
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRewindDvr(15)}
+                            disabled={isAdPlaying}
+                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                            title="Simulate rewinding 15 seconds behind live to watch accelerated playback catch up and re-activate the red LIVE badge"
+                          >
+                            −15s DVR
                           </button>
                         </div>
                       ) : (
@@ -1336,52 +1563,77 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         </div>
                       )}
 
+                      {/* Fixed-Width Zero-Shift Compact Speed Readout (#16) */}
                       <span
-                        className="text-xs text-slate-400 tabular-nums whitespace-nowrap"
+                        className="inline-grid items-center shrink-0 text-xs text-slate-400 tabular-nums whitespace-nowrap"
                         title={
-                          isLiveHeadClamped
-                            ? `Stream is currently at live end (1.0×) · Saved ${formatSpeed(baselineSpeed)}× rule restores automatically behind live`
-                            : sessionOverrideSpeed !== null
-                              ? `Session override active · Saved baseline is ${formatSpeed(baselineSpeed)}×`
-                              : 'Session-only speed bar · Does not alter saved Channel Rules'
+                          isAdPlaying
+                            ? `Speed locked during ad${
+                                sessionOverrideSpeed !== null
+                                  ? ` · Session ${formatSpeed(sessionOverrideSpeed)}× restores after ad`
+                                  : ''
+                              }`
+                            : isLiveHeadClamped
+                              ? `Stream is currently at live end (1.0×) · Saved ${formatSpeed(baselineSpeed)}× rule restores automatically behind live`
+                              : sessionOverrideSpeed !== null
+                                ? `Session override active · Saved baseline is ${formatSpeed(baselineSpeed)}×`
+                                : 'Session-only speed bar · Does not alter saved Channel Rules'
                         }
                       >
-                        {sessionOverrideSpeed !== null
-                          ? 'Session'
-                          : matchedRule
-                            ? 'Rule'
-                            : 'Default'}{' '}
-                        ·{' '}
-                        <strong
-                          className={
-                            sessionOverrideSpeed !== null ? 'text-amber-300' : 'text-slate-100'
-                          }
+                        <span
+                          aria-hidden="true"
+                          className="col-start-1 row-start-1 invisible pointer-events-none select-none"
                         >
-                          {formatSpeed(effectiveSpeed)}×
-                        </strong>
+                          Session · <strong className="font-semibold">8.88×</strong>
+                        </span>
+                        <span className="col-start-1 row-start-1">
+                          {isAdPlaying
+                            ? 'Ad'
+                            : sessionOverrideSpeed !== null
+                              ? 'Session'
+                              : matchedRule
+                                ? 'Rule'
+                                : 'Default'}{' '}
+                          ·{' '}
+                          <strong
+                            className={
+                              isAdPlaying
+                                ? 'text-amber-300 font-semibold'
+                                : sessionOverrideSpeed !== null
+                                  ? 'text-amber-300 font-semibold'
+                                  : 'text-slate-100 font-semibold'
+                            }
+                          >
+                            {formatCompactSpeed(effectiveSpeed)}×
+                          </strong>
+                        </span>
                       </span>
 
                       <div className="flex items-center gap-1 flex-wrap">
                         {[0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((spd) => {
-                          const active = Math.abs(effectiveSpeed - spd) < 0.015;
-                          const isLiveBlocked = isLiveStream && isAtLiveHead && spd > 1.01;
+                          const active = !isAdPlaying && Math.abs(effectiveSpeed - spd) < 0.015;
+                          const isLiveBlocked =
+                            !isAdPlaying && isLiveStream && isAtLiveHead && spd > 1.01;
+                          const isBlocked = isAdPlaying || isLiveBlocked;
                           return (
                             <button
                               key={spd}
                               type="button"
-                              aria-disabled={isLiveBlocked ? true : undefined}
+                              aria-disabled={isBlocked ? true : undefined}
                               onClick={() => handleSessionBarSpeedChange(spd)}
                               className={`px-2 py-1 rounded text-xs font-mono tabular-nums font-medium transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
                                 active
                                   ? 'bg-red-600 text-white'
-                                  : isLiveBlocked
+                                  : isBlocked
                                     ? 'text-slate-300 opacity-42 hover:opacity-70 hover:bg-amber-500/10'
                                     : 'text-slate-300 hover:bg-slate-800'
                               }`}
                               title={
-                                isLiveBlocked
-                                  ? 'Unavailable while synced at live end — rewind stream to speed up'
-                                  : `Set ${formatSpeed(spd)}× for this video session only`
+                                isAdPlaying
+                                  ? 'Speed locked during ad'
+                                  : isLiveBlocked
+                                    ? 'Unavailable while synced at live end — rewind stream to speed up'
+                                    : `Set ${formatSpeed(spd)}× for this video session only`
                               }
                             >
                               {formatSpeed(spd)}×
@@ -1398,29 +1650,44 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       <div className="inline-flex items-center gap-1">
                         <button
                           type="button"
+                          aria-disabled={isAdPlaying ? true : undefined}
                           onClick={() => handleSessionBarSpeedChange(effectiveSpeed - 0.05)}
-                          className="px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-                          title="Slow down by 0.05× for this video session only"
+                          className={`px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                            isAdPlaying
+                              ? 'opacity-42 hover:opacity-70 hover:bg-amber-500/10'
+                              : 'hover:bg-slate-800'
+                          }`}
+                          title={
+                            isAdPlaying
+                              ? 'Speed locked during ad'
+                              : 'Slow down by 0.05× for this video session only'
+                          }
                         >
                           −0.05
                         </button>
                         {(() => {
                           const isStepUpLiveBlocked =
-                            isLiveStream && isAtLiveHead && effectiveSpeed + 0.05 > 1.01;
+                            !isAdPlaying &&
+                            isLiveStream &&
+                            isAtLiveHead &&
+                            effectiveSpeed + 0.05 > 1.01;
+                          const isStepUpBlocked = isAdPlaying || isStepUpLiveBlocked;
                           return (
                             <button
                               type="button"
-                              aria-disabled={isStepUpLiveBlocked ? true : undefined}
+                              aria-disabled={isStepUpBlocked ? true : undefined}
                               onClick={() => handleSessionBarSpeedChange(effectiveSpeed + 0.05)}
                               className={`px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
-                                isStepUpLiveBlocked
+                                isStepUpBlocked
                                   ? 'opacity-42 hover:opacity-70 hover:bg-amber-500/10'
                                   : 'hover:bg-slate-800'
                               }`}
                               title={
-                                isStepUpLiveBlocked
-                                  ? 'Unavailable while synced at live end — rewind stream to speed up'
-                                  : 'Speed up by 0.05× for this video session only'
+                                isAdPlaying
+                                  ? 'Speed locked during ad'
+                                  : isStepUpLiveBlocked
+                                    ? 'Unavailable while synced at live end — rewind stream to speed up'
+                                    : 'Speed up by 0.05× for this video session only'
                               }
                             >
                               +0.05
@@ -1430,15 +1697,24 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         <button
                           type="button"
                           onClick={handleResetSessionBarSpeed}
-                          disabled={sessionOverrideSpeed === null}
-                          className={`px-2 py-1 rounded border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                            sessionOverrideSpeed !== null
-                              ? 'border-red-500/60 text-slate-100 hover:bg-slate-800 cursor-pointer'
-                              : 'border-slate-800 text-slate-500 cursor-default opacity-50'
+                          disabled={!isAdPlaying && sessionOverrideSpeed === null}
+                          aria-disabled={isAdPlaying ? true : undefined}
+                          className={`px-2 py-1 rounded border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
+                            isAdPlaying
+                              ? 'border-slate-700/90 text-slate-300 opacity-42 hover:opacity-70 hover:bg-amber-500/10 cursor-pointer'
+                              : sessionOverrideSpeed !== null
+                                ? 'border-red-500/60 text-slate-100 hover:bg-slate-800 cursor-pointer'
+                                : 'border-slate-800 text-slate-500 cursor-default opacity-50'
                           }`}
-                          title={`Reset to ${matchedRule ? 'Channel Rule' : 'Default'} (${formatSpeed(
-                            isLiveStream && isAtLiveHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed
-                          )}×)`}
+                          title={
+                            isAdPlaying
+                              ? 'Speed locked during ad'
+                              : `Reset to ${matchedRule ? 'Channel Rule' : 'Default'} (${formatSpeed(
+                                  isLiveStream && isAtLiveHead && baselineSpeed > 1.01
+                                    ? 1.0
+                                    : baselineSpeed
+                                )}×)`
+                          }
                         >
                           Reset
                         </button>
@@ -1477,7 +1753,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                                 aria-hidden="true"
                               />
                             )}
-                            <span>{durationSlotModel.text}</span>
+                            <span className="inline-grid items-center text-left">
+                              <span
+                                aria-hidden="true"
+                                className="col-start-1 row-start-1 invisible pointer-events-none select-none"
+                              >
+                                {buildDurationSizerText(durationSlotModel.text)}
+                              </span>
+                              <span className="col-start-1 row-start-1">
+                                {durationSlotModel.text}
+                              </span>
+                            </span>
                           </button>
                         </>
                       )}
@@ -1624,21 +1910,25 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
               <div className="space-y-3 pb-4 border-b border-slate-800">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-xs text-slate-400">
-                    {isLiveStream && isAtLiveHead
-                      ? sessionOverrideSpeed !== null && sessionOverrideSpeed < 0.99
-                        ? `Live Stream · Session (${formatSpeed(sessionOverrideSpeed)}×)`
-                        : matchedRule && baselineSpeed > 1.01
-                          ? `Live End (1.0×) · Rule ${formatSpeed(baselineSpeed)}×`
-                          : 'Live Broadcast · At Live End'
-                      : sessionOverrideSpeed !== null
-                        ? `Session Override · ${
-                            matchedRule
-                              ? `Rule is ${formatSpeed(baselineSpeed)}×`
-                              : `Default ${formatSpeed(baselineSpeed)}×`
-                          }`
-                        : matchedRule
-                          ? 'Saved Channel Rule'
-                          : 'Detected Channel · Default'}
+                    {isAdPlaying
+                      ? sessionOverrideSpeed !== null
+                        ? `Ad Playing (1.0×) · Session ${formatSpeed(sessionOverrideSpeed)}× queued`
+                        : 'Ad Playing · Speed Locked (1.0×)'
+                      : isLiveStream && isAtLiveHead
+                        ? sessionOverrideSpeed !== null && sessionOverrideSpeed < 0.99
+                          ? `Live Stream · Session (${formatSpeed(sessionOverrideSpeed)}×)`
+                          : matchedRule && baselineSpeed > 1.01
+                            ? `Live End (1.0×) · Rule ${formatSpeed(baselineSpeed)}×`
+                            : 'Live Broadcast · At Live End'
+                        : sessionOverrideSpeed !== null
+                          ? `Session Override · ${
+                              matchedRule
+                                ? `Rule is ${formatSpeed(baselineSpeed)}×`
+                                : `Default ${formatSpeed(baselineSpeed)}×`
+                            }`
+                          : matchedRule
+                            ? 'Saved Channel Rule'
+                            : 'Detected Channel · Default'}
                   </span>
                   <span className="text-xs font-mono tabular-nums font-semibold text-slate-100">
                     {formatSpeed(effectiveSpeed)}×
@@ -1666,17 +1956,21 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 <div className="grid grid-cols-3 gap-1.5 pt-1">
                   {presets.map((preset) => {
                     const isSelected =
-                      isLiveStream && isAtLiveHead
+                      !isAdPlaying &&
+                      (isLiveStream && isAtLiveHead
                         ? sessionOverrideSpeed === null &&
                           matchedRule?.presetId === preset.id &&
                           Math.abs(preset.speed - 1.0) < 0.02
                         : sessionOverrideSpeed === null &&
                           matchedRule?.presetId === preset.id &&
-                          Math.abs(effectiveSpeed - preset.speed) < 0.02;
+                          Math.abs(effectiveSpeed - preset.speed) < 0.02);
+                    const isBlocked =
+                      isAdPlaying || (isLiveStream && isAtLiveHead && preset.speed > 1.01);
                     return (
                       <button
                         key={preset.id}
                         type="button"
+                        aria-disabled={isBlocked ? true : undefined}
                         onClick={() =>
                           handleAssignChannelSpeed(
                             preset.speed,
@@ -1684,10 +1978,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                             `Popup (${preset.label})`
                           )
                         }
-                        className={`px-2.5 py-2 rounded-md border text-left transition-colors cursor-pointer ${
+                        className={`px-2.5 py-2 rounded-md border text-left transition-all duration-150 cursor-pointer ${
                           isSelected
                             ? 'bg-red-600 border-red-600 text-white'
-                            : 'bg-[#0B0F19] border-slate-700/90 text-slate-200 hover:bg-slate-800'
+                            : isBlocked
+                              ? 'bg-[#0B0F19] border-slate-700/90 text-slate-300 opacity-45 hover:opacity-75 hover:border-amber-500/40'
+                              : 'bg-[#0B0F19] border-slate-700/90 text-slate-200 hover:bg-slate-800'
                         }`}
                       >
                         <div className="text-[11px] font-medium truncate">
@@ -1709,14 +2005,18 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 <div className="grid grid-cols-5 gap-1.5">
                   {[1.0, 1.25, 1.5, 1.75, 2.0].map((spd) => {
                     const active =
-                      isLiveStream && isAtLiveHead
+                      !isAdPlaying &&
+                      (isLiveStream && isAtLiveHead
                         ? sessionOverrideSpeed === null && Math.abs(spd - 1.0) < 0.015
-                        : sessionOverrideSpeed === null && Math.abs(effectiveSpeed - spd) < 0.015;
+                        : sessionOverrideSpeed === null && Math.abs(effectiveSpeed - spd) < 0.015);
+                    const isBlocked =
+                      isAdPlaying || (isLiveStream && isAtLiveHead && spd > 1.01);
                     const matchingPreset = presets.find((p) => Math.abs(p.speed - spd) < 0.01);
                     return (
                       <button
                         key={spd}
                         type="button"
+                        aria-disabled={isBlocked ? true : undefined}
                         onClick={() =>
                           handleAssignChannelSpeed(
                             spd,
@@ -1724,10 +2024,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                             'Popup quick speed'
                           )
                         }
-                        className={`py-1.5 rounded-md border text-xs font-mono font-semibold tabular-nums transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        className={`py-1.5 rounded-md border text-xs font-mono font-semibold tabular-nums transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
                           active
                             ? 'bg-red-600 border-red-600 text-white'
-                            : 'bg-[#0B0F19] border-slate-700/90 text-slate-200 hover:bg-slate-800'
+                            : isBlocked
+                              ? 'bg-[#0B0F19] border-slate-700/90 text-slate-300 opacity-45 hover:opacity-75 hover:border-amber-500/40'
+                              : 'bg-[#0B0F19] border-slate-700/90 text-slate-200 hover:bg-slate-800'
                         }`}
                       >
                         {formatSpeed(spd)}×
@@ -1742,6 +2044,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                   <div className="inline-flex items-center gap-1">
                     <button
                       type="button"
+                      aria-disabled={isAdPlaying ? true : undefined}
                       onClick={() =>
                         handleAssignChannelSpeed(
                           Math.max(0.25, effectiveSpeed - 0.05),
@@ -1749,7 +2052,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           'Popup fine stepper'
                         )
                       }
-                      className="px-2 py-1 rounded border border-slate-700 bg-[#0B0F19] text-slate-200 text-xs font-mono tabular-nums hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                      className={`px-2 py-1 rounded border border-slate-700 bg-[#0B0F19] text-slate-200 text-xs font-mono tabular-nums transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                        isAdPlaying
+                          ? 'opacity-45 hover:opacity-75 hover:border-amber-500/40'
+                          : 'hover:bg-slate-800'
+                      }`}
                     >
                       −0.05×
                     </button>
@@ -1758,6 +2065,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     </span>
                     <button
                       type="button"
+                      aria-disabled={
+                        isAdPlaying ||
+                        (isLiveStream && isAtLiveHead && effectiveSpeed + 0.05 > 1.01)
+                          ? true
+                          : undefined
+                      }
                       onClick={() =>
                         handleAssignChannelSpeed(
                           Math.min(4.0, effectiveSpeed + 0.05),
@@ -1765,7 +2078,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           'Popup fine stepper'
                         )
                       }
-                      className="px-2 py-1 rounded border border-slate-700 bg-[#0B0F19] text-slate-200 text-xs font-mono tabular-nums hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                      className={`px-2 py-1 rounded border border-slate-700 bg-[#0B0F19] text-slate-200 text-xs font-mono tabular-nums transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                        isAdPlaying ||
+                        (isLiveStream && isAtLiveHead && effectiveSpeed + 0.05 > 1.01)
+                          ? 'opacity-45 hover:opacity-75 hover:border-amber-500/40'
+                          : 'hover:bg-slate-800'
+                      }`}
                     >
                       +0.05×
                     </button>

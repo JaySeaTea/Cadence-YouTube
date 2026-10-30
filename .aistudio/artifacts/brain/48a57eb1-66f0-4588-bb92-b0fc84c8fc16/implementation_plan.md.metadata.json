@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Cadence v1.3.4 adding a floating amber \"Stream is currently at live end\" toast anchored to the below-video speed toolbar, dual player-corner toast hardening, subtle clickable dimming for >1.0x controls while synced at the live edge, re-render toast persistence, and full parity across the Chrome extension, ZIP generator, and Live Simulator workbench.",
-  "updatedAt":  "2026-10-28T22:41:56.962735437Z",
+  "summary":  "Implementation plan for Cadence v1.3.5 (Watch-Page & Live DVR Polish) covering Issues #14, #17, #15, and #16 across the Manifest V3 Chrome Extension and Interactive Web Simulator Workbench.",
+  "updatedAt":  "2026-10-30T03:45:34.287849046Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
