@@ -27,9 +27,10 @@
     autoRememberManualSpeed: false,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
+    convertShortsToWatch: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 2,
+    settingsSchemaVersion: 3,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -44,6 +45,7 @@
   const toggleRemember = document.getElementById('toggle-remember');
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
+  const toggleShorts = document.getElementById('toggle-shorts');
   const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
@@ -72,6 +74,9 @@
   toggleRemember.checked = Boolean(settings.autoRememberManualSpeed);
   toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
   toggleBar.checked = settings.showInPageControlBar !== false;
+  if (toggleShorts) {
+    toggleShorts.checked = settings.convertShortsToWatch !== false;
+  }
 
   function renderRuleCount() {
     summaryEl.textContent = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'}`;
@@ -87,6 +92,11 @@
   toggleRemember.addEventListener('change', () => updateSetting({ autoRememberManualSpeed: toggleRemember.checked }));
   toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
   toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
+  if (toggleShorts) {
+    toggleShorts.addEventListener('change', () =>
+      updateSetting({ convertShortsToWatch: toggleShorts.checked })
+    );
+  }
 
   document.getElementById('open-options').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();

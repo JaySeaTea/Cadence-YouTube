@@ -29,7 +29,7 @@ export function buildExtensionFiles(
       short_name: 'Cadence',
       version: EXTENSION_VERSION,
       description:
-        'Automatically sets per-channel playback speeds on YouTube, shows real-time remaining duration at speed, and stops playback at the end of every video.',
+        'Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.',
       permissions: ['storage', 'tabs', 'scripting', 'activeTab'],
       host_permissions: ['*://*.youtube.com/*'],
       background: {
@@ -134,13 +134,24 @@ chrome.runtime.onInstalled.addListener(async () => {
     nextPayload.settings = {
       ...INITIAL_STATE.settings,
       autoRememberManualSpeed: false,
-      settingsSchemaVersion: 2,
+      convertShortsToWatch:
+        typeof INITIAL_STATE.settings.convertShortsToWatch === 'boolean'
+          ? INITIAL_STATE.settings.convertShortsToWatch
+          : true,
+      settingsSchemaVersion: 3,
     };
-  } else if ((existing.settings.settingsSchemaVersion || 1) < 2) {
+  } else if ((existing.settings.settingsSchemaVersion || 1) < 3) {
+    const prevVersion = existing.settings.settingsSchemaVersion || 1;
     nextPayload.settings = {
+      ...INITIAL_STATE.settings,
       ...existing.settings,
-      autoRememberManualSpeed: false,
-      settingsSchemaVersion: 2,
+      autoRememberManualSpeed:
+        prevVersion < 2 ? false : Boolean(existing.settings.autoRememberManualSpeed),
+      convertShortsToWatch:
+        typeof existing.settings.convertShortsToWatch === 'boolean'
+          ? existing.settings.convertShortsToWatch
+          : true,
+      settingsSchemaVersion: 3,
     };
   }
   if (!existing.presets) nextPayload.presets = INITIAL_STATE.presets;
@@ -186,6 +197,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.type === 'CADENCE_OPEN_OPTIONS') {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;
     if (tabId) {
@@ -214,11 +230,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const bridgeSignal = bridgeController.signal;
   const bridgeInstanceId = Symbol('cadenceBridge');
 
+  let hasReceivedConfig = Boolean(window.__CADENCE_LAST_CONFIG__);
   let config = window.__CADENCE_LAST_CONFIG__ || {
     enabled: true,
     perChannelSpeedEnabled: true,
     hasSessionOverride: false,
     stopAfterVideoEnds: true,
+    convertShortsToWatch: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
@@ -237,6 +255,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let recentNativeSpeedGestureUntil = 0;
   let lastRemainingEmitAt = 0;
   let lastRemainingSignature = '';
+  let lastShortsLinkSyncAt = 0;
   let liveStateVideoId = '';
   let liveHeadHysteresisBehind = false;
   let wasAtLiveHead = false;
@@ -291,6 +310,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return '';
   }
 
+  function parseShortsIdFromHref(rawHref) {
+    if (!rawHref) return '';
+    try {
+      const parsed = new URL(rawHref, location.origin);
+      const match = parsed.pathname.match(/^\\/shorts\\/([a-zA-Z0-9_-]{6,24})(?:\\/|$)/);
+      if (match && match[1]) {
+        return match[1];
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function buildWatchUrlFromShortsHref(rawHref) {
+    if (!rawHref) return '';
+    try {
+      const parsed = new URL(rawHref, location.origin);
+      const match = parsed.pathname.match(/^\\/shorts\\/([a-zA-Z0-9_-]{6,24})(?:\\/|$)/);
+      if (!match || !match[1]) return '';
+      const nextParams = new URLSearchParams();
+      nextParams.set('v', match[1]);
+      const tVal = parsed.searchParams.get('t');
+      if (tVal) nextParams.set('t', tVal);
+      return '/watch?' + nextParams.toString();
+    } catch (_) {}
+    return '';
+  }
+
+  function shouldConvertShorts() {
+    return Boolean(hasReceivedConfig && config.enabled && config.convertShortsToWatch !== false);
+  }
+
+  function maybeRedirectCurrentShortsRoute() {
+    if (!shouldConvertShorts()) return false;
+    const watchTarget = buildWatchUrlFromShortsHref(location.href);
+    if (!watchTarget) return false;
+    location.replace(watchTarget);
+    return true;
+  }
+
+  function syncShortsLinksInDom(force = false) {
+    if (!hasReceivedConfig) return;
+    const now = Date.now();
+    if (!force && now - lastShortsLinkSyncAt < 900) return;
+    lastShortsLinkSyncAt = now;
+
+    if (shouldConvertShorts()) {
+      const shortsAnchors = document.querySelectorAll('a[href*="/shorts/"]');
+      for (const anchor of shortsAnchors) {
+        const currentHref = anchor.getAttribute('href') || '';
+        const watchHref = buildWatchUrlFromShortsHref(currentHref);
+        if (!watchHref) continue;
+        if (!anchor.hasAttribute('data-cadence-orig-shorts-href')) {
+          anchor.setAttribute('data-cadence-orig-shorts-href', currentHref);
+        }
+        anchor.setAttribute('href', watchHref);
+      }
+    } else {
+      const rewrittenAnchors = document.querySelectorAll('a[data-cadence-orig-shorts-href]');
+      for (const anchor of rewrittenAnchors) {
+        const origHref = anchor.getAttribute('data-cadence-orig-shorts-href');
+        if (origHref) {
+          anchor.setAttribute('href', origHref);
+        }
+        anchor.removeAttribute('data-cadence-orig-shorts-href');
+      }
+    }
+  }
+
   function getUrlVideoId() {
     return parseVideoIdFromHref(location.href);
   }
@@ -300,13 +387,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function extractCardPreviewHint(target) {
-    const watchAnchor = target.closest('a[href*="/watch"]');
+    const watchAnchor = target.closest(
+      'a[href*="/watch"], a[href*="/shorts/"], a[data-cadence-orig-shorts-href]'
+    );
     if (!watchAnchor) return null;
-    const videoId = parseVideoIdFromHref(watchAnchor.getAttribute('href') || '');
+    const rawHref = watchAnchor.getAttribute('href') || '';
+    const origShortsHref = watchAnchor.getAttribute('data-cadence-orig-shorts-href') || '';
+    const videoId =
+      parseVideoIdFromHref(rawHref) ||
+      parseShortsIdFromHref(rawHref) ||
+      parseShortsIdFromHref(origShortsHref);
     if (!videoId) return null;
 
     const card = target.closest(
-      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2, ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
     );
 
     let handle = '';
@@ -317,7 +411,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const channelAnchors = card.querySelectorAll('a[href*="/@"], a[href*="/channel/UC"]');
       for (const chAnchor of channelAnchors) {
         const href = chAnchor.getAttribute('href') || '';
-        if (href.includes('/watch')) continue;
+        if (href.includes('/watch') || href.includes('/shorts/')) continue;
         const hMatch = href.match(/\\/(@[^/?#]+)/);
         if (hMatch && !handle) handle = hMatch[1].toLowerCase();
         const cMatch = href.match(/\\/channel\\/(UC[^/?#]+)/);
@@ -355,7 +449,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!target) return;
       if (
         target.closest(
-          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], .cadence-play-next-btn'
+          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], a[href*="/shorts/"], a[data-cadence-orig-shorts-href], .cadence-play-next-btn'
         )
       ) {
         markUserNavigationIntent();
@@ -415,6 +509,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const target = rawTarget;
       if (!target) return;
+
+      if (
+        shouldConvertShorts() &&
+        !target.closest('button, yt-icon-button, #menu, ytd-menu-renderer')
+      ) {
+        const shortsAnchor = target.closest(
+          'a[data-cadence-orig-shorts-href], a[href*="/shorts/"]'
+        );
+        if (shortsAnchor) {
+          const rawShortsHref =
+            shortsAnchor.getAttribute('data-cadence-orig-shorts-href') ||
+            shortsAnchor.getAttribute('href') ||
+            '';
+          const convertedWatchUrl = buildWatchUrlFromShortsHref(rawShortsHref);
+          if (convertedWatchUrl) {
+            e.preventDefault();
+            e.stopPropagation();
+            markUserNavigationIntent();
+            const hint = extractCardPreviewHint(target);
+            if (hint) {
+              pendingCardHint = hint;
+              postToContent('NAVIGATION_PREVIEW', hint);
+            }
+            if (location.pathname.startsWith('/shorts/')) {
+              location.replace(convertedWatchUrl);
+            } else {
+              location.assign(convertedWatchUrl);
+            }
+            return;
+          }
+        }
+      }
 
       const hint = extractCardPreviewHint(target);
       if (hint) {
@@ -1076,6 +1202,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       postToContent('TIME_REMAINING_UPDATE', {
         videoId,
         rawRemainingSec: null,
+        rawDurationSec: null,
         playbackRate: 1.0,
         isAd: true,
         isLive: false,
@@ -1156,6 +1283,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       postToContent('TIME_REMAINING_UPDATE', {
         videoId,
         rawRemainingSec: null,
+        rawDurationSec: null,
         playbackRate: Math.round(liveRate * 100) / 100,
         isAd: false,
         isLive: true,
@@ -1170,6 +1298,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     wasAtLiveHead = false;
     const rate = mediaRate;
     const invalidDuration = !Number.isFinite(video.duration) || video.duration <= 0;
+    const rawDurationSec = invalidDuration ? null : video.duration;
     const rawRemainingSec = invalidDuration
       ? null
       : Math.max(0, video.duration - video.currentTime);
@@ -1180,7 +1309,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : realRemSec < 60
           ? 's' + realRemSec
           : 'm' + Math.round(realRemSec / 60);
-    const sig = [videoId, 'vod', realBucket, rate.toFixed(2)].join('|');
+    const durBucket = rawDurationSec === null ? 'na' : String(Math.round(rawDurationSec));
+    const sig = [videoId, 'vod', realBucket, durBucket, rate.toFixed(2)].join('|');
 
     if (!force && sig === lastRemainingSignature) return;
     lastRemainingEmitAt = now;
@@ -1189,6 +1319,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     postToContent('TIME_REMAINING_UPDATE', {
       videoId,
       rawRemainingSec,
+      rawDurationSec,
       playbackRate: Math.round(rate * 100) / 100,
       isAd: false,
       isLive: false,
@@ -1794,8 +1925,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       const { type, payload = {} } = event.data;
       if (type === 'CONFIG_UPDATE') {
+        hasReceivedConfig = true;
         config = { ...config, ...payload };
         window.__CADENCE_LAST_CONFIG__ = config;
+        if (maybeRedirectCurrentShortsRoute()) {
+          return;
+        }
+        syncShortsLinksInDom(true);
         suppressNativeAutoplayAndPlaylist();
         if (!isSupportedWatchPage()) {
           applyPlaybackSpeed(config.defaultSpeed || 1.0, true);
@@ -1846,6 +1982,114 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           config.targetSpeed = payload.speed;
           window.__CADENCE_LAST_CONFIG__ = config;
           applyPlaybackSpeed(payload.speed);
+        } else if (payload.action === 'SEEK_BY_SECONDS') {
+          const deltaSec = Number(payload.deltaSec) || 0;
+          if (!deltaSec) return;
+          const player = getMoviePlayer();
+          const video = getMainVideo();
+          if (!video) return;
+          const vid = getCurrentVideoId(player) || '';
+          if (isAdPlaying(player)) {
+            if (config.enabled) {
+              postToContent('AD_SKIP_BLOCKED', { videoId: vid, deltaSec });
+              emitTimeRemaining(true);
+            }
+            return;
+          }
+          if (isLiveBroadcast(player, video)) {
+            const dvr = measureLiveDvrState(player, video, vid);
+            if (dvr.isAtLiveHead && deltaSec > 0) {
+              postToContent('LIVE_HEAD_SKIP_BLOCKED', { videoId: vid, deltaSec });
+              emitTimeRemaining(true);
+              return;
+            }
+            if (!dvr.isAtLiveHead && deltaSec > 0 && dvr.dvrLagSec - deltaSec <= 2) {
+              explicitJumpToLiveUntil = Date.now() + 2800;
+              const badge = getLiveBadgeElement(player);
+              if (badge && !isLiveBadgeAtHead(badge)) {
+                try {
+                  badge.click();
+                } catch (_) {}
+              } else if (player && typeof player.getProgressState === 'function' && !psHasMseCeiling) {
+                try {
+                  const ps = player.getProgressState();
+                  if (ps && Number.isFinite(ps.seekableEnd)) {
+                    player.seekTo(Math.max(0, ps.seekableEnd - 0.25), true);
+                  }
+                } catch (_) {}
+              }
+              applyLiveHeadRateClamp(player, video);
+              liveHeadHysteresisBehind = false;
+              catchupMaxLagSec = null;
+              catchupActive = false;
+              lastCatchupVideoSec = null;
+              postToContent('LIVE_CAUGHT_UP', { videoId: vid, fromSeek: true });
+              emitTimeRemaining(true);
+              setTimeout(() => emitTimeRemaining(true), 80);
+              return;
+            }
+
+            let seekStart = 0;
+            try {
+              if (player && typeof player.getProgressState === 'function') {
+                const ps = player.getProgressState();
+                if (ps && Number.isFinite(ps.seekableStart) && ps.seekableStart >= 0) {
+                  seekStart = ps.seekableStart;
+                }
+              }
+            } catch (_) {}
+            const cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+            const nextTime = Math.max(seekStart, cur + deltaSec);
+            if (deltaSec < 0) {
+              liveHeadHysteresisBehind = Math.abs(deltaSec) >= 5 || !dvr.isAtLiveHead;
+              catchupMaxLagSec = null;
+            } else if (catchupMaxLagSec !== null) {
+              catchupMaxLagSec = Math.max(0, catchupMaxLagSec - deltaSec);
+            }
+            try {
+              if (player && typeof player.seekTo === 'function') {
+                player.seekTo(nextTime, true);
+              } else {
+                video.currentTime = nextTime;
+              }
+            } catch (_) {
+              video.currentTime = nextTime;
+            }
+            lastObservedCurrentTime = nextTime;
+            dvrRestoreAttempts = 0;
+            if (deltaSec < 0) {
+              setTimeout(maybeRestoreDvrCatchupSpeed, 80);
+            }
+            emitTimeRemaining(true);
+            setTimeout(() => emitTimeRemaining(true), 90);
+            return;
+          }
+
+          const cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+          const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
+          if (deltaSec < 0) {
+            heldAtEndVideoId = null;
+            window.__CADENCE_HELD_VIDEO_ID__ = null;
+          }
+          let targetTime = Math.max(0, cur + deltaSec);
+          if (dur !== null) {
+            const upperCap =
+              deltaSec > 0 && config.enabled && config.stopAfterVideoEnds && dur > 1
+                ? Math.max(0, dur - 0.35)
+                : dur;
+            targetTime = Math.min(upperCap, targetTime);
+          }
+          try {
+            if (player && typeof player.seekTo === 'function') {
+              player.seekTo(targetTime, true);
+            } else {
+              video.currentTime = targetTime;
+            }
+          } catch (_) {
+            video.currentTime = targetTime;
+          }
+          emitTimeRemaining(true);
+          setTimeout(() => emitTimeRemaining(true), 80);
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
@@ -1948,6 +2192,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       window.__CADENCE_HELD_VIDEO_ID__ = null;
       lastRemainingSignature = '';
       const destUrl = (e && e.detail && e.detail.url) || '';
+      if (shouldConvertShorts() && destUrl) {
+        const redirectedWatch = buildWatchUrlFromShortsHref(destUrl);
+        if (redirectedWatch) {
+          location.replace(redirectedWatch);
+          return;
+        }
+      }
       const destVid = parseVideoIdFromHref(destUrl) || getUrlVideoId();
 
       if (destUrl && !destUrl.startsWith('/watch')) {
@@ -1976,6 +2227,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
+      if (maybeRedirectCurrentShortsRoute()) return;
+      syncShortsLinksInDom(true);
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
@@ -1991,6 +2244,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   window.addEventListener(
     'yt-page-data-updated',
     () => {
+      if (maybeRedirectCurrentShortsRoute()) return;
+      syncShortsLinksInDom(true);
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
@@ -2003,6 +2258,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   window.addEventListener(
     'popstate',
     () => {
+      if (maybeRedirectCurrentShortsRoute()) return;
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
       } else {
@@ -2033,6 +2289,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   );
 
   heartbeatInterval = setInterval(() => {
+    if (maybeRedirectCurrentShortsRoute()) return;
+    syncShortsLinksInDom(false);
     checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
@@ -2060,7 +2318,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     clearTimeout(postSpeedVerifyTimer);
   };
 
-  broadcastChannelMetadata(true);
+  if (!maybeRedirectCurrentShortsRoute()) {
+    syncShortsLinksInDom(true);
+    broadcastChannelMetadata(true);
+  }
 })();
 `;
 
@@ -2117,6 +2378,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let remainingState = {
     videoId: null,
     rawRemainingSec: null,
+    rawDurationSec: null,
     playbackRate: null,
     isAd: false,
     isLive: false,
@@ -2132,6 +2394,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let barToastReason = null;
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
+  let barResizeObserver = null;
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -2139,6 +2402,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     '<path d="M8 6.5V9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
     '<circle cx="8" cy="11.5" r="0.75" fill="currentColor"/>' +
     '</svg>';
+
+  const CADENCE_EMBLEM_SVG =
+    '<svg class="cadence-brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
+    '<rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>' +
+    '<path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>' +
+    '<rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>' +
+    '</svg>';
+
+  const REPLAY_ICON_SVG =
+    '<svg class="cadence-seek-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>' +
+    '<path d="M3 3v5h5"/>' +
+    '</svg>';
+
+  const SKIP_ICON_SVG =
+    '<svg class="cadence-seek-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>' +
+    '<path d="M21 3v5h-5"/>' +
+    '</svg>';
+
+  function disconnectBarResizeObserver() {
+    if (barResizeObserver) {
+      try {
+        barResizeObserver.disconnect();
+      } catch (_) {}
+      barResizeObserver = null;
+    }
+  }
 
   function clearBarMountRetry() {
     if (barMountRetryTimer) {
@@ -2171,6 +2462,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     clearTimeout(toastTimeout);
     hideBarToast(true);
     clearBarMountRetry();
+    disconnectBarResizeObserver();
     try {
       lifecycleController.abort();
     } catch (_) {}
@@ -2259,6 +2551,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return mins > 0 ? \`\${hrs}h \${mins}m\` : \`\${hrs}h\`;
   }
 
+  function formatExactMinutesSeconds(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec < 60) {
+      return \`\${safeSec}s\`;
+    }
+    const mins = Math.floor(safeSec / 60);
+    const secs = safeSec % 60;
+    if (mins >= 60) {
+      const hrs = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return remMins > 0 ? \`\${hrs}h \${remMins}m\` : \`\${hrs}h\`;
+    }
+    return secs > 0 ? \`\${mins}m \${String(secs).padStart(2, '0')}s\` : \`\${mins}m\`;
+  }
+
   function formatRemainingReadout(rawRemainingSec, speed) {
     if (typeof rawRemainingSec !== 'number' || !Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) {
       return '';
@@ -2270,6 +2577,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function isWatchLocation() {
     return location.pathname.startsWith('/watch');
+  }
+
+  function maybeRedirectShortsInContent() {
+    if (
+      !state.settings ||
+      state.settings.enabled === false ||
+      state.settings.convertShortsToWatch === false
+    ) {
+      return false;
+    }
+    const m = location.pathname.match(/^\\/shorts\\/([A-Za-z0-9_-]{6,})/);
+    if (!m || !m[1]) return false;
+    const params = new URLSearchParams(location.search);
+    params.set('v', m[1]);
+    params.delete('feature');
+    location.replace('/watch?' + params.toString() + (location.hash || ''));
+    return true;
   }
 
   function postToBridge(type, payload) {
@@ -2292,6 +2616,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       teardownInstance();
       return;
     }
+    if (maybeRedirectShortsInContent()) return;
     postToBridge('COMMAND', { action: 'FORCE_DETECT' });
   };
 
@@ -2462,6 +2787,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  function isAnyLiveStreamActive() {
+    if (remainingState.isLive) return true;
+    const player = getWatchPlayerElement();
+    if (!player) return false;
+    const liveTime = player.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
+    );
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    return Boolean(liveTime && badge instanceof HTMLElement && !badge.hasAttribute('hidden'));
+  }
+
   function getConfiguredSpeedForChannel(meta) {
     if (!state.settings.enabled) return 1.0;
     clearSessionOverrideIfMatchesBaseline(meta);
@@ -2554,6 +2890,107 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
   }
 
+  function computeSavedTimeModel() {
+    // Strictly VOD-only: never show on any Live Stream (neither Live End nor Live DVR) or during Ads
+    if (
+      !currentChannel ||
+      isCurrentAdActive() ||
+      remainingState.hidden ||
+      isAnyLiveStreamActive()
+    ) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+    if (
+      remainingState.videoId &&
+      currentChannel.videoId &&
+      remainingState.videoId !== currentChannel.videoId
+    ) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+
+    let durationSec =
+      typeof remainingState.rawDurationSec === 'number' &&
+      Number.isFinite(remainingState.rawDurationSec) &&
+      remainingState.rawDurationSec > 0
+        ? remainingState.rawDurationSec
+        : null;
+
+    if (durationSec === null) {
+      const video =
+        document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+        document.querySelector('#movie_player video.html5-main-video') ||
+        document.querySelector('video.html5-main-video');
+      if (video && Number.isFinite(video.duration) && video.duration > 0) {
+        durationSec = video.duration;
+      }
+    }
+
+    if (durationSec === null || durationSec < 5) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+
+    const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
+    const realTotalSec = Math.round(durationSec / effectiveSpeed);
+    const deltaSec = Math.round(durationSec - realTotalSec);
+
+    if (Math.abs(deltaSec) < 3) {
+      return {
+        visible: true,
+        tone: 'neutral',
+        text: '0s saved',
+        title: 'Playing at standard 1.0× speed',
+      };
+    }
+
+    if (deltaSec > 0) {
+      return {
+        visible: true,
+        tone: 'saved',
+        text: \`Saves \${formatExactMinutesSeconds(deltaSec)}\`,
+        title: \`Total wall-clock time saved on this video at \${formatDisplaySpeed(effectiveSpeed)}×\`,
+      };
+    }
+
+    return {
+      visible: true,
+      tone: 'slower',
+      text: \`+\${formatExactMinutesSeconds(Math.abs(deltaSec))}\`,
+      title: \`Adds \${formatExactMinutesSeconds(Math.abs(deltaSec))} to total video duration at \${formatDisplaySpeed(effectiveSpeed)}×\`,
+    };
+  }
+
+  function syncRow1BrandCollapse(bar) {
+    if (!bar) return;
+    const rowTop = bar.querySelector('.cadence-row-top');
+    const leftEl = bar.querySelector('.cadence-row-top-left');
+    const brandBtn = bar.querySelector('.cadence-brand-btn');
+    const sizerEl = bar.querySelector('.cadence-brand-sizer');
+    if (!rowTop || !leftEl || !brandBtn) return;
+
+    const availableWidth = rowTop.clientWidth;
+    if (availableWidth <= 0) return;
+
+    const leftWidth = Math.ceil(leftEl.getBoundingClientRect().width);
+    const fullBrandWidth = Math.ceil(
+      (sizerEl && sizerEl.getBoundingClientRect().width) || 206
+    );
+    const shouldCollapse = leftWidth + fullBrandWidth + 16 > availableWidth;
+    brandBtn.classList.toggle('is-tagline-collapsed', shouldCollapse);
+  }
+
+  function ensureBarResizeObserver(bar) {
+    disconnectBarResizeObserver();
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    barResizeObserver = new ResizeObserver(() => {
+      syncRow1BrandCollapse(bar);
+    });
+    barResizeObserver.observe(bar);
+    const rowTop = bar.querySelector('.cadence-row-top');
+    const leftEl = bar.querySelector('.cadence-row-top-left');
+    if (rowTop) barResizeObserver.observe(rowTop);
+    if (leftEl) barResizeObserver.observe(leftEl);
+  }
+
   function applyDurationModelToBar(bar, model) {
     if (!bar) return;
     const wrapEl = bar.querySelector('.cadence-remaining-wrap');
@@ -2609,10 +3046,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 
+  function applySavedTimeModelToBar(bar, savedModel) {
+    if (!bar) return;
+    const savedEl = bar.querySelector('.cadence-saved-time');
+    if (!savedEl) return;
+
+    if (!savedModel || !savedModel.visible || !savedModel.text) {
+      if (savedEl.style.display !== 'none') {
+        savedEl.style.display = 'none';
+      }
+      return;
+    }
+
+    if (savedEl.style.display !== 'inline-block') {
+      savedEl.style.display = 'inline-block';
+    }
+    if (savedEl.textContent !== savedModel.text) {
+      savedEl.textContent = savedModel.text;
+    }
+    const nextTitle = savedModel.title || '';
+    if (savedEl.title !== nextTitle) {
+      savedEl.title = nextTitle;
+    }
+    savedEl.classList.toggle('is-saved', savedModel.tone === 'saved');
+  }
+
   function updateRemainingReadoutInPlace() {
-    const bar = document.getElementById('cadence-owner-bar');
+    const bar = document.getElementById('cadence-watch-bar');
     if (!bar) return;
     applyDurationModelToBar(bar, computeDurationSlotModel());
+    applySavedTimeModelToBar(bar, computeSavedTimeModel());
+    syncRow1BrandCollapse(bar);
   }
 
   function pushConfigToBridge(targetSpeed, showOnBadge = true) {
@@ -2627,6 +3091,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+      convertShortsToWatch: state.settings.convertShortsToWatch !== false,
       hasSessionOverride: hasSession,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
@@ -2646,7 +3111,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function positionBarToast() {
     const toastEl = document.getElementById('cadence-bar-toast');
-    const bar = document.getElementById('cadence-owner-bar');
+    const bar = document.getElementById('cadence-watch-bar');
     if (!toastEl || !bar || !isWatchLocation()) {
       if (toastEl) toastEl.classList.remove('cadence-visible');
       return false;
@@ -2656,8 +3121,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       toastEl.classList.remove('cadence-visible');
       return false;
     }
-    const anchorEl = bar.querySelector('.cadence-bar-buttons') || bar;
-    const anchorRect = anchorEl.getBoundingClientRect();
+    const anchorRect = barRect;
     const toastWidth = toastEl.offsetWidth || 214;
     const toastHeight = toastEl.offsetHeight || 28;
     const viewportW = window.innerWidth || document.documentElement.clientWidth || 1024;
@@ -2742,6 +3206,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (barToastVisible) {
         positionBarToast();
       }
+      const bar = document.getElementById('cadence-watch-bar');
+      if (bar) syncRow1BrandCollapse(bar);
     },
     { passive: true, signal: lifecycleSignal }
   );
@@ -2850,6 +3316,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (!meta || !meta.channelName) return false;
     const cleanSpeed = clampSpeed(speed);
+    const matchedPreset =
+      presetId !== 'custom'
+        ? state.presets.find((p) => p.id === presetId)
+        : state.presets.find((p) => Math.abs(Number(p.speed) - cleanSpeed) < 0.01);
+    const resolvedPresetId = matchedPreset ? matchedPreset.id : presetId;
+
     const existingIdx = state.rules.findIndex(
       (r) =>
         (meta.channelId && r.channelId && r.channelId === meta.channelId) ||
@@ -2862,7 +3334,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       channelName: meta.channelName,
       handle: meta.handle || '@' + meta.channelName.toLowerCase().replace(/\\s+/g, ''),
       channelId: meta.channelId || '',
-      presetId,
+      presetId: resolvedPresetId,
       customSpeed: cleanSpeed,
       updatedAt: new Date().toISOString().slice(0, 10),
     };
@@ -2879,6 +3351,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       renderInPageBar();
     }
     return saved;
+  }
+
+  async function clearChannelRule(meta) {
+    if (isDestroyed || !isExtensionContextValid()) {
+      teardownInstance();
+      return false;
+    }
+    const matched = findMatchingRule(meta);
+    if (!matched) return false;
+
+    const nextRules = state.rules.filter((r) => r.id !== matched.id);
+    state.rules = nextRules;
+    sessionOverride = { videoId: null, speed: null };
+    const saved = await safeStorageSet({ rules: nextRules });
+    if (saved && currentChannel) {
+      const fallbackSpeed = getEffectiveSpeedForChannel(currentChannel);
+      remainingState.playbackRate = fallbackSpeed;
+      pushConfigToBridge(fallbackSpeed, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: fallbackSpeed });
+      renderInPageBar();
+      showPlayerToast(
+        \`Cleared Rule · Default \${formatDisplaySpeed(fallbackSpeed)}×\`
+      );
+    }
+    return saved;
+  }
+
+  function applySeekFromBar(deltaSec) {
+    if (isDestroyed || !isExtensionContextValid()) {
+      teardownInstance();
+      return;
+    }
+    const delta = Number(deltaSec) || 0;
+    if (!delta) return;
+
+    if (isCurrentAdActive()) {
+      renderInPageBar();
+      showBarToast('Skip locked during ad', 2400, 'ad');
+      showPlayerToast('Skip locked during ad', true, true);
+      return;
+    }
+
+    if (!currentChannel) {
+      currentChannel = extractDomChannelFallback();
+    }
+    const liveAtHead = isLiveAtHeadForChannel(currentChannel);
+    if (liveAtHead && delta > 0) {
+      renderInPageBar();
+      showBarToast('Stream is currently at live end', 2400, 'live');
+      showPlayerToast('Stream is currently at live end', true, true);
+      return;
+    }
+
+    hideBarToast();
+    if (delta < 0) {
+      const existingBanner = document.querySelector('.cadence-stopped-banner');
+      if (existingBanner) {
+        existingBanner.classList.remove('cadence-visible');
+      }
+      if (liveAtHead) {
+        remainingState.isAtLiveHead = false;
+      }
+    }
+
+    postToBridge('COMMAND', {
+      action: 'SEEK_BY_SECONDS',
+      deltaSec: delta,
+    });
+    showPlayerToast(delta < 0 ? \`Replay \${Math.abs(delta)}s\` : \`Skip +\${delta}s\`);
   }
 
   function applySessionSpeedFromBar(nextSpeed) {
@@ -3012,12 +3553,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }, 150);
   }
 
+  function resolveWatchBarMountPoint() {
+    const aboveTheFold =
+      document.querySelector('ytd-watch-flexy ytd-watch-metadata #above-the-fold') ||
+      document.querySelector('ytd-watch-metadata #above-the-fold');
+    if (aboveTheFold) {
+      const titleEl = aboveTheFold.querySelector(':scope > #title') || aboveTheFold.firstElementChild;
+      return { container: aboveTheFold, beforeNode: titleEl || null };
+    }
+    const watchMetadata =
+      document.querySelector('ytd-watch-flexy ytd-watch-metadata') ||
+      document.querySelector('ytd-watch-metadata');
+    if (watchMetadata) {
+      const titleEl = watchMetadata.querySelector('#title') || watchMetadata.firstElementChild;
+      return { container: watchMetadata, beforeNode: titleEl || null };
+    }
+    return null;
+  }
+
   function renderInPageBar() {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
     }
-    let existing = document.getElementById('cadence-owner-bar');
+
+    // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
+    const legacyOwnerBar = document.getElementById('cadence-owner-bar');
+    if (legacyOwnerBar) {
+      legacyOwnerBar.remove();
+    }
+
+    let existing = document.getElementById('cadence-watch-bar');
     if (existing && existing.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
       existing.remove();
       existing = null;
@@ -3026,6 +3592,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isWatchLocation()) {
       clearBarMountRetry();
       hideBarToast(true);
+      disconnectBarResizeObserver();
       if (existing) existing.remove();
       return;
     }
@@ -3036,33 +3603,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!state.settings.enabled || !state.settings.showInPageControlBar || !currentChannel) {
       clearBarMountRetry();
       hideBarToast(true);
+      disconnectBarResizeObserver();
       if (existing) existing.remove();
       return;
     }
 
-    const ownerContainer =
-      document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner') ||
-      document.querySelector('ytd-watch-metadata #owner') ||
-      document.querySelector('#above-the-fold #owner');
-    if (!ownerContainer) {
+    const mountPoint = resolveWatchBarMountPoint();
+    if (!mountPoint || !mountPoint.container) {
       scheduleBarMountRetryIfNeeded();
       return;
     }
     clearBarMountRetry();
 
     let bar = existing;
-    if (!bar || bar.parentElement !== ownerContainer) {
+    if (!bar || bar.parentElement !== mountPoint.container) {
       if (bar) bar.remove();
       bar = document.createElement('div');
-      bar.id = 'cadence-owner-bar';
-      bar.className = 'cadence-owner-bar';
+      bar.id = 'cadence-watch-bar';
+      bar.className = 'cadence-watch-bar';
       bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
-      ownerContainer.appendChild(bar);
+      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
+        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
+      } else {
+        mountPoint.container.prepend(bar);
+      }
+    } else if (
+      mountPoint.beforeNode &&
+      mountPoint.beforeNode.parentElement === mountPoint.container &&
+      bar.nextElementSibling !== mountPoint.beforeNode &&
+      bar !== mountPoint.beforeNode
+    ) {
+      mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
     }
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
     const adActive = isCurrentAdActive();
     const matchedRule = findMatchingRule(currentChannel);
+    const ruleResolvedSpeed = matchedRule ? resolveSpeedForRule(matchedRule) : null;
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
@@ -3072,76 +3649,188 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const isStepUpLiveBlocked = !adActive && liveAtHead && effectiveSpeed + 0.05 > 1.01;
     const liveBlockedTooltip = 'Unavailable while synced at live end — rewind stream to speed up';
     const adBlockedTooltip = 'Speed locked during ad';
+    const adSkipBlockedTooltip = 'Skip locked during ad';
+
     const modePrefix = adActive
-      ? 'Ad'
+      ? 'Sponsored Ad'
       : isSessionActive
-        ? 'Session'
+        ? 'Session Override'
         : matchedRule
-          ? 'Rule'
+          ? 'Channel Rule'
           : 'Default';
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
     const tooltip = adActive
       ? isSessionActive
         ? \`Ad playing at 1× · Session \${formatDisplaySpeed(sessionOverride.speed)}× restores automatically after ad\`
-        : \`Ad playing at 1× · Speed locked during ad\`
+        : 'Ad playing at 1× · Controls paused until ad ends'
       : isSessionActive
         ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
         : isLiveRuleClamped
           ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
-          : 'Session-only speed bar · Does not overwrite saved channel rules';
+          : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
+
     const durationModel = computeDurationSlotModel();
+    const savedTimeModel = computeSavedTimeModel();
+
+    let ruleSlotHtml = '';
+    if (!matchedRule) {
+      const saveTargetRate = adActive ? baselineSpeed : effectiveSpeed;
+      ruleSlotHtml = \`
+        <span class="cadence-rule-status">No rule</span>
+        <button type="button" data-rule-action="save" class="cadence-rule-action-btn\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : \`Save \${formatDisplaySpeed(saveTargetRate)}× as a Rule for \${currentChannel.channelName || 'this channel'}\`}">
+          <span class="cadence-rule-plus" aria-hidden="true">+</span>
+          <span>Save \${formatDisplaySpeed(saveTargetRate)}× Rule</span>
+        </button>
+      \`;
+    } else if (isSessionActive && !adActive) {
+      ruleSlotHtml = \`
+        <span class="cadence-rule-status">Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <button type="button" data-rule-action="update" class="cadence-rule-action-btn is-update" title="\${\`Update \${currentChannel.channelName || 'channel'} Rule from \${formatDisplaySpeed(ruleResolvedSpeed)}× to \${formatDisplaySpeed(effectiveSpeed)}×\`}">
+          <span>Update → \${formatDisplaySpeed(effectiveSpeed)}×</span>
+        </button>
+      \`;
+    } else {
+      ruleSlotHtml = \`
+        <span class="cadence-rule-status">Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <button type="button" data-rule-action="clear" class="cadence-rule-action-btn\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Clear saved Rule and revert to Default speed'}">
+          <span>Clear</span>
+          <span class="cadence-rule-clear-x" aria-hidden="true">×</span>
+        </button>
+      \`;
+    }
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    const replaySteps = [-60, -30, -10];
+    const skipSteps = [10, 30, 60];
+    const seekForwardBlocked = adActive || liveAtHead;
+
     bar.innerHTML = \`
-      <span class="cadence-bar-label \${!adActive && isSessionActive ? 'is-session' : ''}" title="\${tooltip}">
-        <span class="cadence-bar-label-sizer" aria-hidden="true">Session · <strong>8.88×</strong></span>
-        <span class="cadence-bar-label-text">\${modePrefix} · <strong>\${formatCompactSpeed(displayedBarRate)}×</strong></span>
+      <span class="cadence-brand-sizer" aria-hidden="true">
+        \${CADENCE_EMBLEM_SVG}
+        <span class="cadence-brand-name">Cadence</span>
+        <span class="cadence-brand-tagline">- YouTube at your speed</span>
       </span>
-      <div class="cadence-bar-buttons">
-        \${quickSpeeds
-          .map((spd) => {
-            const isActive = !adActive && Math.abs(effectiveSpeed - spd) < 0.015;
-            const isLiveBlocked = !adActive && liveAtHead && spd > 1.01;
-            const isDisabledVisual = adActive || isLiveBlocked;
-            const chipClasses = [
-              'cadence-speed-chip',
-              isActive ? 'active' : '',
-              adActive ? 'is-ad-blocked' : isLiveBlocked ? 'is-live-blocked' : '',
-            ]
-              .filter(Boolean)
-              .join(' ');
-            const chipTitle = adActive
-              ? adBlockedTooltip
-              : isLiveBlocked
-                ? liveBlockedTooltip
-                : \`Set \${formatDisplaySpeed(spd)}× for this video session only\`;
-            return \`
-          <button type="button" data-speed="\${spd}" class="\${chipClasses}"\${isDisabledVisual ? ' aria-disabled="true"' : ''} title="\${chipTitle}">
-            \${formatDisplaySpeed(spd)}×
-          </button>
-        \`;
-          })
-          .join('')}
-      </div>
-      <span class="cadence-bar-divider" aria-hidden="true"></span>
-      <div class="cadence-bar-Fine">
-        <button type="button" data-step="-0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Slow down by 0.05× for this video session'}">−0.05</button>
-        <button type="button" data-step="0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Speed up by 0.05× for this video session'}">+0.05</button>
-        <button type="button" data-action="reset" class="cadence-reset-chip \${!adActive && isSessionActive ? 'is-active' : ''}\${adActive ? ' is-ad-blocked' : ''}" \${!adActive && !isSessionActive ? 'disabled' : ''}\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : \`Reset to \${matchedRule ? 'channel rule' : 'default'} (\${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)\`}">Reset</button>
-      </div>
-      <span class="cadence-remaining-wrap" style="display:none;">
-        <span class="cadence-bar-divider" aria-hidden="true"></span>
-        <button type="button" class="cadence-remaining-slot" disabled>
-          <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
-          <span class="cadence-remaining-time-grid">
-            <span class="cadence-remaining-sizer" aria-hidden="true"></span>
-            <span class="cadence-remaining-time"></span>
+
+      <div class="cadence-row-top">
+        <div class="cadence-row-top-left">
+          <span class="cadence-source-readout \${adActive || isSessionActive ? 'is-highlighted' : ''}" title="\${tooltip}">
+            <span>\${modePrefix} ·</span>
+            <span class="cadence-rate-grid">
+              <span class="cadence-rate-sizer" aria-hidden="true">8.88×</span>
+              <strong class="cadence-rate-value">\${formatCompactSpeed(displayedBarRate)}×</strong>
+            </span>
           </span>
+          \${
+            adActive
+              ? \`
+          <span class="cadence-bar-divider" aria-hidden="true"></span>
+          <span class="cadence-ad-paused-note">Controls paused until ad ends</span>
+          \`
+              : \`
+          <span class="cadence-remaining-wrap" style="display:none;">
+            <span class="cadence-bar-divider" aria-hidden="true"></span>
+            <button type="button" class="cadence-remaining-slot" disabled>
+              <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
+              <span class="cadence-remaining-time-grid">
+                <span class="cadence-remaining-sizer" aria-hidden="true"></span>
+                <span class="cadence-remaining-time"></span>
+              </span>
+            </button>
+          </span>
+          \`
+          }
+        </div>
+
+        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Channel Rules)">
+          \${CADENCE_EMBLEM_SVG}
+          <span class="cadence-brand-name">Cadence</span>
+          <span class="cadence-brand-tagline">- YouTube at your speed</span>
         </button>
-      </span>
+      </div>
+
+      <div class="cadence-row-mid">
+        <div class="cadence-bar-buttons">
+          \${quickSpeeds
+            .map((spd) => {
+              const isActive = !adActive && Math.abs(effectiveSpeed - spd) < 0.015;
+              const isLiveBlocked = !adActive && liveAtHead && spd > 1.01;
+              const isDisabledVisual = adActive || isLiveBlocked;
+              const chipClasses = [
+                'cadence-speed-chip',
+                isActive ? 'active' : '',
+                adActive ? 'is-ad-blocked' : isLiveBlocked ? 'is-live-blocked' : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+              const chipTitle = adActive
+                ? adBlockedTooltip
+                : isLiveBlocked
+                  ? liveBlockedTooltip
+                  : \`Set \${formatDisplaySpeed(spd)}× for this video session only\`;
+              return \`
+            <button type="button" data-speed="\${spd}" class="\${chipClasses}"\${isDisabledVisual ? ' aria-disabled="true"' : ''} title="\${chipTitle}">
+              \${formatDisplaySpeed(spd)}×
+            </button>
+          \`;
+            })
+            .join('')}
+        </div>
+
+        <div class="cadence-seek-group">
+          <div class="cadence-seek-capsule\${adActive ? ' is-ad-blocked' : ''}">
+            <span class="cadence-seek-icon-cell" title="Replay seconds" aria-hidden="true">\${REPLAY_ICON_SVG}</span>
+            \${replaySteps
+              .map(
+                (sec) => \`
+              <button type="button" data-seek="\${sec}" class="cadence-seek-btn"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adSkipBlockedTooltip : \`Replay \${Math.abs(sec)} seconds\`}">\${Math.abs(sec)}</button>
+            \`
+              )
+              .join('')}
+          </div>
+          <div class="cadence-seek-capsule\${adActive ? ' is-ad-blocked' : liveAtHead ? ' is-live-blocked' : ''}">
+            \${skipSteps
+              .map(
+                (sec) => \`
+              <button type="button" data-seek="\${sec}" class="cadence-seek-btn"\${seekForwardBlocked ? ' aria-disabled="true"' : ''} title="\${adActive ? adSkipBlockedTooltip : liveAtHead ? 'Stream is currently at live end' : \`Skip ahead \${sec} seconds\`}">\${sec}</button>
+            \`
+              )
+              .join('')}
+            <span class="cadence-seek-icon-cell" title="Skip ahead seconds" aria-hidden="true">\${SKIP_ICON_SVG}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cadence-row-bot">
+        <div class="cadence-fine-group">
+          <button type="button" data-step="-0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Decrease playback speed by 0.05× for this video session'}">−0.05</button>
+          <button type="button" data-step="0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Increase playback speed by 0.05× for this video session'}">+0.05</button>
+          <button type="button" data-action="reset" class="cadence-reset-chip \${!adActive && isSessionActive ? 'is-active' : ''}\${adActive ? ' is-ad-blocked' : ''}" \${!adActive && !isSessionActive ? 'disabled' : ''}\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : \`Reset session override to \${matchedRule ? 'Rule' : 'Default'} (\${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)\`}">Reset</button>
+          <span class="cadence-saved-time" style="display:none;"></span>
+        </div>
+
+        <div class="cadence-rule-slot">
+          \${ruleSlotHtml}
+        </div>
+      </div>
     \`;
 
-    applyDurationModelToBar(bar, durationModel);
+    if (!adActive) {
+      applyDurationModelToBar(bar, durationModel);
+    }
+    applySavedTimeModelToBar(bar, savedTimeModel);
+    ensureBarResizeObserver(bar);
+    syncRow1BrandCollapse(bar);
+
+    const brandBtn = bar.querySelector('.cadence-brand-btn');
+    if (brandBtn) {
+      brandBtn.addEventListener(
+        'click',
+        () => {
+          safeSendMessage({ type: 'CADENCE_OPEN_OPTIONS' });
+        },
+        { signal: lifecycleSignal }
+      );
+    }
 
     bar.querySelectorAll('.cadence-speed-chip').forEach((btn) => {
       btn.addEventListener(
@@ -3149,6 +3838,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         () => {
           const chosen = Number(btn.getAttribute('data-speed'));
           applySessionSpeedFromBar(chosen);
+        },
+        { signal: lifecycleSignal }
+      );
+    });
+
+    bar.querySelectorAll('.cadence-seek-btn').forEach((btn) => {
+      btn.addEventListener(
+        'click',
+        () => {
+          const delta = Number(btn.getAttribute('data-seek')) || 0;
+          applySeekFromBar(delta);
         },
         { signal: lifecycleSignal }
       );
@@ -3178,6 +3878,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           if (!hasActiveSessionOverride(currentChannel && currentChannel.videoId)) return;
           resetSessionSpeedFromBar();
+        },
+        { signal: lifecycleSignal }
+      );
+    }
+
+    const ruleActionBtn = bar.querySelector('.cadence-rule-action-btn');
+    if (ruleActionBtn) {
+      ruleActionBtn.addEventListener(
+        'click',
+        async () => {
+          if (isCurrentAdActive()) {
+            showBarToast('Speed locked during ad', 2400, 'ad');
+            showPlayerToast('Speed locked during ad', true, true);
+            return;
+          }
+          if (!currentChannel) {
+            currentChannel = extractDomChannelFallback();
+          }
+          if (!currentChannel) return;
+
+          const action = ruleActionBtn.getAttribute('data-rule-action');
+          if (action === 'clear') {
+            await clearChannelRule(currentChannel);
+            return;
+          }
+          if (action === 'save' || action === 'update') {
+            const targetRate = clampSpeed(getEffectiveSpeedForChannel(currentChannel));
+            sessionOverride = { videoId: null, speed: null };
+            const ok = await saveChannelSpeed(currentChannel, targetRate, 'custom');
+            if (ok) {
+              const applied = getEffectiveSpeedForChannel(currentChannel);
+              remainingState.playbackRate = applied;
+              pushConfigToBridge(applied, true);
+              postToBridge('COMMAND', { action: 'SET_SPEED', speed: applied });
+              renderInPageBar();
+              showPlayerToast(
+                action === 'update'
+                  ? \`Updated Rule → \${formatDisplaySpeed(targetRate)}×\`
+                  : \`Saved \${formatDisplaySpeed(targetRate)}× Rule\`
+              );
+            }
+          }
         },
         { signal: lifecycleSignal }
       );
@@ -3222,6 +3964,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     remainingState = {
       videoId: null,
       rawRemainingSec: null,
+      rawDurationSec: null,
       playbackRate: null,
       isAd: false,
       isLive: false,
@@ -3233,9 +3976,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastToastedVideoId = null;
     clearBarMountRetry();
     hideBarToast(true);
+    disconnectBarResizeObserver();
 
-    const existingBar = document.getElementById('cadence-owner-bar');
+    const existingBar = document.getElementById('cadence-watch-bar');
     if (existingBar) existingBar.remove();
+    const legacyBar = document.getElementById('cadence-owner-bar');
+    if (legacyBar) legacyBar.remove();
     const existingBanner = document.querySelector('.cadence-stopped-banner');
     if (existingBanner) existingBanner.classList.remove('cadence-visible');
 
@@ -3253,6 +3999,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     if (!isWatchLocation()) {
+      maybeRedirectShortsInContent();
       handleLeftWatchPage();
       return;
     }
@@ -3381,7 +4128,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             showBarToast('Speed locked during ad', 2400, 'ad');
             showPlayerToast('Speed locked during ad', true, true);
           }
+        } else if (type === 'AD_SKIP_BLOCKED') {
+          remainingState.isAd = true;
+          if (currentChannel) {
+            currentChannel = { ...currentChannel, isAd: true };
+          }
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Skip locked during ad', 2400, 'ad');
+            showPlayerToast('Skip locked during ad', true, true);
+          }
+        } else if (type === 'LIVE_HEAD_SKIP_BLOCKED') {
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Stream is currently at live end', 2400, 'live');
+            showPlayerToast('Stream is currently at live end', true, true);
+          }
         } else if (type === 'LIVE_CAUGHT_UP') {
+          const fromSeek = Boolean(payload && payload.fromSeek);
           const hadFastRate =
             activeSpeed > 1.01 ||
             Boolean(
@@ -3405,7 +4171,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const headSpeed = currentChannel ? getEffectiveSpeedForChannel(currentChannel) : 1.0;
             pushConfigToBridge(headSpeed, Boolean(state.settings.perChannelSpeedEnabled));
             renderInPageBar();
-            if (hadFastRate) {
+            if (fromSeek) {
+              showPlayerToast('Synced to Live · 1.0×');
+            } else if (hadFastRate) {
               showPlayerToast('Caught up to Live · 1.0×');
             }
           }
@@ -3417,6 +4185,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             videoId: payload.videoId || null,
             rawRemainingSec:
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
+            rawDurationSec:
+              typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
             isAd: Boolean(payload.isAd),
@@ -3497,6 +4267,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             remainingState = {
               videoId: payload.videoId,
               rawRemainingSec: null,
+              rawDurationSec: null,
               playbackRate: null,
               isAd: false,
               isLive: false,
@@ -3520,6 +4291,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           postToBridge('CONFIG_UPDATE', {
             enabled: state.settings.enabled,
             perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+            convertShortsToWatch: state.settings.convertShortsToWatch !== false,
             stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
             defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
             targetSpeed: activeSpeed,
@@ -3543,6 +4315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               remainingState = {
                 videoId: payload.videoId,
                 rawRemainingSec: null,
+                rawDurationSec: null,
                 playbackRate: null,
                 isAd: Boolean(payload.isAd),
                 isLive: false,
@@ -3793,6 +4566,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (changes.settings) state.settings = changes.settings.newValue;
       if (changes.presets) state.presets = changes.presets.newValue;
       if (changes.rules) state.rules = changes.rules.newValue;
+
+      if (maybeRedirectShortsInContent()) return;
+
+      postToBridge('CONFIG_UPDATE', {
+        enabled: state.settings.enabled,
+        perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+        convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+        hasSessionOverride: Boolean(
+          currentChannel && hasActiveSessionOverride(currentChannel.videoId)
+        ),
+        stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
+        defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
+        targetSpeed: activeSpeed,
+      });
       applyForCurrentChannel(false);
     });
   } catch (_) {
@@ -3806,9 +4593,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
 
+    if (maybeRedirectShortsInContent()) return;
+
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+      convertShortsToWatch: state.settings.convertShortsToWatch !== false,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,
@@ -3829,13 +4619,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 })();
 `;
 
-  const contentCss = `.cadence-owner-bar {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
+  const contentCss = `.cadence-watch-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  margin-left: 10px;
-  padding: 4px 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 4px 0 10px 0;
+  padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(15, 23, 42, 0.04);
@@ -3844,56 +4636,202 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   color: inherit;
 }
 
-html[dark] .cadence-owner-bar {
+html[dark] .cadence-watch-bar {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.14);
   color: #f1f5f9;
 }
 
-.cadence-bar-label {
-  display: inline-grid;
+.cadence-brand-sizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  display: inline-flex;
   align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.cadence-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+html[dark] .cadence-row-top {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.cadence-row-top-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cadence-source-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
   white-space: nowrap;
   opacity: 0.92;
   font-variant-numeric: tabular-nums;
 }
 
-.cadence-bar-label-sizer,
-.cadence-bar-label-text {
+.cadence-rate-grid {
+  display: inline-grid;
+  align-items: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-rate-sizer,
+.cadence-rate-value {
   grid-area: 1 / 1;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
+  font-weight: 600;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-.cadence-bar-label-sizer {
+.cadence-rate-sizer {
   visibility: hidden;
   pointer-events: none;
   user-select: none;
 }
 
-.cadence-bar-label.is-session strong {
-  color: #f97316;
+.cadence-source-readout.is-highlighted .cadence-rate-value {
+  color: #ea580c;
 }
 
-html[dark] .cadence-bar-label.is-session strong {
+html[dark] .cadence-source-readout.is-highlighted .cadence-rate-value {
   color: #fdba74;
 }
 
-.cadence-bar-buttons,
-.cadence-bar-Fine {
+.cadence-ad-paused-note {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #b45309;
+  white-space: nowrap;
+}
+
+html[dark] .cadence-ad-paused-note {
+  color: rgba(252, 211, 77, 0.92);
+}
+
+.cadence-brand-btn {
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: rgba(71, 85, 105, 0.92);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: color 140ms ease, opacity 140ms ease;
+}
+
+html[dark] .cadence-brand-btn {
+  color: rgba(203, 213, 225, 0.88);
+}
+
+.cadence-brand-btn:hover {
+  color: #0f172a;
+}
+
+html[dark] .cadence-brand-btn:hover {
+  color: #ffffff;
+}
+
+.cadence-brand-emblem {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.cadence-brand-name {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+}
+
+html[dark] .cadence-brand-name {
+  color: #e2e8f0;
+}
+
+.cadence-brand-btn:hover .cadence-brand-name {
+  color: inherit;
+}
+
+.cadence-brand-tagline {
+  opacity: 0.82;
+}
+
+.cadence-brand-btn.is-tagline-collapsed .cadence-brand-tagline {
+  display: none;
+}
+
+.cadence-row-mid {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cadence-row-bot {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+html[dark] .cadence-row-bot {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.cadence-bar-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.cadence-fine-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .cadence-bar-divider {
   width: 1px;
-  height: 14px;
-  background: rgba(148, 163, 184, 0.3);
+  height: 12px;
+  background: rgba(148, 163, 184, 0.34);
+  flex-shrink: 0;
+}
+
+html[dark] .cadence-bar-divider {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .cadence-remaining-wrap {
@@ -3909,9 +4847,9 @@ html[dark] .cadence-bar-label.is-session strong {
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
-  padding: 2px 5px;
+  padding: 1px 5px;
   border-radius: 5px;
-  font-family: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
@@ -3921,7 +4859,7 @@ html[dark] .cadence-bar-label.is-session strong {
 }
 
 .cadence-remaining-slot:disabled {
-  opacity: 0.82;
+  opacity: 0.86;
   cursor: default;
 }
 
@@ -4001,31 +4939,239 @@ html[dark] .cadence-bar-label.is-session strong {
   color: #ffffff;
 }
 
-.cadence-step-chip,
-.cadence-reset-chip {
-  border: 1px solid rgba(148, 163, 184, 0.28);
+.cadence-seek-group {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cadence-seek-capsule {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.03);
+  overflow: hidden;
+  transition: opacity 140ms ease;
+}
+
+html[dark] .cadence-seek-capsule {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cadence-seek-capsule > * + * {
+  border-left: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+html[dark] .cadence-seek-capsule > * + * {
+  border-left-color: rgba(255, 255, 255, 0.14);
+}
+
+.cadence-seek-icon-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  opacity: 0.72;
+  user-select: none;
+}
+
+.cadence-seek-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.cadence-seek-btn {
+  border: none;
   background: transparent;
   color: inherit;
   padding: 2px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.cadence-seek-capsule:not(.is-ad-blocked):not(.is-live-blocked) .cadence-seek-btn:hover {
+  background: rgba(148, 163, 184, 0.22);
+}
+
+html[dark] .cadence-seek-capsule:not(.is-ad-blocked):not(.is-live-blocked) .cadence-seek-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.cadence-step-chip {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.03);
+  color: inherit;
+  padding: 2px 6px;
   border-radius: 5px;
-  font-size: 11px;
-  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
   cursor: pointer;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   transition: background 140ms ease, opacity 140ms ease, border-color 140ms ease;
 }
 
-.cadence-step-chip:hover,
-.cadence-reset-chip.is-active:hover {
+html[dark] .cadence-step-chip {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cadence-reset-chip {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: transparent;
+  color: inherit;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: background 140ms ease, opacity 140ms ease, border-color 140ms ease;
+}
+
+.cadence-step-chip:hover {
   background: rgba(148, 163, 184, 0.22);
+}
+
+html[dark] .cadence-step-chip:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.cadence-reset-chip.is-active {
+  border-color: rgba(239, 68, 68, 0.65);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.cadence-reset-chip.is-active:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.cadence-saved-time {
+  margin-left: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+
+.cadence-saved-time.is-saved {
+  color: #059669;
+  opacity: 1;
+}
+
+html[dark] .cadence-saved-time.is-saved {
+  color: #34d399;
+}
+
+.cadence-rule-slot {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-style: italic;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cadence-rule-status {
+  font-size: 10.5px;
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+
+.cadence-rule-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.03);
+  color: inherit;
+  font-family: inherit;
+  font-style: italic;
+  font-size: 10.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  opacity: 0.92;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+
+html[dark] .cadence-rule-action-btn {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cadence-rule-action-btn:hover {
+  background: rgba(148, 163, 184, 0.2);
+  opacity: 1;
+}
+
+html[dark] .cadence-rule-action-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.cadence-rule-action-btn.is-update {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+  opacity: 1;
+}
+
+html[dark] .cadence-rule-action-btn.is-update {
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+}
+
+.cadence-rule-action-btn.is-update:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
+
+.cadence-rule-plus {
+  color: #ef4444;
+  font-style: normal;
+  font-weight: 700;
+}
+
+html[dark] .cadence-rule-plus {
+  color: #f87171;
+}
+
+.cadence-rule-clear-x {
+  font-style: normal;
+  opacity: 0.72;
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active),
 .cadence-step-chip.is-live-blocked,
+.cadence-seek-capsule.is-live-blocked,
 .cadence-speed-chip.is-ad-blocked,
 .cadence-step-chip.is-ad-blocked,
-.cadence-reset-chip.is-ad-blocked {
+.cadence-reset-chip.is-ad-blocked,
+.cadence-seek-capsule.is-ad-blocked,
+.cadence-rule-action-btn.is-ad-blocked {
   opacity: 0.42;
 }
 
@@ -4033,7 +5179,8 @@ html[dark] .cadence-bar-label.is-session strong {
 .cadence-step-chip.is-live-blocked:hover,
 .cadence-speed-chip.is-ad-blocked:hover,
 .cadence-step-chip.is-ad-blocked:hover,
-.cadence-reset-chip.is-ad-blocked:hover {
+.cadence-reset-chip.is-ad-blocked:hover,
+.cadence-rule-action-btn.is-ad-blocked:hover {
   opacity: 0.68;
   background: rgba(245, 158, 11, 0.14);
 }
@@ -4041,10 +5188,6 @@ html[dark] .cadence-bar-label.is-session strong {
 .cadence-reset-chip:disabled {
   opacity: 0.42;
   cursor: default;
-}
-
-.cadence-reset-chip.is-active {
-  border-color: rgba(220, 38, 38, 0.55);
 }
 
 .cadence-toast-warn-icon {
@@ -4451,9 +5594,16 @@ html[dark] .cadence-bar-label.is-session strong {
       <div class="row">
         <div>
           <div class="row-label">Show Speed Bar Below Video</div>
-          <div class="row-sub">Session-only speed bar &amp; remaining time</div>
+          <div class="row-sub">Full-width speed, skip &amp; rule deck above title</div>
         </div>
         <input type="checkbox" id="toggle-bar" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Convert Shorts to Standard Player</div>
+          <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
+        </div>
+        <input type="checkbox" id="toggle-shorts" />
       </div>
     </div>
 
@@ -4496,9 +5646,10 @@ html[dark] .cadence-bar-label.is-session strong {
     autoRememberManualSpeed: false,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
+    convertShortsToWatch: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 2,
+    settingsSchemaVersion: 3,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -4513,6 +5664,7 @@ html[dark] .cadence-bar-label.is-session strong {
   const toggleRemember = document.getElementById('toggle-remember');
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
+  const toggleShorts = document.getElementById('toggle-shorts');
   const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
@@ -4541,6 +5693,9 @@ html[dark] .cadence-bar-label.is-session strong {
   toggleRemember.checked = Boolean(settings.autoRememberManualSpeed);
   toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
   toggleBar.checked = settings.showInPageControlBar !== false;
+  if (toggleShorts) {
+    toggleShorts.checked = settings.convertShortsToWatch !== false;
+  }
 
   function renderRuleCount() {
     summaryEl.textContent = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'}\`;
@@ -4556,6 +5711,11 @@ html[dark] .cadence-bar-label.is-session strong {
   toggleRemember.addEventListener('change', () => updateSetting({ autoRememberManualSpeed: toggleRemember.checked }));
   toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
   toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
+  if (toggleShorts) {
+    toggleShorts.addEventListener('change', () =>
+      updateSetting({ convertShortsToWatch: toggleShorts.checked })
+    );
+  }
 
   document.getElementById('open-options').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
@@ -5565,49 +6725,49 @@ html[dark] .cadence-bar-label.is-session strong {
     {
       path: 'manifest.json',
       language: 'json',
-      description: `Manifest V3 (v${EXTENSION_VERSION}) running MAIN and ISOLATED scripts at document_start for millisecond speed lock.`,
+      description: `Manifest V3 (v${EXTENSION_VERSION}) running MAIN and ISOLATED scripts at document_start for millisecond speed lock and Shorts conversion.`,
       content: manifestJson,
     },
     {
       path: 'page-bridge.js',
       language: 'javascript',
       description:
-        'MAIN-world bridge with smooth monotonic Live DVR catch-up, automatic native LIVE badge sync, ad-lock guardrails, and zero-lag loadstart enforcement.',
+        'MAIN-world bridge with 10/30/60s transport seek, reversible Shorts link rewriter & history-safe redirect, Live DVR catch-up, and ad-lock guardrails.',
       content: pageBridgeJs,
     },
     {
       path: 'content.js',
       language: 'javascript',
       description:
-        'Isolated content script with ad speed locking & post-ad session override restoration, live-end guardrails, and fixed-width compact watch bar.',
+        'Isolated content script mounting the full-width 3-row transport deck above #title with collision-aware brand tagline, VOD saved time, and 1-click italic Rule slot.',
       content: contentJs,
     },
     {
       path: 'content.css',
       language: 'css',
       description:
-        'Adaptive light/dark styles for the zero-shift fixed-width speed bar, ad/live-blocked indicators, floating amber bar toast, and end-stop banner.',
+        'Adaptive light/dark styles for the full-width 3-row transport deck above #title, Style B seek capsules, VOD-only saved time, and Style A italic Rule slot.',
       content: contentCss,
     },
     {
       path: 'background.js',
       language: 'javascript',
       description:
-        'Service worker handling v2 settings migration, instant toolbar badge clearing on non-watch YouTube routes, and open-tab attachment.',
+        'Service worker handling v3 settings migration (Shorts conversion enabled by default), options launcher, badge updates, and open-tab attachment.',
       content: backgroundJs,
     },
     {
       path: 'popup.html',
       language: 'html',
       description:
-        'Native dark-mode toolbar popup displaying active version, ad/live status notices, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
+        'Native dark-mode toolbar popup with Shorts-to-Watch toggle, full-width speed bar toggle, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
       content: popupHtml,
     },
     {
       path: 'popup.js',
       language: 'javascript',
       description:
-        'Popup controller reading manifest version dynamically, enforcing ad and live-end speed guardrails with inline toast feedback, and saving channel rules.',
+        'Popup controller syncing Shorts conversion & speed bar settings, enforcing ad and live-end speed guardrails, and saving per-channel rules.',
       content: popupJs,
     },
     {

@@ -7,7 +7,8 @@ const INITIAL_STATE = {
     "stopAfterVideoEnds": true,
     "showInPageControlBar": true,
     "showSpeedToast": true,
-    "settingsSchemaVersion": 2
+    "convertShortsToWatch": true,
+    "settingsSchemaVersion": 3
   },
   "presets": [
     {
@@ -120,13 +121,24 @@ chrome.runtime.onInstalled.addListener(async () => {
     nextPayload.settings = {
       ...INITIAL_STATE.settings,
       autoRememberManualSpeed: false,
-      settingsSchemaVersion: 2,
+      convertShortsToWatch:
+        typeof INITIAL_STATE.settings.convertShortsToWatch === 'boolean'
+          ? INITIAL_STATE.settings.convertShortsToWatch
+          : true,
+      settingsSchemaVersion: 3,
     };
-  } else if ((existing.settings.settingsSchemaVersion || 1) < 2) {
+  } else if ((existing.settings.settingsSchemaVersion || 1) < 3) {
+    const prevVersion = existing.settings.settingsSchemaVersion || 1;
     nextPayload.settings = {
+      ...INITIAL_STATE.settings,
       ...existing.settings,
-      autoRememberManualSpeed: false,
-      settingsSchemaVersion: 2,
+      autoRememberManualSpeed:
+        prevVersion < 2 ? false : Boolean(existing.settings.autoRememberManualSpeed),
+      convertShortsToWatch:
+        typeof existing.settings.convertShortsToWatch === 'boolean'
+          ? existing.settings.convertShortsToWatch
+          : true,
+      settingsSchemaVersion: 3,
     };
   }
   if (!existing.presets) nextPayload.presets = INITIAL_STATE.presets;
@@ -172,6 +184,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message && message.type === 'CADENCE_OPEN_OPTIONS') {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;
     if (tabId) {

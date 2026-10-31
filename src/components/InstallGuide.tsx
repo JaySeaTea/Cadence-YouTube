@@ -167,16 +167,24 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
 
         <div className="p-6 space-y-1">
           <h2 className="text-base font-bold text-slate-100">
-            04. Open Any YouTube Watch Page or Playlist
+            04. Open Any YouTube Watch Page, Short, or Playlist
           </h2>
           <p className="text-sm text-slate-400 leading-relaxed max-w-2xl">
             Cadence automatically attaches to open YouTube tabs via{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
               chrome.scripting
             </code>
-            , detects the active channel, applies its saved playback speed, renders both the
-            toolbar popup controls and below-video speed + remaining-time bar, and stops playback
-            cleanly when any video finishes—even inside Watch Later (
+            , converts YouTube{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+              /shorts/
+            </code>{' '}
+            links and URLs to the standard{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+              /watch
+            </code>{' '}
+            player, locks in saved channel speeds, mounts the full-width 3-row speed, skip &amp;
+            rule deck directly above the video title, and stops playback cleanly when any video
+            finishes—even inside Watch Later (
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
               list=WL
             </code>
@@ -193,33 +201,40 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-5 text-sm text-slate-400 leading-relaxed">
           <div className="space-y-1.5">
             <h3 className="font-semibold text-slate-100">
-              Zero-Lag Pre-Navigation Lock &amp; Self-Clearing Session Bar
+              Full-Width 3-Row Watch Deck, 10s/30s/60s Seek &amp; 1-Click Channel Rules
             </h3>
             <p>
-              Cadence captures video card channel hints on click, resets YouTube’s persistent{' '}
+              Cadence mounts its watch-page transport deck full-width inside{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-                &lt;video&gt;
+                #above-the-fold
               </code>{' '}
-              rate and toolbar badge when returning to YouTube Home, enforces target speeds on{' '}
+              directly above{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-                loadstart
+                #title
               </code>{' '}
-              within milliseconds, shows real-time remaining duration at your active speed, and
-              automatically clears session override badges whenever playback returns to baseline.
+              so YouTube’s Subscribe, Like, and Share controls are never squeezed—even in narrow
+              split-screen windows. Includes 10s/30s/60s Replay &amp; Skip capsules, VOD wall-clock
+              saved time, and a 1-click italic Channel Rule slot.
             </p>
           </div>
           <div className="space-y-1.5">
             <h3 className="font-semibold text-slate-100">
-              Stopping Watch Later &amp; Saved Playlists
+              Shorts-to-Watch Conversion &amp; Playlist Hard-Stop
             </h3>
             <p>
-              YouTube’s native Autoplay toggle is ignored inside Watch Later and creator playlists.
-              Cadence disables{' '}
+              Rewrites{' '}
+              <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+                /shorts/&lt;id&gt;
+              </code>{' '}
+              feed links and redirects Shorts routes with history-safe{' '}
+              <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+                location.replace
+              </code>{' '}
+              so Back navigation never loops, while disarming{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
                 yt-playlist-manager
               </code>{' '}
-              auto-advance and pauses the player right before the automatic end-of-video transition
-              fires—while still allowing manual clicks on the Next button or playlist sidebar.
+              auto-advance inside Watch Later and saved creator playlists.
             </p>
           </div>
         </div>

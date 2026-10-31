@@ -9,11 +9,13 @@
   const bridgeSignal = bridgeController.signal;
   const bridgeInstanceId = Symbol('cadenceBridge');
 
+  let hasReceivedConfig = Boolean(window.__CADENCE_LAST_CONFIG__);
   let config = window.__CADENCE_LAST_CONFIG__ || {
     enabled: true,
     perChannelSpeedEnabled: true,
     hasSessionOverride: false,
     stopAfterVideoEnds: true,
+    convertShortsToWatch: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
@@ -32,6 +34,7 @@
   let recentNativeSpeedGestureUntil = 0;
   let lastRemainingEmitAt = 0;
   let lastRemainingSignature = '';
+  let lastShortsLinkSyncAt = 0;
   let liveStateVideoId = '';
   let liveHeadHysteresisBehind = false;
   let wasAtLiveHead = false;
@@ -86,6 +89,74 @@
     return '';
   }
 
+  function parseShortsIdFromHref(rawHref) {
+    if (!rawHref) return '';
+    try {
+      const parsed = new URL(rawHref, location.origin);
+      const match = parsed.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]{6,24})(?:\/|$)/);
+      if (match && match[1]) {
+        return match[1];
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function buildWatchUrlFromShortsHref(rawHref) {
+    if (!rawHref) return '';
+    try {
+      const parsed = new URL(rawHref, location.origin);
+      const match = parsed.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]{6,24})(?:\/|$)/);
+      if (!match || !match[1]) return '';
+      const nextParams = new URLSearchParams();
+      nextParams.set('v', match[1]);
+      const tVal = parsed.searchParams.get('t');
+      if (tVal) nextParams.set('t', tVal);
+      return '/watch?' + nextParams.toString();
+    } catch (_) {}
+    return '';
+  }
+
+  function shouldConvertShorts() {
+    return Boolean(hasReceivedConfig && config.enabled && config.convertShortsToWatch !== false);
+  }
+
+  function maybeRedirectCurrentShortsRoute() {
+    if (!shouldConvertShorts()) return false;
+    const watchTarget = buildWatchUrlFromShortsHref(location.href);
+    if (!watchTarget) return false;
+    location.replace(watchTarget);
+    return true;
+  }
+
+  function syncShortsLinksInDom(force = false) {
+    if (!hasReceivedConfig) return;
+    const now = Date.now();
+    if (!force && now - lastShortsLinkSyncAt < 900) return;
+    lastShortsLinkSyncAt = now;
+
+    if (shouldConvertShorts()) {
+      const shortsAnchors = document.querySelectorAll('a[href*="/shorts/"]');
+      for (const anchor of shortsAnchors) {
+        const currentHref = anchor.getAttribute('href') || '';
+        const watchHref = buildWatchUrlFromShortsHref(currentHref);
+        if (!watchHref) continue;
+        if (!anchor.hasAttribute('data-cadence-orig-shorts-href')) {
+          anchor.setAttribute('data-cadence-orig-shorts-href', currentHref);
+        }
+        anchor.setAttribute('href', watchHref);
+      }
+    } else {
+      const rewrittenAnchors = document.querySelectorAll('a[data-cadence-orig-shorts-href]');
+      for (const anchor of rewrittenAnchors) {
+        const origHref = anchor.getAttribute('data-cadence-orig-shorts-href');
+        if (origHref) {
+          anchor.setAttribute('href', origHref);
+        }
+        anchor.removeAttribute('data-cadence-orig-shorts-href');
+      }
+    }
+  }
+
   function getUrlVideoId() {
     return parseVideoIdFromHref(location.href);
   }
@@ -95,13 +166,20 @@
   }
 
   function extractCardPreviewHint(target) {
-    const watchAnchor = target.closest('a[href*="/watch"]');
+    const watchAnchor = target.closest(
+      'a[href*="/watch"], a[href*="/shorts/"], a[data-cadence-orig-shorts-href]'
+    );
     if (!watchAnchor) return null;
-    const videoId = parseVideoIdFromHref(watchAnchor.getAttribute('href') || '');
+    const rawHref = watchAnchor.getAttribute('href') || '';
+    const origShortsHref = watchAnchor.getAttribute('data-cadence-orig-shorts-href') || '';
+    const videoId =
+      parseVideoIdFromHref(rawHref) ||
+      parseShortsIdFromHref(rawHref) ||
+      parseShortsIdFromHref(origShortsHref);
     if (!videoId) return null;
 
     const card = target.closest(
-      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-reel-item-renderer, ytm-shorts-lockup-view-model, ytm-shorts-lockup-view-model-v2, ytd-playlist-panel-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
     );
 
     let handle = '';
@@ -112,7 +190,7 @@
       const channelAnchors = card.querySelectorAll('a[href*="/@"], a[href*="/channel/UC"]');
       for (const chAnchor of channelAnchors) {
         const href = chAnchor.getAttribute('href') || '';
-        if (href.includes('/watch')) continue;
+        if (href.includes('/watch') || href.includes('/shorts/')) continue;
         const hMatch = href.match(/\/(@[^/?#]+)/);
         if (hMatch && !handle) handle = hMatch[1].toLowerCase();
         const cMatch = href.match(/\/channel\/(UC[^/?#]+)/);
@@ -150,7 +228,7 @@
       if (!target) return;
       if (
         target.closest(
-          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], .cadence-play-next-btn'
+          '.ytp-next-button, .ytp-prev-button, ytd-playlist-panel-video-renderer, ytd-compact-video-renderer, a[href*="/watch"], a[href*="/shorts/"], a[data-cadence-orig-shorts-href], .cadence-play-next-btn'
         )
       ) {
         markUserNavigationIntent();
@@ -210,6 +288,38 @@
       }
       const target = rawTarget;
       if (!target) return;
+
+      if (
+        shouldConvertShorts() &&
+        !target.closest('button, yt-icon-button, #menu, ytd-menu-renderer')
+      ) {
+        const shortsAnchor = target.closest(
+          'a[data-cadence-orig-shorts-href], a[href*="/shorts/"]'
+        );
+        if (shortsAnchor) {
+          const rawShortsHref =
+            shortsAnchor.getAttribute('data-cadence-orig-shorts-href') ||
+            shortsAnchor.getAttribute('href') ||
+            '';
+          const convertedWatchUrl = buildWatchUrlFromShortsHref(rawShortsHref);
+          if (convertedWatchUrl) {
+            e.preventDefault();
+            e.stopPropagation();
+            markUserNavigationIntent();
+            const hint = extractCardPreviewHint(target);
+            if (hint) {
+              pendingCardHint = hint;
+              postToContent('NAVIGATION_PREVIEW', hint);
+            }
+            if (location.pathname.startsWith('/shorts/')) {
+              location.replace(convertedWatchUrl);
+            } else {
+              location.assign(convertedWatchUrl);
+            }
+            return;
+          }
+        }
+      }
 
       const hint = extractCardPreviewHint(target);
       if (hint) {
@@ -871,6 +981,7 @@
       postToContent('TIME_REMAINING_UPDATE', {
         videoId,
         rawRemainingSec: null,
+        rawDurationSec: null,
         playbackRate: 1.0,
         isAd: true,
         isLive: false,
@@ -951,6 +1062,7 @@
       postToContent('TIME_REMAINING_UPDATE', {
         videoId,
         rawRemainingSec: null,
+        rawDurationSec: null,
         playbackRate: Math.round(liveRate * 100) / 100,
         isAd: false,
         isLive: true,
@@ -965,6 +1077,7 @@
     wasAtLiveHead = false;
     const rate = mediaRate;
     const invalidDuration = !Number.isFinite(video.duration) || video.duration <= 0;
+    const rawDurationSec = invalidDuration ? null : video.duration;
     const rawRemainingSec = invalidDuration
       ? null
       : Math.max(0, video.duration - video.currentTime);
@@ -975,7 +1088,8 @@
         : realRemSec < 60
           ? 's' + realRemSec
           : 'm' + Math.round(realRemSec / 60);
-    const sig = [videoId, 'vod', realBucket, rate.toFixed(2)].join('|');
+    const durBucket = rawDurationSec === null ? 'na' : String(Math.round(rawDurationSec));
+    const sig = [videoId, 'vod', realBucket, durBucket, rate.toFixed(2)].join('|');
 
     if (!force && sig === lastRemainingSignature) return;
     lastRemainingEmitAt = now;
@@ -984,6 +1098,7 @@
     postToContent('TIME_REMAINING_UPDATE', {
       videoId,
       rawRemainingSec,
+      rawDurationSec,
       playbackRate: Math.round(rate * 100) / 100,
       isAd: false,
       isLive: false,
@@ -1589,8 +1704,13 @@
       }
       const { type, payload = {} } = event.data;
       if (type === 'CONFIG_UPDATE') {
+        hasReceivedConfig = true;
         config = { ...config, ...payload };
         window.__CADENCE_LAST_CONFIG__ = config;
+        if (maybeRedirectCurrentShortsRoute()) {
+          return;
+        }
+        syncShortsLinksInDom(true);
         suppressNativeAutoplayAndPlaylist();
         if (!isSupportedWatchPage()) {
           applyPlaybackSpeed(config.defaultSpeed || 1.0, true);
@@ -1641,6 +1761,114 @@
           config.targetSpeed = payload.speed;
           window.__CADENCE_LAST_CONFIG__ = config;
           applyPlaybackSpeed(payload.speed);
+        } else if (payload.action === 'SEEK_BY_SECONDS') {
+          const deltaSec = Number(payload.deltaSec) || 0;
+          if (!deltaSec) return;
+          const player = getMoviePlayer();
+          const video = getMainVideo();
+          if (!video) return;
+          const vid = getCurrentVideoId(player) || '';
+          if (isAdPlaying(player)) {
+            if (config.enabled) {
+              postToContent('AD_SKIP_BLOCKED', { videoId: vid, deltaSec });
+              emitTimeRemaining(true);
+            }
+            return;
+          }
+          if (isLiveBroadcast(player, video)) {
+            const dvr = measureLiveDvrState(player, video, vid);
+            if (dvr.isAtLiveHead && deltaSec > 0) {
+              postToContent('LIVE_HEAD_SKIP_BLOCKED', { videoId: vid, deltaSec });
+              emitTimeRemaining(true);
+              return;
+            }
+            if (!dvr.isAtLiveHead && deltaSec > 0 && dvr.dvrLagSec - deltaSec <= 2) {
+              explicitJumpToLiveUntil = Date.now() + 2800;
+              const badge = getLiveBadgeElement(player);
+              if (badge && !isLiveBadgeAtHead(badge)) {
+                try {
+                  badge.click();
+                } catch (_) {}
+              } else if (player && typeof player.getProgressState === 'function' && !psHasMseCeiling) {
+                try {
+                  const ps = player.getProgressState();
+                  if (ps && Number.isFinite(ps.seekableEnd)) {
+                    player.seekTo(Math.max(0, ps.seekableEnd - 0.25), true);
+                  }
+                } catch (_) {}
+              }
+              applyLiveHeadRateClamp(player, video);
+              liveHeadHysteresisBehind = false;
+              catchupMaxLagSec = null;
+              catchupActive = false;
+              lastCatchupVideoSec = null;
+              postToContent('LIVE_CAUGHT_UP', { videoId: vid, fromSeek: true });
+              emitTimeRemaining(true);
+              setTimeout(() => emitTimeRemaining(true), 80);
+              return;
+            }
+
+            let seekStart = 0;
+            try {
+              if (player && typeof player.getProgressState === 'function') {
+                const ps = player.getProgressState();
+                if (ps && Number.isFinite(ps.seekableStart) && ps.seekableStart >= 0) {
+                  seekStart = ps.seekableStart;
+                }
+              }
+            } catch (_) {}
+            const cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+            const nextTime = Math.max(seekStart, cur + deltaSec);
+            if (deltaSec < 0) {
+              liveHeadHysteresisBehind = Math.abs(deltaSec) >= 5 || !dvr.isAtLiveHead;
+              catchupMaxLagSec = null;
+            } else if (catchupMaxLagSec !== null) {
+              catchupMaxLagSec = Math.max(0, catchupMaxLagSec - deltaSec);
+            }
+            try {
+              if (player && typeof player.seekTo === 'function') {
+                player.seekTo(nextTime, true);
+              } else {
+                video.currentTime = nextTime;
+              }
+            } catch (_) {
+              video.currentTime = nextTime;
+            }
+            lastObservedCurrentTime = nextTime;
+            dvrRestoreAttempts = 0;
+            if (deltaSec < 0) {
+              setTimeout(maybeRestoreDvrCatchupSpeed, 80);
+            }
+            emitTimeRemaining(true);
+            setTimeout(() => emitTimeRemaining(true), 90);
+            return;
+          }
+
+          const cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+          const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
+          if (deltaSec < 0) {
+            heldAtEndVideoId = null;
+            window.__CADENCE_HELD_VIDEO_ID__ = null;
+          }
+          let targetTime = Math.max(0, cur + deltaSec);
+          if (dur !== null) {
+            const upperCap =
+              deltaSec > 0 && config.enabled && config.stopAfterVideoEnds && dur > 1
+                ? Math.max(0, dur - 0.35)
+                : dur;
+            targetTime = Math.min(upperCap, targetTime);
+          }
+          try {
+            if (player && typeof player.seekTo === 'function') {
+              player.seekTo(targetTime, true);
+            } else {
+              video.currentTime = targetTime;
+            }
+          } catch (_) {
+            video.currentTime = targetTime;
+          }
+          emitTimeRemaining(true);
+          setTimeout(() => emitTimeRemaining(true), 80);
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
@@ -1743,6 +1971,13 @@
       window.__CADENCE_HELD_VIDEO_ID__ = null;
       lastRemainingSignature = '';
       const destUrl = (e && e.detail && e.detail.url) || '';
+      if (shouldConvertShorts() && destUrl) {
+        const redirectedWatch = buildWatchUrlFromShortsHref(destUrl);
+        if (redirectedWatch) {
+          location.replace(redirectedWatch);
+          return;
+        }
+      }
       const destVid = parseVideoIdFromHref(destUrl) || getUrlVideoId();
 
       if (destUrl && !destUrl.startsWith('/watch')) {
@@ -1771,6 +2006,8 @@
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
+      if (maybeRedirectCurrentShortsRoute()) return;
+      syncShortsLinksInDom(true);
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
@@ -1786,6 +2023,8 @@
   window.addEventListener(
     'yt-page-data-updated',
     () => {
+      if (maybeRedirectCurrentShortsRoute()) return;
+      syncShortsLinksInDom(true);
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
         return;
@@ -1798,6 +2037,7 @@
   window.addEventListener(
     'popstate',
     () => {
+      if (maybeRedirectCurrentShortsRoute()) return;
       if (!isSupportedWatchPage()) {
         handleNonWatchRoute();
       } else {
@@ -1828,6 +2068,8 @@
   );
 
   heartbeatInterval = setInterval(() => {
+    if (maybeRedirectCurrentShortsRoute()) return;
+    syncShortsLinksInDom(false);
     checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
@@ -1855,5 +2097,8 @@
     clearTimeout(postSpeedVerifyTimer);
   };
 
-  broadcastChannelMetadata(true);
+  if (!maybeRedirectCurrentShortsRoute()) {
+    syncShortsLinksInDom(true);
+    broadcastChannelMetadata(true);
+  }
 })();

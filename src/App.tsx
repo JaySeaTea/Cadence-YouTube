@@ -19,6 +19,7 @@ import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { ChannelRulesManager } from './components/ChannelRulesManager';
 import { ExtensionCodeViewer } from './components/ExtensionCodeViewer';
 import { InstallGuide } from './components/InstallGuide';
+import { ToolbarLayoutLab } from './components/ToolbarLayoutLab';
 
 const LEGACY_V1_KEYS = [
   'cadence_ext_settings_v1',
@@ -70,9 +71,14 @@ function normalizeSettingsSchema(
   raw: Partial<ExtensionSettings> | undefined
 ): ExtensionSettings {
   const merged: ExtensionSettings = { ...DEFAULT_SETTINGS, ...(raw || {}) };
-  if ((raw?.settingsSchemaVersion ?? 1) < 2) {
+  const rawVersion = raw?.settingsSchemaVersion ?? 1;
+  if (rawVersion < 2) {
     merged.autoRememberManualSpeed = false;
-    merged.settingsSchemaVersion = 2;
+  }
+  if (rawVersion < 3) {
+    merged.convertShortsToWatch =
+      typeof raw?.convertShortsToWatch === 'boolean' ? raw.convertShortsToWatch : true;
+    merged.settingsSchemaVersion = 3;
   }
   return merged;
 }
@@ -323,6 +329,15 @@ export default function App() {
     setRules((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const handleClearChannelFromSimulator = (id: string, channelName: string) => {
+    markUserMutation();
+    setRules((prev) => prev.filter((r) => r.id !== id));
+    addLog(
+      `Cleared rule for ${channelName}`,
+      `Reverted to default speed (${settings.defaultSpeed}×)`
+    );
+  };
+
   const handleResetToSamples = async () => {
     userMutatedRef.current = false;
     setPresets(DEFAULT_PRESETS);
@@ -356,6 +371,7 @@ export default function App() {
 
   const navItems: { id: ActiveTab; label: string }[] = [
     { id: 'simulator', label: 'Live Simulator' },
+    { id: 'layout', label: 'v1.4.0 Layout Lab' },
     { id: 'rules', label: 'Channel Rules' },
     { id: 'code', label: 'Extension Files' },
     { id: 'install', label: 'Install Guide' },
@@ -449,9 +465,15 @@ export default function App() {
             logs={logs}
             onUpdateSettings={handleUpdateSettings}
             onSaveChannelRule={handleSaveChannelFromSimulator}
+            onClearChannelRule={handleClearChannelFromSimulator}
             onAddLog={addLog}
             onNavigateToRules={() => setActiveTab('rules')}
+            onNavigateToLayoutLab={() => setActiveTab('layout')}
           />
+        )}
+
+        {activeTab === 'layout' && (
+          <ToolbarLayoutLab onBackToSimulator={() => setActiveTab('simulator')} />
         )}
 
         {activeTab === 'rules' && (

@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Cadence v1.3.5 (Watch-Page & Live DVR Polish) covering Issues #14, #17, #15, and #16 across the Manifest V3 Chrome Extension and Interactive Web Simulator Workbench.",
-  "updatedAt":  "2026-10-30T03:45:34.287849046Z",
+  "summary":  "Implementation plan for Cadence v1.4.0 delivering the full-width 3-row watch-page transport deck above #title (resolving Issue #18 across all window widths), compact Style B Replay/Skip Ahead capsules, Row 3 VOD-only Saved Time + Style A italic 1-click Channel Rule controls, and automatic YouTube Shorts-to-Watch URL and feed-link conversion with a Popup toggle.",
+  "updatedAt":  "2026-10-31T17:11:52.075296902Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

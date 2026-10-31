@@ -4,6 +4,18 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-10-31
+
+### Added
+- **Full-Width 3-Row Watch-Page Transport Deck Above `#title` (#18)**: Redesigned and relocated the watch-page control bar (`#cadence-watch-bar`) out of YouTube's `#owner` row and mounted it full-width at the top of `ytd-watch-metadata #above-the-fold` directly above `#title`. Leaves YouTube's Channel Owner, Subscribe, Like, Dislike, Share, and Save buttons 100% untouched across standard 2-column, Theater, half-width split-screen, and tight ~504px viewports.
+  - **Row 1 (Telemetry & Collision-Aware Brand Signature)**: Pairs fixed-width active speed source (`Default`, `Channel Rule`, `Session Override`, or `Sponsored Ad`) and wall-clock VOD remaining / clickable Live DVR catch-up / Ad-lock notice on the left with a clickable `Cadence - YouTube at your speed` emblem button on the right (opening Channel Rules / Options). Uses live `ResizeObserver` intrinsic collision measurement so `- YouTube at your speed` dynamically collapses whenever Row 1 space gets tight (including Sponsored Ads and Live DVR in narrow windows).
+  - **Row 2 (Quick Speeds & Always-Shown 10s/30s/60s Replay & Skip Capsules)**: Pairs `0.75×`–`2.0×` session speed presets on the left with compact grouped Replay (`[↺ 60 | 30 | 10]`) and Skip Ahead (`[10 | 30 | 60 ↻]`) transport capsules justified right, complete with Ad-lock (`"Skip locked during ad"`), Live-head forward-skip protection (`"Stream is currently at live end"`), and automatic Live-edge resync when skipping forward to the live horizon.
+  - **Row 3 (`±0.05` Steppers, VOD-Only Saved Time & 1-Click Italic Channel Rule Slot)**: Pairs capsule-styled `−0.05` / `+0.05` fine steppers and `Reset` with a VOD-only wall-clock saved-time readout (`Saves 6m 09s` in emerald above `1.0×`, `0s saved` at `1.0×`, `+4m 47s` below `1.0×`, and strictly omitted on all Live Head, Live DVR, and Ad states) on the left, and an italic 1-click `Rule` management slot (`No rule` + `+ Save X× Rule`, `Rule: X×` + `Update → Y×`, or `Rule: X×` + `Clear ×`) on the right.
+- **Automatic YouTube Shorts-to-Watch Conversion (`/shorts/<id>` → `/watch?v=<id>`)**: Enabled by default (`convertShortsToWatch: true`, `settingsSchemaVersion: 3`) with a dedicated **Convert Shorts to Standard Player** toggle in the Extension Toolbar Popup. Rewrites `<a href*="/shorts/">` links across YouTube Home, Subscriptions, Search, and Channel shelves in-place (preserving original hrefs in `data-cadence-orig-shorts-href` so toggling off restores `/shorts/` links immediately without reload) and redirects direct or SPA `/shorts/<id>` navigations via history-safe `location.replace` so the browser Back button never loops.
+
+### Fixed
+- **Eliminated `#owner` / `#actions` Button Overflow & Clipping on Narrow Watch Viewports (#18)**: Removed legacy `#cadence-owner-bar` injection beside Subscribe so YouTube's native watch action pills never wrap or clip at any window width.
+
 ## [1.3.5] - 2026-10-29
 
 ### Added

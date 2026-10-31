@@ -25,6 +25,7 @@ export interface ExtensionSettings {
   stopAfterVideoEnds: boolean;
   showInPageControlBar: boolean;
   showSpeedToast: boolean;
+  convertShortsToWatch: boolean;
   settingsSchemaVersion?: number;
 }
 
@@ -58,4 +59,4 @@ export interface ExtensionEventLog {
   detail: string;
 }
 
-export type ActiveTab = 'simulator' | 'rules' | 'code' | 'install';
+export type ActiveTab = 'simulator' | 'layout' | 'rules' | 'code' | 'install';

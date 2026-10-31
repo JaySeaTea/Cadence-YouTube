@@ -1,25 +1,25 @@
-# Cadence v1.3.5 — Live DVR Handoff, Ad Speed Lock & Stable Toolbar Geometry
+# Cadence v1.4.0 — 3-Row Watch-Page Transport Deck, Replay/Skip Capsules & Shorts Conversion
 
-Deliver the **v1.3.5** polish release uniting smooth live DVR catch-up with automatic native YouTube `LIVE` badge activation (**#14, #17**), strict bi-directional playback speed locking during ads with post-ad session override restoration (**#15**), and zero-shift below-video toolbar label geometry when stepping speeds (**#16**).
+Upgrade **Cadence** to **v1.4.0** by replacing the legacy inline `#owner` bar with the full-width **3-Row Watch-Page Transport Deck** above `#title` (resolving **Issue #18** across every window width), adding permanent compact **Replay / Skip Ahead** seek capsules and 1-click **Channel Rule** controls, and introducing automatic **YouTube Shorts-to-Watch conversion** across direct URLs and feed links.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Every product and UX preference from your issue review is locked in below, with one recommended interactive testing convenience added for the Simulator Workbench.
+> Every layout, typography, and behavioral detail from our Layout Lab iterations and your clarifying answers is locked in below across both the Chrome extension and the Interactive Simulator Workbench.
 
-- **Confirmed — Release Scope (`v1.3.5`)**: Bundles Issues **#14**, **#17**, **#15**, and **#16** into a cohesive watch-page & live-stream stability patch (`v1.3.4` → `v1.3.5`) ahead of `v1.4.0` (Shorts Conversion + Skip/Replay) and `v1.5.0` (Watch Later Cleanup).
-- **Confirmed — Fixed-Width Speed Readout with Compact Numbers (#16)**: Preserves compact speed formatting (`1.8×`, `1×`, `1.75×` — never padded to `1.80×`) inside a fixed-width `tabular-nums` label slot so clicking `+0.05` / `−0.05` or switching between `Default`, `Rule`, and `Session` never shifts the buttons under the cursor or alters the toolbar border width.
-- **Confirmed — Ad Speed Lock & Session Override Restoration (#15)**: Blocks speed adjustments in **both directions** (faster and slower) while an ad is playing, surfaces the exact warning copy **`"Speed locked during ad"`** across the below-video amber toast, upper-right player warning toast, and popup banner, and **automatically restores any active pre-ad Session override** (or saved Channel Rule) the instant a pre-roll or mid-roll ad finishes.
-- **Confirmed — True Live-Head Handoff & Native Badge Sync (#14 & #17)**: Smooths YouTube’s 2–5 second DASH segment arrival jitter during accelerated DVR catch-up so the behind-live and catch-up counters tick down monotonically instead of bouncing upward, and triggers YouTube’s native `LIVE` badge handoff upon reaching the live buffer edge so YouTube’s red `LIVE` indicator activates alongside Cadence’s `1.0×` reset.
-- **Recommended Default — One-Click Mid-Roll Ad Test in Workbench**: Adds a compact **`Simulate Ad (5s)`** control to the Interactive YouTube Workbench so you can test pre-roll/mid-roll speed locking, `"Speed locked during ad"` toasts, dimmed controls, and post-ad Session override restoration directly in the preview alongside your unpacked extension test.
+- **Confirmed — Full-Width 3-Row Transport Deck Above `#title` (Issue #18)**: Relocates the below-video toolbar out of YouTube’s cramped `#owner` flex row and mounts it full-width inside `ytd-watch-metadata #above-the-fold` directly above `#title`. Standard YouTube buttons (`Like`, `Dislike`, `Share`, `Save`, `More`) and channel names remain 100% untouched across 2-Column, Theater, Half-Width Split, and Tight Split (`~504px`) windows.
+- **Confirmed — Dynamic Row 1 Telemetry & Brand Signature**: Pairs the active speed source (`Default`, `Channel Rule`, `Session Override`, or `Sponsored Ad`) and real-time remaining / Live DVR countdown on the left with the clickable **Cadence - YouTube at your speed** emblem signature on the right (opening Cadence Options on click), using live collision measurement (`ResizeObserver`) to drop `- YouTube at your speed` whenever Row 1 space gets tight (including Sponsored Ads and Live DVR in Tight Split).
+- **Confirmed — Always-Shown Style B Replay / Skip Ahead Capsules**: Anchors two compact segmented transport capsules (`[↺ 60 | 30 | 10]  [10 | 30 | 60 ↻]`) permanently on Row 2’s right edge whenever the below-video toolbar is enabled—requiring no extra toggle while keeping identical `~186px` geometry at every viewport width.
+- **Confirmed — Row 3 Fine Step, VOD-Only Saved Time & Style A Italic Rule Slot**: Places `[−0.05] [+0.05] [Reset]` on Row 3 Left followed immediately by the green `Saves Xm Ys` readout strictly on finite VOD videos (completely omitted on both Live Head and Live DVR streams as well as during Ads), paired with the full-italic 1-click `Rule` slot on Row 3 Right (`No rule · + Save X× Rule`, `Rule: X× · Update → Y×`, or `Rule: X× · Clear ×`).
+- **Confirmed — Automatic Shorts Conversion Enabled by Default with Popup Toggle**: Automatically rewrites `/shorts/<id>` feed/shelf links to `/watch?v=<id>` and redirects direct or SPA `/shorts/<id>` navigations into the standard Watch player using history-safe replacement (`location.replace`) so browser Back navigation never loops, controlled by an on-by-default toggle in the Extension Popup.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Eliminates the remaining rough edges in Cadence’s watch-page playback loop—ensuring accelerated live DVR catch-up crosses the finish line cleanly into YouTube’s true live edge, preventing confusing speed clicks during unskippable or mid-roll ads while preserving your session speed across ad breaks, and anchoring the below-video toolbar’s width so rapid `±0.05×` clicks stay rock-steady under your pointer.
-- **Target Audience / Persona**: Daily YouTube viewers who rely on Cadence’s below-video toolbar, keyboard shortcuts, and popup to catch up on live broadcasts, fine-tune lecture/podcast speeds in `0.05×` increments, and watch ad-supported videos without losing their temporary session speed after mid-roll breaks.
-- **Key Value**: Predictable, zero-jitter control across every playback state (VOD, Live DVR catch-up, Synced Live Head, and Pre/Mid-Roll Ads) with 1:1 parity between the Chrome extension and the Interactive Web Workbench.
+- **What It Does**: Unifies Cadence’s watch-page playback experience into a rock-steady, width-adaptive 3-row transport deck while automatically routing YouTube Shorts into the full `/watch?v=` player—giving Shorts full access to Cadence’s per-channel speed rules, `10s/30s/60s` replay/skip capsules, real-time remaining duration, and end-of-video autoplay protection.
+- **Target Audience / Persona**: Daily YouTube viewers who split-screen lectures, tutorials, live streams, and podcasts across varied window sizes, want instant multi-interval seeking and 1-click channel rule pinning below the player, and prefer standard horizontal playback controls over YouTube’s vertical Shorts feed.
+- **Key Value**: Zero native YouTube button dislocation at any browser width, consistent muscle memory for every speed and seek button, 1-click channel rule management without opening the popup, and frictionless Shorts-to-Watch conversion.
 
 ---
 
@@ -27,46 +27,54 @@ Deliver the **v1.3.5** polish release uniting smooth live DVR catch-up with auto
 
 ### Key User Flows
 
-1. **Catching Up to Live via Accelerated Playback (#14 & #17)**:
-   - While rewound on a live stream and playing above `1.0×` (e.g., `1.5×` or `2.0×`), the below-video duration readout (`−24s · Live in 48s @ 1.5×`) counts down smoothly without jumping upward by 2–4 seconds each time YouTube appends a new DASH media segment.
-   - As accelerated playback reaches YouTube’s live buffer horizon (within the live-edge handoff threshold or buffered ceiling), Cadence automatically invokes YouTube’s native live-head resync—activating YouTube’s red **`LIVE`** player badge, snapping Cadence’s indicator to **`● Live`**, clearing any `> 1.0×` session override, and clamping active playback cleanly to `1.0×`.
-2. **Attempting Speed Changes During Pre-Roll or Mid-Roll Ads (#15)**:
-   - When YouTube enters an ad break (`ad-showing` / `ad-interrupting`), Cadence hides the remaining-time readout and subtly dims all below-video speed chips (`0.75×`–`2.0×`), `−0.05`, `+0.05`, and `Reset` (`aria-disabled="true"`), while keeping them clickable so viewers never wonder why controls stopped responding.
-   - Clicking any speed chip, `−0.05`, `+0.05`, `Reset`, Popup speed/preset button, player gear option, or pressing `Shift + >` / `Shift + <` during an ad blocks the change and immediately displays **`"Speed locked during ad"`** via the floating amber toolbar toast and upper-right player warning toast (plus the popup warning banner if clicked from the popup).
-   - When the ad ends and the main video resumes, Cadence automatically restores the exact pre-ad **Session override** (e.g., `Session · 1.85×`) or saved **Channel Rule** without requiring the viewer to re-select their speed.
-3. **Stepping Speeds with `+0.05` / `−0.05` (#16)**:
-   - Clicking `+0.05` repeatedly across `1.75×` → `1.8×` → `1.85×` → `2×` keeps compact numeral formatting while holding the left status label (`Session · 1.8×`, `Rule · 1.5×`, `Default · 1×`) inside a fixed-width `tabular-nums` slot.
-   - Neither the `+0.05` / `−0.05` buttons nor the outer toolbar border expand or contract by a single pixel during fine stepping.
+1. **Watching & Adjusting Speed Across Any Window Width (Issue #18)**:
+   - Opening any `/watch?v=...` video injects the 3-Row Transport Deck cleanly between `#player` and `#title`. YouTube’s `#top-row` (`#owner` + `#actions`) keeps 100% of its native horizontal room.
+   - Stepping speeds via `0.75×–2.0×`, `−0.05`, or `+0.05` updates playback immediately without shifting any button’s X-coordinate (`tabular-nums` grid sizers). On VOD videos, `Saves Xm Ys` updates live beside `Reset`; on Live DVR and Live Head streams, `Saves` stays hidden so Row 1’s `−22m · Live in 22m @ 2.0×` or `● Live` pill carries the live timing story cleanly.
+   - Resizing the browser down to Tight Split (`~504px`) during a Sponsored Ad or Live DVR catch-up automatically collapses the top-right brand signature from `[Emblem] Cadence - YouTube at your speed` to `[Emblem] Cadence` before any text can touch or overlap, then restores the full tagline as soon as space opens up.
+2. **Seeking with Replay & Skip Ahead Capsules (`10s / 30s / 60s`)**:
+   - Clicking `60`, `30`, or `10` inside `[↺ 60|30|10]` rewinds playback by that exact interval (clamped at `0:00` on VOD; rewinding from a synced Live Head stream smoothly enters Live DVR mode).
+   - Clicking `10`, `30`, or `60` inside `[10|30|60 ↻]` skips forward (if a Live DVR skip reaches within `2s` of the live edge, Cadence syncs cleanly to Live Head at `1.0×`; clicking forward skip while already at Live Head shows the amber `"Stream is currently at live end"` warning).
+   - During a pre-roll or mid-roll ad, both capsules dim alongside the speed controls and display `"Skip locked during ad"` if clicked.
+3. **1-Click Channel Rule Management from Row 3 Lower Right**:
+   - On a channel with **no saved rule**, Row 3 Right displays *`No rule` · `[+ Save 1.25× Rule]`* (or the active Session Override speed) in italics—clicking saves the channel rule immediately to `chrome.storage.local` without opening the popup.
+   - On a channel **with a saved rule** (`1.5×`) during a Session Override (`1.75×`), Row 3 Left offers `Reset` (revert to `1.5×`) while Row 3 Right offers *`Rule: 1.5×` · `[Update → 1.75×]`* in warm amber italics to promote the session speed. When no override is active, *`Rule: 1.5×` · `[Clear ×]`* allows 1-click rule removal back to Default.
+4. **Automatic YouTube Shorts Conversion (`/shorts/<id>` → `/watch?v=<id>`)**:
+   - While **Convert Shorts to Standard Player** is enabled (default `On` in the Popup):
+     - Shorts cards and shelf links on YouTube Home, Subscriptions, Search, and Channel pages have their `/shorts/<id>` links rewritten to `/watch?v=<id>` so clicking opens the standard Watch player directly with zero vertical-player flash.
+     - Visiting a `/shorts/<id>` URL directly (via bookmark, external link, or address bar) immediately redirects to `/watch?v=<id>` via history replacement (`location.replace`), preserving clean browser **Back** button behavior.
+   - Toggling **Convert Shorts to Standard Player** off in the Popup immediately stops redirecting `/shorts/` URLs and restores original `/shorts/<id>` hrefs on visible feed cards without requiring a page reload.
 
 ### Visual Identity & Theme
 
-- **Aesthetic Direction**: Domain-native YouTube control chrome paired with the crisp dark-slate (`#0B0F19` / `#111827`) engineering workbench—single-elevation surfaces, clean hairline dividers, and zero decorative clutter.
+- **Aesthetic Direction**: Utilitarian precision control deck engineered to look native inside both Dark (`html[dark]`, `#0f0f0f`) and Light (`#ffffff`) YouTube watch pages, paired with the crisp dark-slate (`#0B0F19` / `#111827`) Simulator & Rules Workbench.
 - **Color Palette & Semantic States**:
-  - *Ad-Locked & Live-End Warning Surfaces*: High-contrast deep slate toast background (`#111827`), translucent amber border (`rgba(245, 158, 11, 0.52)`), warm amber text (`#FDE68A`, exceeding WCAG AA 4.5:1), and compact amber warning triangle icon so blocked actions are never communicated by color alone.
-  - *Dimmed Interactive Controls (`.is-ad-blocked` / `.is-live-blocked`)*: Subdued resting opacity (`0.42`) with subtle warm-amber hover feedback (`0.68` opacity, `rgba(245, 158, 11, 0.14)` tint) across both light and dark YouTube themes.
+  - *YouTube Dark Surface*: Translucent slate container (`rgba(255, 255, 255, 0.08)`, `1px solid rgba(255, 255, 255, 0.14)`), subtle row hairlines (`rgba(255, 255, 255, 0.07)`), active crimson speed chip (`#DC2626`), emerald VOD time-saved readout (`#34D399`), warm amber session/update accents (`#FDBA74` / `#FDE68A`), and accessible dark-slate warning toasts (`#111827` with `#F59E0B` border).
+  - *YouTube Light Surface*: Clean tinted surface (`rgba(15, 23, 42, 0.04)`, `1px solid rgba(15, 23, 42, 0.14)`), crisp `#0F172A` primary text, `#047857` emerald saved-time text (meeting WCAG AA 4.5:1 on light backgrounds), and `#B45309` session/update accents.
 - **Typography & Spatial Math**:
-  - Strict `font-variant-numeric: tabular-nums` across all multipliers and countdowns.
-  - Fixed inline label geometry sized to accommodate the widest mode + compact multiplier combination (`Session · 1.75×`, ~`96px` / `9.5ch` inline-flex slot with right-aligned or stable multiplier positioning) so `1.75×` ↔ `1.8×` ↔ `1×` transitions produce `0px` horizontal delta.
+  - Strict `font-variant-numeric: tabular-nums` across all multipliers, seek intervals, remaining times, and time-saved counters.
+  - Row 2 width budget (`~244px` presets + `~186px` Style B seek capsules = `~430px`) and Row 3 width budget (`~220px` fine controls + saved time + `~124px–184px` italic Rule slot = `~344px–404px`) maintain `50px–80px+` of open center breathing room even inside Tight Split (`504px` outer / `484px` inner).
+  - Italic styling on Row 3’s lower-right Rule cluster visually separates standby/potential rule actions from Row 1’s upright active playback telemetry.
 
 ### Interactive Feedback & Motion
 
-- **Compositor-Only Transitions**: Warning toasts animate strictly via `opacity` and `transform` (`150ms` cubic-bezier) with full `prefers-reduced-motion` support and zero layout shift.
-- **Clean State Recovery**: Any active `"Speed locked during ad"` toast clears automatically the moment the ad finishes and normal video playback resumes.
+- **Zero-Jitter Updates**: In-place DOM updates mutate text nodes (`timeEl`, `savedTimeEl`, `ruleSlot`) during playback ticks without rebuilding the toolbar DOM tree, keeping hover states and focus rings uninterrupted.
+- **Compositor-Only Toast Feedback**: Player corner notifications (`"Rewound 10s"`, `"Saved Rule · 1.75×"`, `"Converted Short to Watch player"`) and amber lock warnings animate strictly via `opacity` and `transform` (`150ms` cubic-bezier) with `prefers-reduced-motion` support.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1 — Guarded Native `.ytp-live-badge` Handoff on Passive Catch-Up (#14 & #17)**
-  - *Chosen Approach*: Combine monotonic lag smoothing during active `> 1.01×` playback (ignoring minor `+1s` to `+4.5s` upward segment ticks unless paused or scrubbed backward) with a guarded one-shot `.ytp-live-badge.click()` + `1.0×` clamp as soon as accelerated playback enters YouTube’s live-head buffer threshold (`≤ 9s` verified lag or pinned within `≤ 1.2s` of `buffered.end` near `seekableEnd`).
-  - *Why*: YouTube’s HTML5 live player holds a ~6–10 second DASH safety buffer unless explicitly snapped to the live head via its internal live controller. Clicking `.ytp-live-badge` programmatically once at the handoff boundary activates YouTube’s red `LIVE` badge and eliminates residual 6–10s lag oscillations without risking infinite seek loops (`explicitJumpToLiveUntil` cooldown).
-  - *Alternatives Considered*: Raw `video.currentTime = seekableEnd` seeking without clicking the native badge (rejected because YouTube’s player chrome leaves the `LIVE` badge gray/inactive unless its internal live-head handler runs).
-- **Decision 2 — Non-Destructive Ad State Isolation (#15)**
-  - *Chosen Approach*: Track `isAd` explicitly in real-time telemetry (`TIME_REMAINING_UPDATE` and `VIDEO_DETECTED`), freeze `sessionOverride` mutations while `isAd` is true, and trigger an immediate speed re-application (`applyForCurrentChannel` + `SET_SPEED`) on the `isAd: true → false` transition.
-  - *Why*: Mid-roll ads share the watch page’s URL `videoId` while temporarily swapping the media stream inside `#movie_player` at `1.0×`. Isolating ad state prevents YouTube’s `1.0×` ad reset from wiping out `sessionOverride` and guarantees custom speeds like `1.85×` resume the instant the creator’s video returns.
-- **Decision 3 — Fixed Label Box vs. Decimal Zero-Padding (#16)**
-  - *Chosen Approach*: Keep compact human-friendly numbers (`1.8×`, `1×`, `1.75×`) inside a fixed-width `inline-flex` label container (`tabular-nums`, `justify-content: space-between` between mode prefix and multiplier).
-  - *Why*: Honors your preference for clean compact numbers while guaranteeing identical outer pixel width across 1-digit (`1×`), 2-digit (`1.8×`), and 3-digit (`1.75×`) speeds.
+- **Decision 1 — Mounting Above `#title` Inside `#above-the-fold` vs. Inside `#top-row`**
+  - *Chosen Approach*: Inject `.cadence-watch-bar` as the first child of `ytd-watch-metadata #above-the-fold` (with fallback to `ytd-watch-metadata` before `#title`), styled as a full-width (`width: 100%; box-sizing: border-box`) 3-row block.
+  - *Why*: `#above-the-fold` spans 100% of `#primary` without competing with `#owner` or `#actions`, completely eliminating Issue #18’s right-panel overlap and button wrapping across every YouTube mode.
+  - *Alternatives Considered*: Mounting inside `#owner` with responsive wrapping (rejected because it still compresses channel names and pushes `#actions` onto a second row).
+- **Decision 2 — Dual-Layer Shorts Conversion (Anchor Rewriting + History-Safe `location.replace`)**
+  - *Chosen Approach*: Rewrite `<a href*="/shorts/">` attributes (storing original `/shorts/...` URLs in a `data-cadence-orig-shorts-href` attribute so toggling off restores them cleanly) while also intercepting `/shorts/<id>` page loads and `yt-navigate-start` / URL changes via `location.replace('/watch?v=' + id)`.
+  - *Why*: Rewriting feed links avoids loading the heavy vertical Shorts DOM altogether when clicking on YouTube, while `location.replace` handles direct external links without trapping the user’s browser Back button in an infinite redirect loop.
+  - *Alternatives Considered*: `location.href = ...` push navigation only (rejected because clicking Back from `/watch?v=id` hits `/shorts/id` and immediately bounces forward again).
+- **Decision 3 — Omitting "Saved Time" on All Live Broadcasts**
+  - *Chosen Approach*: Render `Saves Xm Ys` exclusively when `!isLive && !isAd && Number.isFinite(rawDurationSec) && rawDurationSec > 0`.
+  - *Why*: Live streams have an open-ended runtime even when rewound in DVR mode, and Row 1 already surfaces the actionable catch-up countdown (`−22m · Live in 22m @ 2.0×`).
 
 ---
 
@@ -76,36 +84,38 @@ Deliver the **v1.3.5** polish release uniting smooth live DVR catch-up with auto
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                   YOUTUBE PLAYER & MAIN-WORLD PAGE BRIDGE                    │
-│  • Live DVR Tracker: Monotonic catch-up smoothing + one-shot .ytp-live-badge │
-│    click handoff when >1.01× playback reaches live buffer horizon            │
-│  • Ad Monitor: Detects ad-showing / ad-interrupting transitions, blocks      │
-│    Shift+> / Shift+< & gear rate changes -> emits AD_SPEED_BLOCKED           │
+│                 YOUTUBE DOM & MAIN-WORLD PAGE BRIDGE (v1.4.0)                │
+│  • Shorts Guard: Rewrites /shorts/<id> feed links <-> /watch?v=<id> &        │
+│    intercepts direct / SPA /shorts/ routes via history-safe location.replace │
+│  • Seek & Telemetry Engine: Emits rawDurationSec + rawRemainingSec + Live    │
+│    DVR state; executes SEEK_BY_SECONDS (-60,-30,-10,+10,+30,+60) safely      │
 └───────────────────┬──────────────────────────────────────┬───────────────────┘
-                    │ TIME_REMAINING_UPDATE (isAd, isLive) │ AD_SPEED_BLOCKED /
-                    │ VIDEO_DETECTED                       │ LIVE_HEAD_BLOCKED
+                    │ VIDEO_DETECTED / TIME_REMAINING      │ AD / LIVE_HEAD
+                    │ (includes rawDurationSec)            │ BLOCKED EVENTS
                     ▼                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                 ISOLATED CONTENT RUNTIME & POPUP CONTROLLER                  │
-│  • Preserves sessionOverride { videoId, speed } untouched across ad breaks   │
-│  • On isAd (true -> false): Re-applies pre-ad Session override or Rule       │
-│  • Intercepts all bar / popup / shortcut speed actions while isAd === true   │
-└───────────────┬─────────────────────────────┬────────────────────────────────┘
-                │                             │
-                ▼                             ▼
-┌───────────────────────────────┐ ┌────────────────────────────────────────────┐
-│  Below-Video Toolbar Surface  │ │  Player Corner & Extension Popup Surfaces  │
-│  • Fixed-width compact label  │ │  • Upper-right warning toast:              │
-│    ("Session · 1.8×" = 0px Δ) │ │    "Speed locked during ad"                │
-│  • All controls dimmed during │ │  • Native red YouTube LIVE badge active    │
-│    ads (.is-ad-blocked)       │ │    on both click & accelerated catch-up    │
-│  • Floating amber bar toast   │ │  • Popup ad-lock banner & disabled saves   │
-└───────────────┬───────────────┘ └─────────────────────┬──────────────────────┘
-                │                                       │
-                └───────────────────┬───────────────────┘
-                                    ▼
+│               ISOLATED CONTENT CONTROLLER & STORAGE SYNC                     │
+│  • Settings Schema v3: Adds convertShortsToWatch: true (preserves existing   │
+│    rules, presets, defaultSpeed, autoRememberManualSpeed, stopAfterVideoEnds)│
+│  • Mounts 3-Row .cadence-watch-bar above #title inside #above-the-fold       │
+│  • ResizeObserver on Row 1 collapses tagline dynamically before collision    │
+└───────┬───────────────────────────┬──────────────────────────┬───────────────┘
+        │                           │                          │
+        ▼                           ▼                          ▼
+┌──────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
+│ 3-Row Watch Deck UI  │ │ 1-Click Rule & Options  │ │ Extension Popup &       │
+│ • Row 1: Mode + Time │ │ • Save / Update / Clear │ │ Options Surfaces        │
+│   + Dynamic Brand    │ │   Rule directly in bar  │ │ • "Convert Shorts to    │
+│ • Row 2: Presets +   │ │ • Brand click sends     │ │   Standard Player"      │
+│   Style B Capsules   │ │   CADENCE_OPEN_OPTIONS  │ │   toggle (On by default)│
+│ • Row 3: ±0.05/Reset │ │   to service worker     │ │ • Updated v1.4.0        │
+│   + VOD Saves + Rule │ │                         │ │   bar subtitle & docs   │
+└───────┬──────────────┘ └────────────┬────────────┘ └────────────┬────────────┘
+        │                             │                           │
+        └─────────────────────────────┼───────────────────────────┘
+                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│            SYNCHRONIZED THREE-SURFACE RELEASE PARITY (v1.3.5)                │
+│            SYNCHRONIZED THREE-SURFACE RELEASE PARITY (v1.4.0)                │
 │  ┌────────────────────────┐ ┌──────────────────────┐ ┌─────────────────────┐ │
 │  │ Unpacked Extension     │ │ Dynamic .zip & Code  │ │ Interactive Web     │ │
 │  │ Bundle & Changelog     │ │ Inspector Generator  │ │ Simulator Workbench │ │
@@ -115,13 +125,23 @@ Deliver the **v1.3.5** polish release uniting smooth live DVR catch-up with auto
 
 ### Data Model & State
 
-- **Ad-Aware Telemetry State (`remainingState.isAd`)**: Extends the content runtime’s real-time player state and active-channel popup handshake (`CADENCE_GET_ACTIVE_CHANNEL`) with an explicit boolean `isAd` flag so the below-video bar, keyboard shortcut guard, and Toolbar Popup stay synchronized throughout pre-roll and mid-roll ads.
-- **Monotonic Catch-Up Smoothing State**: Tracks the lowest verified lag observed during continuous unpaused `> 1.01×` live catch-up (`minCatchupLagSec`), suppressing transient `+1s` to `+4.5s` DASH segment jumps while immediately resetting if the viewer pauses, drops speed to `≤ 1.0×`, or scrubs backward (`currentTime` jump `< -1.5s`).
-- **Pre-Ad Session Persistence**: Keeps `sessionOverride = { videoId, speed }` keyed to the main watch URL’s `videoId` throughout any ad break, re-pushing the resolved speed (`sessionOverride` → `Channel Rule` → `Default`) on ad exit.
+- **Settings Schema Upgrade (`settingsSchemaVersion: 3`)**:
+  - Adds `convertShortsToWatch: boolean` defaulting to `true` across fresh installs and existing `v1.3.x` upgrades (via non-destructive migration in background install handler, content runtime, options page, and web simulator storage normalizer) without altering any existing user channel rules or presets.
+- **Extended Telemetry Payload (`rawDurationSec`)**:
+  - Includes total VOD media duration (`rawDurationSec`) alongside `rawRemainingSec` in `TIME_REMAINING_UPDATE` messages so Row 3’s VOD-only `Saves Xm Ys` badge computes exact wall-clock savings (`Math.round(rawDurationSec - rawDurationSec / effectiveSpeed)`) without extra DOM polling.
+- **Background Options Opener (`CADENCE_OPEN_OPTIONS`)**:
+  - Adds a lightweight message handler in the service worker calling `chrome.runtime.openOptionsPage()` when the user clicks the top-right `Cadence - YouTube at your speed` signature inside the watch-page toolbar.
 
 ### Interactive Component & State Mapping
 
-- **Passive Accelerated Live Catch-Up Completion (#14 & #17)**: When `liveHeadHysteresisBehind` is active and `mediaRate > 1.01` reaches `verifiedLagSec <= 9` (or `buffered.end - currentTime <= 0.8` while `verifiedLagSec <= 13`), `pageBridgeJs` sets `explicitJumpToLiveUntil`, clicks `.ytp-live-badge` if not already at head, clamps playback to `1.0×`, and emits `isAtLiveHead: true, dvrLagSec: 0` so both YouTube’s red `LIVE` badge and Cadence’s `● Live` pill activate together.
-- **Ad Speed Attempt Across Any Surface (#15)**: Clicking dimmed toolbar chips/`±0.05`/`Reset`, clicking Popup speed/preset buttons, using the player gear menu, or pressing `Shift + >` / `Shift + <` while `isAd` is active leaves `sessionOverride` and saved rules untouched and displays `"Speed locked during ad"`.
-- **Mid-Roll Ad Completion (#15)**: When `isAd` transitions from `true` to `false` (or the 5-second simulated ad completes in the Workbench), any active ad-lock toast clears, controls un-dim, and Cadence immediately re-applies the active `sessionOverride` or Channel Rule to `<video>` and `#movie_player`.
-- **Toolbar Fine-Step Clicks (`±0.05×`) (#16)**: Updating speed from `1.75×` → `1.8×` → `1.85×` updates text inside the fixed-width `.cadence-bar-label` container (`tabular-nums`), keeping every button’s X-coordinate stationary.
+- **Row 2 Replay / Skip Ahead Clicks (`SEEK_BY_SECONDS`)**:
+  - If `isAd` is active: blocks seek and triggers `"Skip locked during ad"` on both the floating amber bar toast and player corner toast.
+  - If `isLive && isAtLiveHead`: negative deltas (`−10s`, `−30s`, `−60s`) seek backward from `seekableEnd`, flip `liveHeadHysteresisBehind = true`, and emit updated DVR lag + player toast (`"Rewound 30s"`); positive deltas (`+10s`, `+30s`, `+60s`) block and trigger `"Stream is currently at live end"`.
+  - If `isLive && !isAtLiveHead` (Live DVR): negative deltas seek further back within `[seekableStart, seekableEnd]`; positive deltas advance `currentTime`, and if the target lands within `≤ 2s` of `seekableEnd`, invoke Cadence’s native `.ytp-live-badge` live-head handoff and `1.0×` clamp (`"Synced to Live · 1.0×"`).
+  - If finite VOD: seeks `video.currentTime` clamped to `[0, duration]` (`player.seekTo` + `video.currentTime` fallback), clears any end-of-video hold banner if rewinding away from the end, and updates Row 1 remaining time immediately.
+- **Row 3 Italic Rule Slot Clicks**:
+  - `+ Save X× Rule`: Persists a custom Channel Rule for `currentChannel` at `effectiveSpeed`, clears `sessionOverride`, updates `Row 1` to `Channel Rule · X×`, switches `Row 3 Right` to *`Rule: X×` · `[Clear ×]`*, and shows `"Saved Rule · X×"`.
+  - `Update → Y×`: Updates the existing Channel Rule’s `customSpeed` (setting `presetId: 'custom'`), clears `sessionOverride`, and shows `"Updated Rule · Y×"`.
+  - `Clear ×`: Removes the matching Channel Rule from `chrome.storage.local`, clears `sessionOverride`, applies `defaultSpeed`, switches `Row 1` to `Default · Z×` and `Row 3 Right` to *`No rule` · `[+ Save Z× Rule]`*, and shows `"Cleared Rule · Default (Z×)"`.
+- **Shorts Conversion Toggle & Simulator Parity**:
+  - Toggling **Convert Shorts to Standard Player** in the Extension Popup or Simulator Workbench persists `convertShortsToWatch` immediately. In the Simulator Workbench, watch-page playback renders the exact new 3-Row Transport Deck above the video title, and a **Test Shorts Link (`/shorts/...`)** action in YouTube Home / Browse mode demonstrates live Shorts-to-Watch conversion (when enabled) vs. untransformed Shorts warning/state (when disabled).

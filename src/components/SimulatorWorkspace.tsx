@@ -39,9 +39,61 @@ interface SimulatorWorkspaceProps {
     presetId: CategoryPresetId,
     sourceLabel: string
   ) => void;
+  onClearChannelRule: (ruleId: string, channelName: string) => void;
   onAddLog: (action: string, detail: string) => void;
   onNavigateToRules: () => void;
+  onNavigateToLayoutLab?: () => void;
 }
+
+const CadenceEmblem: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+    <rect
+      x="1"
+      y="1"
+      width="18"
+      height="18"
+      rx="5"
+      fill="#0F172A"
+      stroke="#DC2626"
+      strokeOpacity="0.6"
+      strokeWidth="1.2"
+    />
+    <path d="M5.6 5.4L12.3 10L5.6 14.6V5.4Z" fill="#DC2626" />
+    <rect x="13.4" y="5.4" width="2.1" height="9.2" rx="0.9" fill="#F8FAFC" />
+  </svg>
+);
+
+const ReplayArcIcon: React.FC<{ className?: string }> = ({ className = 'w-3.5 h-3.5' }) => (
+  <svg
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.65"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M3.2 5.2H6.6V1.8" />
+    <path d="M3.5 5.2A5.3 5.3 0 1 1 2.8 9.2" />
+  </svg>
+);
+
+const SkipArcIcon: React.FC<{ className?: string }> = ({ className = 'w-3.5 h-3.5' }) => (
+  <svg
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.65"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M12.8 5.2H9.4V1.8" />
+    <path d="M12.5 5.2A5.3 5.3 0 1 0 13.2 9.2" />
+  </svg>
+);
 
 function formatTime(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
@@ -96,6 +148,32 @@ function formatRemainingReadout(rawRemainingSec: number, speed: number): string 
   return `${formatCompactDuration(totalSec)} left @ ${formatSpeed(safeRate)}×`;
 }
 
+function formatTimeSavedDetail(
+  rawDurationSec: number,
+  speed: number
+): { text: string; tone: 'positive' | 'neutral' | 'slower' } {
+  const safeRate = Math.max(0.25, speed || 1.0);
+  const adjustedSec = Math.round(rawDurationSec / safeRate);
+  const diffSec = rawDurationSec - adjustedSec;
+  if (Math.abs(diffSec) < 3) {
+    return { text: '0s saved', tone: 'neutral' };
+  }
+  const absSec = Math.abs(diffSec);
+  const hrs = Math.floor(absSec / 3600);
+  const mins = Math.floor((absSec % 3600) / 60);
+  const secs = absSec % 60;
+  const formatted =
+    hrs > 0
+      ? `${hrs}h ${String(mins).padStart(2, '0')}m`
+      : mins > 0
+        ? `${mins}m ${String(secs).padStart(2, '0')}s`
+        : `${secs}s`;
+  if (diffSec > 0) {
+    return { text: `Saves ${formatted}`, tone: 'positive' };
+  }
+  return { text: `+${formatted}`, tone: 'slower' };
+}
+
 export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   settings,
   presets,
@@ -103,8 +181,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   logs,
   onUpdateSettings,
   onSaveChannelRule,
+  onClearChannelRule,
   onAddLog,
   onNavigateToRules,
+  onNavigateToLayoutLab,
 }) => {
   const [playlistMode, setPlaylistMode] = useState<PlaylistContextMode>('watch_later');
   const [currentVideoIndex, setCurrentVideoIndex] = useState<number>(1);
@@ -124,6 +204,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [showNativeGearMenu, setShowNativeGearMenu] = useState<boolean>(false);
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
+  const [collapseTagline, setCollapseTagline] = useState<boolean>(false);
+  const [unconvertedShortsActive, setUnconvertedShortsActive] = useState<boolean>(false);
 
   const currentTimeRef = useRef<number>(1440);
   const liveEdgeRef = useRef<number>(3600);
@@ -136,6 +218,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const popupToastTimerRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextPulseTimeRef = useRef<number>(0);
+  const row1Ref = useRef<HTMLDivElement | null>(null);
+  const row1LeftRef = useRef<HTMLDivElement | null>(null);
+  const brandFullSizerRef = useRef<HTMLSpanElement | null>(null);
 
   const syncTime = (val: number) => {
     currentTimeRef.current = val;
@@ -156,6 +241,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const currentVideo = SIMULATED_VIDEOS[currentVideoIndex];
   const isLiveStream = Boolean(currentVideo.isLiveStream);
   const isAdPlaying = !isHomeBrowseMode && adRemainingSec > 0;
+  const shortsConvertEnabled = settings.enabled && settings.convertShortsToWatch !== false;
 
   const matchedRule = rules.find(
     (r) =>
@@ -213,6 +299,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   };
 
   useEffect(() => {
+    if (unconvertedShortsActive && shortsConvertEnabled) {
+      setUnconvertedShortsActive(false);
+      triggerToast(`Converted /shorts/${currentVideo.id} → /watch player`, true);
+      onAddLog(
+        'Auto-converted /shorts/ route to standard Watch player',
+        `Redirected /shorts/${currentVideo.id} → /watch?v=${currentVideo.id} via history-safe location.replace`
+      );
+    }
+  }, [unconvertedShortsActive, shortsConvertEnabled, currentVideo.id]);
+
+  useEffect(() => {
     if (isHomeBrowseMode) {
       setPlaybackSpeed(settings.defaultSpeed || 1.0);
       return;
@@ -250,6 +347,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleEnterYouTubeHome = () => {
     setPlaylistMode('youtube_home');
+    setUnconvertedShortsActive(false);
     setIsPlaying(false);
     syncAdRemaining(0);
     setSessionOverrideSpeed(null);
@@ -273,7 +371,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     index: number,
     manualSource = true,
     overrideMode?: Exclude<PlaylistContextMode, 'youtube_home'>,
-    startBehindSec = 0
+    startBehindSec = 0,
+    keepShortsUnconverted = false
   ) => {
     const nextVid = SIMULATED_VIDEOS[index];
     const wasHome = playlistMode === 'youtube_home';
@@ -283,6 +382,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       setPlaylistMode('standalone');
     }
 
+    setUnconvertedShortsActive(keepShortsUnconverted);
     setCurrentVideoIndex(index);
     syncAdRemaining(0);
     setSessionOverrideSpeed(null);
@@ -898,6 +998,125 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     selectVideo(nextIdx, true);
   };
 
+  const handleSeekBySeconds = (deltaSec: number) => {
+    if (isAdPlaying) {
+      triggerBarToast('Skip locked during ad', 'ad');
+      triggerToast('Skip locked during ad', true, true);
+      onAddLog(
+        'Blocked seek during ad',
+        `Held ad playback (attempted ${deltaSec > 0 ? `+${deltaSec}s` : `${deltaSec}s`}) — surfaced ad-lock notice`
+      );
+      return;
+    }
+
+    if (isLiveStream) {
+      if (isAtLiveHead && deltaSec > 0) {
+        triggerBarToast('Stream is currently at live end', 'live');
+        triggerToast('Stream is currently at live end', true, true);
+        onAddLog(
+          'Blocked skip ahead at live end',
+          `Held live edge on "${currentVideo.title}" — stream is currently at live end`
+        );
+        return;
+      }
+
+      clearBarToast();
+      const target = Math.min(
+        liveEdgeRef.current,
+        Math.max(0, currentTimeRef.current + deltaSec)
+      );
+      if (deltaSec > 0 && liveEdgeRef.current - target <= 2) {
+        wasBehindLiveRef.current = false;
+        syncTime(liveEdgeRef.current);
+        if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
+          setSessionOverrideSpeed(null);
+          setPlaybackSpeed(baselineSpeed);
+        }
+        triggerToast('Synced to Live · 1.0×');
+        onAddLog(
+          'Skipped ahead to Live broadcast head (1.0×)',
+          `Reached live edge via +${deltaSec}s skip on "${currentVideo.title}"`
+        );
+        return;
+      }
+
+      const nextLag = Math.max(0, Math.round(liveEdgeRef.current - target));
+      wasBehindLiveRef.current = nextLag >= 3;
+      syncTime(target);
+      setStoppedByCadence(false);
+      const label = deltaSec < 0 ? `Replay ${Math.abs(deltaSec)}s` : `Skip +${deltaSec}s`;
+      triggerToast(`${label} · −${formatCompactDuration(Math.max(1, nextLag))} DVR`);
+      onAddLog(
+        `${label} in Live DVR`,
+        `Now ${formatCompactDuration(Math.max(1, nextLag))} behind live broadcast head`
+      );
+      return;
+    }
+
+    clearBarToast();
+    const target = Math.min(
+      currentVideo.durationSec,
+      Math.max(0, currentTimeRef.current + deltaSec)
+    );
+    syncTime(target);
+    if (target < currentVideo.durationSec - 0.25) {
+      setStoppedByCadence(false);
+      setAutoAdvancingCountdown(false);
+    }
+    const label = deltaSec < 0 ? `Replay ${Math.abs(deltaSec)}s` : `Skip +${deltaSec}s`;
+    triggerToast(`${label} · ${formatTime(target)}`);
+    onAddLog(label, `Seeked "${currentVideo.title}" to ${formatTime(target)}`);
+  };
+
+  const handleOpenSimulatedShort = (index: number) => {
+    const targetVid = SIMULATED_VIDEOS[index];
+    if (shortsConvertEnabled) {
+      selectVideo(index, true, 'standalone', 0, false);
+      triggerToast(`Converted /shorts/ → /watch (${currentVideo ? formatSpeed(resolveRuleSpeed(
+        rules.find(
+          (r) =>
+            (r.channelId && r.channelId === targetVid.channelId) ||
+            r.handle.toLowerCase() === targetVid.handle.toLowerCase()
+        ),
+        presets,
+        settings.defaultSpeed
+      )) : '1.0'}×)`, true);
+      onAddLog(
+        `Auto-converted Shorts card (/shorts/${targetVid.id} → /watch)`,
+        `Opened "${targetVid.title}" in standard Watch player with full speed & skip deck`
+      );
+    } else {
+      selectVideo(index, true, 'standalone', 0, true);
+      onAddLog(
+        `Opened native /shorts/${targetVid.id} (Shorts conversion off)`,
+        'Enable "Convert Shorts to Standard Player" in Popup to auto-redirect /shorts/ URLs'
+      );
+    }
+  };
+
+  const handleClearBarChannelRule = () => {
+    if (isAdPlaying) {
+      triggerBarToast('Speed locked during ad', 'ad');
+      triggerToast('Speed locked during ad', true, true);
+      onAddLog(
+        'Blocked rule clear during ad',
+        'Held 1.0× during ad break — speed locked during ad'
+      );
+      return;
+    }
+    if (!matchedRule) return;
+    clearBarToast();
+    setSessionOverrideSpeed(null);
+    const fallbackSpd = settings.defaultSpeed || 1.0;
+    setPlaybackSpeed(fallbackSpd);
+    onClearChannelRule(matchedRule.id, currentVideo.channelName);
+    const displayFallback =
+      isLiveStream && isAtLiveHead && fallbackSpd > 1.01 ? 1.0 : fallbackSpd;
+    triggerToast(
+      `Cleared rule for ${currentVideo.channelName} · ${formatSpeed(displayFallback)}× Default`
+    );
+  };
+
   const timelineHorizon = isLiveStream ? Math.max(1, liveEdgeTime) : currentVideo.durationSec;
   const progressPercent = isAdPlaying
     ? Math.min(100, Math.max(0, ((5 - adRemainingSec) / 5) * 100))
@@ -908,9 +1127,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const durationSlotModel = (() => {
     if (isAdPlaying) {
       return {
-        mode: 'hidden' as const,
-        text: '',
-        title: '',
+        mode: 'ad' as const,
+        text: 'Controls paused until ad ends',
+        title: 'Playback speed and skip controls are locked until the sponsored ad finishes',
         clickable: false,
       };
     }
@@ -954,16 +1173,62 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     };
   })();
 
+  const isSessionActive =
+    sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baselineSpeed) >= 0.015;
+  const ruleActionSpeed = clampSpeed(
+    sessionOverrideSpeed !== null ? sessionOverrideSpeed : playbackSpeed
+  );
+  const vodSavedTimeModel =
+    !isAdPlaying && !isLiveStream
+      ? formatTimeSavedDetail(currentVideo.durationSec, effectiveSpeed)
+      : null;
+
+  useEffect(() => {
+    const rowEl = row1Ref.current;
+    const leftEl = row1LeftRef.current;
+    const sizerEl = brandFullSizerRef.current;
+    if (!rowEl || !leftEl || !sizerEl) return;
+
+    const measure = () => {
+      const available = rowEl.clientWidth;
+      const leftW = leftEl.getBoundingClientRect().width;
+      const fullBrandW = sizerEl.getBoundingClientRect().width;
+      if (available > 0 && fullBrandW > 0) {
+        setCollapseTagline(leftW + fullBrandW + 16 > available);
+      }
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(rowEl);
+    observer.observe(leftEl);
+    return () => observer.disconnect();
+  }, [
+    isHomeBrowseMode,
+    unconvertedShortsActive,
+    settings.enabled,
+    settings.showInPageControlBar,
+    isAdPlaying,
+    isLiveStream,
+    isAtLiveHead,
+    isSessionActive,
+    Boolean(matchedRule),
+    effectiveSpeed,
+    durationSlotModel.text,
+  ]);
+
   const playlistLabel =
     playlistMode === 'youtube_home'
       ? 'YouTube Home · Browse Feed'
-      : playlistMode === 'watch_later'
-        ? `Watch Later · ${SIMULATED_VIDEOS.length} videos`
-        : playlistMode === 'creator_playlist'
-          ? `Creator Series Playlist · ${SIMULATED_VIDEOS.length} videos`
-          : isLiveStream
-            ? 'Live Broadcast · DVR Enabled'
-            : 'Standalone Watch Page';
+      : unconvertedShortsActive
+        ? 'YouTube Shorts · Vertical Feed'
+        : playlistMode === 'watch_later'
+          ? `Watch Later · ${SIMULATED_VIDEOS.length} videos`
+          : playlistMode === 'creator_playlist'
+            ? `Creator Series Playlist · ${SIMULATED_VIDEOS.length} videos`
+            : isLiveStream
+              ? 'Live Broadcast · DVR Enabled'
+              : 'Standalone Watch Page';
 
   const badgeText =
     !isHomeBrowseMode &&
@@ -981,8 +1246,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             Interactive YouTube &amp; Extension Workbench
           </h1>
           <p className="mt-2 text-[15px] leading-relaxed text-slate-400">
-            Test zero-lag channel speed locks, real-time remaining duration at speed, self-clearing
-            session overrides, YouTube Home badge clearing, and playlist end-of-video stopping.
+            Test the full-width v1.4.0 3-row watch deck above the video title, 10s/30s/60s replay
+            &amp; skip capsules, 1-click italic channel rules, automatic Shorts-to-Watch conversion,
+            and playlist end-of-video stopping.
           </p>
         </div>
 
@@ -1009,6 +1275,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     handleEnterYouTubeHome();
                   } else {
                     const leavingHome = playlistMode === 'youtube_home';
+                    setUnconvertedShortsActive(false);
                     setPlaylistMode(mode.id);
                     setStoppedByCadence(false);
                     if (leavingHome) {
@@ -1032,7 +1299,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             onClick={handleStartSimulatedAd}
             disabled={isHomeBrowseMode || isAdPlaying}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-200 bg-[#111827] border border-slate-700/90 rounded-lg hover:bg-slate-800 disabled:opacity-45 disabled:cursor-default transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
-            title="Simulate a 5-second YouTube mid-roll ad to test Speed locked during ad and automatic post-ad session override restoration"
+            title="Simulate a 5-second YouTube mid-roll ad to test Speed & Skip lock during ads"
           >
             <Lock className="w-3.5 h-3.5 text-amber-400" />
             {isAdPlaying ? `Ad Playing (${Math.ceil(adRemainingSec)}s)` : 'Simulate Ad (5s)'}
@@ -1062,6 +1329,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
             <FastForward className="w-3.5 h-3.5 text-red-500" />
             Test Last 3 Seconds
           </button>
+
+          {onNavigateToLayoutLab && (
+            <button
+              type="button"
+              onClick={onNavigateToLayoutLab}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-red-200 bg-red-600/15 border border-red-500/40 rounded-lg hover:bg-red-600/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title="Open responsive v1.4.0 Toolbar Layout Lab"
+            >
+              v1.4.0 Layout Lab →
+            </button>
+          )}
         </div>
       </div>
 
@@ -1087,13 +1365,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 <span className="text-slate-200 truncate">
                   {isHomeBrowseMode
                     ? 'youtube.com/'
-                    : `youtube.com/watch?v=${currentVideo.id}${
-                        playlistMode === 'watch_later'
-                          ? '&list=WL'
-                          : playlistMode === 'creator_playlist'
-                            ? '&list=PL_CREATOR_SERIES'
-                            : ''
-                      }`}
+                    : unconvertedShortsActive
+                      ? `youtube.com/shorts/${currentVideo.id}`
+                      : `youtube.com/watch?v=${currentVideo.id}${
+                          playlistMode === 'watch_later'
+                            ? '&list=WL'
+                            : playlistMode === 'creator_playlist'
+                              ? '&list=PL_CREATOR_SERIES'
+                              : ''
+                        }`}
                 </span>
               </div>
             </div>
@@ -1104,7 +1384,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
           {isHomeBrowseMode ? (
             /* Simulated YouTube Home Feed View */
-            <div className="p-5 sm:p-6 space-y-5">
+            <div className="p-5 sm:p-6 space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pb-4 border-b border-slate-800">
                 <div>
                   <h2 className="text-base sm:text-lg font-bold text-slate-100">
@@ -1115,7 +1395,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     <span className="font-mono tabular-nums text-slate-200">
                       {formatSpeed(settings.defaultSpeed || 1.0)}×
                     </span>
-                    . Click any video below to lock its channel speed at 0ms.
+                    . Click any video or Shorts shelf item below to test 0ms speed locks and{' '}
+                    <span className="font-mono text-slate-200">/shorts/ → /watch</span> conversion.
                   </p>
                 </div>
                 <span className="text-xs font-mono tabular-nums text-slate-400 whitespace-nowrap shrink-0">
@@ -1184,9 +1465,79 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                   );
                 })}
               </div>
+
+              {/* Simulated YouTube Shorts Shelf */}
+              <div className="pt-4 border-t border-slate-800/90 space-y-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">
+                      YouTube Shorts Shelf
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {shortsConvertEnabled
+                        ? 'Links rewritten in-place to /watch?v=… so clicking opens the standard Watch player.'
+                        : 'Shorts conversion is paused — links remain /shorts/… until re-enabled in Popup.'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono text-slate-400 tabular-nums">
+                    {shortsConvertEnabled ? 'href → /watch?v=…' : 'href → /shorts/…'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {SIMULATED_VIDEOS.filter((v) => !v.isLiveStream)
+                    .slice(0, 3)
+                    .map((vid) => {
+                      const originalIndex = SIMULATED_VIDEOS.findIndex((item) => item.id === vid.id);
+                      return (
+                        <button
+                          key={`short-${vid.id}`}
+                          type="button"
+                          onClick={() => handleOpenSimulatedShort(originalIndex)}
+                          className="group text-left p-3 rounded-lg bg-[#0B0F19] border border-slate-800/90 hover:border-slate-700 transition-colors cursor-pointer space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-slate-400">
+                            <span className="truncate">
+                              {shortsConvertEnabled ? `/watch?v=${vid.id}` : `/shorts/${vid.id}`}
+                            </span>
+                            <span className="text-slate-500 shrink-0">0:58</span>
+                          </div>
+                          <div className="text-xs font-semibold text-slate-100 line-clamp-1 group-hover:text-white">
+                            {vid.title}
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate">
+                            {vid.channelName} ·{' '}
+                            <span
+                              className={
+                                shortsConvertEnabled ? 'text-emerald-400' : 'text-amber-300'
+                              }
+                            >
+                              {shortsConvertEnabled ? 'Auto-converts to Watch' : 'Stays on /shorts/'}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
             </div>
           ) : (
             <>
+              {unconvertedShortsActive && (
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/30 text-xs text-amber-200">
+                  <span>
+                    Viewing un-redirected <code className="font-mono">/shorts/{currentVideo.id}</code>{' '}
+                    route (Shorts conversion is turned off in Popup).
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateSettings({ convertShortsToWatch: true })}
+                    className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 font-semibold text-amber-100 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Enable Shorts → Watch Conversion
+                  </button>
+                </div>
+              )}
               {/* Video Player Viewport */}
               <div className="relative aspect-video bg-slate-950 select-none overflow-hidden border-b border-slate-800/80">
                 {!imgErrors[currentVideo.id] ? (
@@ -1385,12 +1736,20 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       setStoppedByCadence(false);
                     }}
                   >
-                    <div
-                      className={`h-full rounded-full ${
-                        isAdPlaying ? 'bg-amber-400' : 'bg-red-600'
-                      }`}
-                      style={{ width: `${progressPercent}%` }}
-                    />
+                    <svg
+                      viewBox="0 0 100 6"
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
+                      className="w-full h-full block rounded-full overflow-hidden"
+                    >
+                      <rect
+                        x="0"
+                        y="0"
+                        width={progressPercent}
+                        height="6"
+                        fill={isAdPlaying ? '#fbbf24' : '#dc2626'}
+                      />
+                    </svg>
                   </div>
 
                   <div className="flex items-center justify-between gap-3 text-white flex-wrap">
@@ -1514,101 +1873,172 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 </div>
               </div>
 
-              {/* Simulated YouTube Dark Watch Metadata & Injected Session-Only Bar */}
-              <div className="p-5 sm:p-6 space-y-5">
-                <div>
-                  <h2 className="text-lg sm:text-xl font-bold text-slate-100">
-                    {currentVideo.title}
-                  </h2>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-                    <span>{currentVideo.viewsLabel}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{currentVideo.publishedLabel}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{currentVideo.handle}</span>
-                  </div>
-                </div>
-
-                {/* YouTube Channel Owner Row + Injected Cadence Session-Only Bar */}
-                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 py-4 border-y border-slate-800">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 text-slate-100 font-display font-bold text-sm flex items-center justify-center shrink-0">
-                      {currentVideo.channelName.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-semibold text-sm text-slate-100 truncate">
-                        {currentVideo.channelName}
-                      </div>
-                      <div className="text-xs text-slate-400 truncate">
-                        {currentVideo.subscribers}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Injected Cadence Session-Only Below-Video Control Bar */}
-                  {settings.enabled && settings.showInPageControlBar && (
-                    <div className="relative flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-[#0B0F19] border border-slate-700/90">
-                      {/* Floating Amber Toolbar Toast */}
-                      {barToast && (
-                        <div
-                          role="status"
-                          aria-live="polite"
-                          className="absolute bottom-[calc(100%+7px)] left-1/2 -translate-x-1/2 z-30 pointer-events-none inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#111827] border border-amber-500/50 text-[11.5px] font-medium text-amber-200 whitespace-nowrap tabular-nums shadow-lg"
-                        >
-                          <AlertTriangle
-                            className="w-3.5 h-3.5 text-amber-400 shrink-0"
-                            aria-hidden="true"
-                          />
-                          <span>{barToast}</span>
-                        </div>
-                      )}
-
-                      {/* Fixed-Width Zero-Shift Compact Speed Readout (#16) */}
-                      <span
-                        className="inline-grid items-center shrink-0 text-xs text-slate-400 tabular-nums whitespace-nowrap"
-                        title={
-                          isAdPlaying
-                            ? `Speed locked during ad${
-                                sessionOverrideSpeed !== null
-                                  ? ` · Session ${formatSpeed(sessionOverrideSpeed)}× restores after ad`
-                                  : ''
-                              }`
-                            : isLiveHeadClamped
-                              ? `Stream is currently at live end (1.0×) · Saved ${formatSpeed(baselineSpeed)}× rule restores automatically behind live`
-                              : sessionOverrideSpeed !== null
-                                ? `Session override active · Saved baseline is ${formatSpeed(baselineSpeed)}×`
-                                : 'Session-only speed bar · Does not alter saved Channel Rules'
-                        }
+              {/* Simulated YouTube Dark Watch Metadata (#above-the-fold) */}
+              <div className="p-5 sm:p-6 space-y-4">
+                {/* v1.4.0 Full-Width 3-Row Transport Deck Mounted Above #title */}
+                {settings.enabled && settings.showInPageControlBar && !unconvertedShortsActive && (
+                  <div
+                    id="cadence-watch-bar"
+                    className="relative w-full px-3.5 py-2.5 rounded-xl bg-[#0B0F19] border border-slate-700/90"
+                  >
+                    {/* Floating Amber Toolbar Toast */}
+                    {barToast && (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="absolute bottom-[calc(100%+7px)] left-1/2 -translate-x-1/2 z-30 pointer-events-none inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#111827] border border-amber-500/50 text-[11.5px] font-medium text-amber-200 whitespace-nowrap tabular-nums shadow-lg"
                       >
-                        <span
+                        <AlertTriangle
+                          className="w-3.5 h-3.5 text-amber-400 shrink-0"
                           aria-hidden="true"
-                          className="col-start-1 row-start-1 invisible pointer-events-none select-none"
-                        >
-                          Session · <strong className="font-semibold">8.88×</strong>
+                        />
+                        <span>{barToast}</span>
+                      </div>
+                    )}
+
+                    {/* Row 1: Speed Source + Telemetry (Left) & Collision-Aware Brand Signature (Right) */}
+                    <div
+                      ref={row1Ref}
+                      className="relative flex items-center justify-between gap-2 pb-1.5 border-b border-white/[0.06]"
+                    >
+                      <span
+                        ref={brandFullSizerRef}
+                        aria-hidden="true"
+                        className="absolute -top-[9999px] left-0 invisible pointer-events-none select-none inline-flex items-center gap-1.5 px-1.5 py-0.5 whitespace-nowrap"
+                      >
+                        <CadenceEmblem className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[11px] font-bold tracking-tight font-display">
+                          Cadence
                         </span>
-                        <span className="col-start-1 row-start-1">
-                          {isAdPlaying
-                            ? 'Ad'
-                            : sessionOverrideSpeed !== null
-                              ? 'Session'
-                              : matchedRule
-                                ? 'Rule'
-                                : 'Default'}{' '}
-                          ·{' '}
-                          <strong
-                            className={
-                              isAdPlaying
-                                ? 'text-amber-300 font-semibold'
-                                : sessionOverrideSpeed !== null
-                                  ? 'text-amber-300 font-semibold'
-                                  : 'text-slate-100 font-semibold'
-                            }
-                          >
-                            {formatCompactSpeed(effectiveSpeed)}×
-                          </strong>
-                        </span>
+                        <span className="text-[11px]">- YouTube at your speed</span>
                       </span>
 
+                      <div ref={row1LeftRef} className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="inline-flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap shrink-0 tabular-nums"
+                          title={
+                            isAdPlaying
+                              ? `Speed locked during ad${
+                                  isSessionActive
+                                    ? ` · Session ${formatSpeed(sessionOverrideSpeed!)}× restores after ad`
+                                    : ''
+                                }`
+                              : isLiveHeadClamped
+                                ? `Stream is currently at live end (1.0×) · Saved ${formatSpeed(baselineSpeed)}× rule restores automatically behind live`
+                                : isSessionActive
+                                  ? `Session override active · Baseline is ${formatSpeed(baselineSpeed)}×`
+                                  : 'Active playback speed source'
+                          }
+                        >
+                          <span className="text-slate-400 font-medium">
+                            {isAdPlaying
+                              ? 'Sponsored Ad'
+                              : isSessionActive
+                                ? 'Session Override'
+                                : matchedRule
+                                  ? 'Channel Rule'
+                                  : 'Default'}
+                          </span>
+                          <span className="text-slate-600" aria-hidden="true">
+                            ·
+                          </span>
+                          <span className="inline-grid items-center font-mono font-semibold">
+                            <span
+                              aria-hidden="true"
+                              className="col-start-1 row-start-1 invisible pointer-events-none select-none"
+                            >
+                              8.88×
+                            </span>
+                            <span
+                              className={`col-start-1 row-start-1 ${
+                                isAdPlaying || isSessionActive
+                                  ? 'text-amber-300'
+                                  : 'text-slate-100'
+                              }`}
+                            >
+                              {formatCompactSpeed(effectiveSpeed)}×
+                            </span>
+                          </span>
+                        </span>
+
+                        {durationSlotModel.text && (
+                          <>
+                            <span
+                              className="w-px h-3 bg-white/10 shrink-0"
+                              aria-hidden="true"
+                            />
+                            {durationSlotModel.mode === 'ad' ? (
+                              <span
+                                className="text-[11.5px] font-medium text-amber-300/90 whitespace-nowrap truncate"
+                                title={durationSlotModel.title}
+                              >
+                                {durationSlotModel.text}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={!durationSlotModel.clickable}
+                                onClick={() => {
+                                  if (durationSlotModel.clickable) {
+                                    handleJumpToLive();
+                                  }
+                                }}
+                                className={`inline-flex items-center gap-1.5 rounded text-[11.5px] font-mono tabular-nums whitespace-nowrap shrink-0 transition-colors ${
+                                  durationSlotModel.clickable
+                                    ? 'px-1.5 py-0.5 border border-slate-700/90 text-slate-200 hover:bg-slate-800 hover:border-red-500/60 cursor-pointer'
+                                    : durationSlotModel.mode === 'live-head'
+                                      ? 'text-slate-100 font-semibold cursor-default'
+                                      : 'text-slate-400 cursor-default'
+                                }`}
+                                title={durationSlotModel.title}
+                              >
+                                {durationSlotModel.mode !== 'vod' && (
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                      durationSlotModel.mode === 'live-head'
+                                        ? 'bg-red-500'
+                                        : 'bg-amber-500'
+                                    }`}
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                <span className="inline-grid items-center text-left">
+                                  <span
+                                    aria-hidden="true"
+                                    className="col-start-1 row-start-1 invisible pointer-events-none select-none"
+                                  >
+                                    {buildDurationSizerText(durationSlotModel.text)}
+                                  </span>
+                                  <span className="col-start-1 row-start-1">
+                                    {durationSlotModel.text}
+                                  </span>
+                                </span>
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={onNavigateToRules}
+                        className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-white/[0.06] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        title="Cadence - YouTube at your speed · Click to manage Channel Rules"
+                      >
+                        <CadenceEmblem className="w-3.5 h-3.5 shrink-0" />
+                        <span className="text-[11px] font-bold tracking-tight text-slate-200 font-display">
+                          Cadence
+                        </span>
+                        {!collapseTagline && (
+                          <span className="text-[11px] text-slate-400">
+                            - YouTube at your speed
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Row 2: Quick Speed Presets (Left) & Always-Shown Style B Seek Capsules (Right) */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
                       <div className="flex items-center gap-1 flex-wrap">
                         {[0.75, 1.0, 1.25, 1.5, 1.75, 2.0].map((spd) => {
                           const active = !isAdPlaying && Math.abs(effectiveSpeed - spd) < 0.015;
@@ -1621,12 +2051,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                               type="button"
                               aria-disabled={isBlocked ? true : undefined}
                               onClick={() => handleSessionBarSpeedChange(spd)}
-                              className={`px-2 py-1 rounded text-xs font-mono tabular-nums font-medium transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                              className={`px-2 py-1 rounded-md text-xs font-mono tabular-nums font-semibold transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
                                 active
                                   ? 'bg-red-600 text-white'
                                   : isBlocked
-                                    ? 'text-slate-300 opacity-42 hover:opacity-70 hover:bg-amber-500/10'
-                                    : 'text-slate-300 hover:bg-slate-800'
+                                    ? 'text-slate-300 opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                    : 'text-slate-300 hover:bg-white/[0.08] hover:text-white'
                               }`}
                               title={
                                 isAdPlaying
@@ -1642,20 +2072,88 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         })}
                       </div>
 
-                      <span
-                        className="hidden sm:inline-block w-px h-3.5 bg-slate-700"
-                        aria-hidden="true"
-                      />
+                      {/* Style B Replay & Skip Ahead Capsules */}
+                      <div className="inline-flex items-center gap-1.5 shrink-0 ml-auto">
+                        <div
+                          className="inline-flex items-center rounded-md bg-white/[0.04] border border-white/10 overflow-hidden divide-x divide-white/10 shrink-0"
+                          role="group"
+                          aria-label="Replay 60, 30, or 10 seconds"
+                        >
+                          {([60, 30, 10] as const).map((sec, idx) => (
+                            <button
+                              key={`back-${sec}`}
+                              type="button"
+                              aria-disabled={isAdPlaying ? true : undefined}
+                              onClick={() => handleSeekBySeconds(-sec)}
+                              className={`inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                isAdPlaying
+                                  ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                  : 'hover:bg-white/10 hover:text-white'
+                              }`}
+                              title={
+                                isAdPlaying
+                                  ? 'Skip locked during ad'
+                                  : `Replay ${sec} seconds`
+                              }
+                            >
+                              {idx === 0 && (
+                                <ReplayArcIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                              )}
+                              <span>{sec}</span>
+                            </button>
+                          ))}
+                        </div>
 
-                      <div className="inline-flex items-center gap-1">
+                        <div
+                          className="inline-flex items-center rounded-md bg-white/[0.04] border border-white/10 overflow-hidden divide-x divide-white/10 shrink-0"
+                          role="group"
+                          aria-label="Skip ahead 10, 30, or 60 seconds"
+                        >
+                          {([10, 30, 60] as const).map((sec, idx) => {
+                            const skipLiveBlocked =
+                              !isAdPlaying && isLiveStream && isAtLiveHead;
+                            const skipBlocked = isAdPlaying || skipLiveBlocked;
+                            return (
+                              <button
+                                key={`fwd-${sec}`}
+                                type="button"
+                                aria-disabled={skipBlocked ? true : undefined}
+                                onClick={() => handleSeekBySeconds(sec)}
+                                className={`inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                  skipBlocked
+                                    ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                    : 'hover:bg-white/10 hover:text-white'
+                                }`}
+                                title={
+                                  isAdPlaying
+                                    ? 'Skip locked during ad'
+                                    : skipLiveBlocked
+                                      ? 'Stream is currently at live end'
+                                      : `Skip ahead ${sec} seconds`
+                                }
+                              >
+                                <span>{sec}</span>
+                                {idx === 2 && (
+                                  <SkipArcIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Row 3: Fine ±0.05 + Reset + VOD Saved Time (Left) & Style A Italic Rule Slot (Right) */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 mt-1.5 border-t border-white/[0.05]">
+                      <div className="flex items-center gap-1.5 min-w-0">
                         <button
                           type="button"
                           aria-disabled={isAdPlaying ? true : undefined}
                           onClick={() => handleSessionBarSpeedChange(effectiveSpeed - 0.05)}
-                          className={`px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                          className={`px-2 py-0.5 rounded-md bg-white/[0.04] border border-white/10 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                             isAdPlaying
-                              ? 'opacity-42 hover:opacity-70 hover:bg-amber-500/10'
-                              : 'hover:bg-slate-800'
+                              ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                              : 'hover:bg-white/10 hover:text-white'
                           }`}
                           title={
                             isAdPlaying
@@ -1677,10 +2175,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                               type="button"
                               aria-disabled={isStepUpBlocked ? true : undefined}
                               onClick={() => handleSessionBarSpeedChange(effectiveSpeed + 0.05)}
-                              className={`px-2 py-1 rounded border border-slate-700/90 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer ${
+                              className={`px-2 py-0.5 rounded-md bg-white/[0.04] border border-white/10 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                                 isStepUpBlocked
-                                  ? 'opacity-42 hover:opacity-70 hover:bg-amber-500/10'
-                                  : 'hover:bg-slate-800'
+                                  ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                  : 'hover:bg-white/10 hover:text-white'
                               }`}
                               title={
                                 isAdPlaying
@@ -1697,14 +2195,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         <button
                           type="button"
                           onClick={handleResetSessionBarSpeed}
-                          disabled={!isAdPlaying && sessionOverrideSpeed === null}
+                          disabled={!isAdPlaying && !isSessionActive}
                           aria-disabled={isAdPlaying ? true : undefined}
-                          className={`px-2 py-1 rounded border text-[11px] font-semibold transition-all duration-150 whitespace-nowrap shrink-0 ${
+                          className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
                             isAdPlaying
-                              ? 'border-slate-700/90 text-slate-300 opacity-42 hover:opacity-70 hover:bg-amber-500/10 cursor-pointer'
-                              : sessionOverrideSpeed !== null
-                                ? 'border-red-500/60 text-slate-100 hover:bg-slate-800 cursor-pointer'
-                                : 'border-slate-800 text-slate-500 cursor-default opacity-50'
+                              ? 'border-white/10 text-slate-300 opacity-40 hover:opacity-70 hover:bg-amber-500/10 cursor-pointer'
+                              : isSessionActive
+                                ? 'border-red-500/60 text-slate-100 hover:bg-white/10 cursor-pointer'
+                                : 'border-white/[0.06] text-slate-500 cursor-default opacity-50'
                           }`}
                           title={
                             isAdPlaying
@@ -1718,57 +2216,153 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         >
                           Reset
                         </button>
+
+                        {vodSavedTimeModel && (
+                          <span
+                            className={`pl-1 text-[11px] font-mono tabular-nums whitespace-nowrap shrink-0 ${
+                              vodSavedTimeModel.tone === 'positive'
+                                ? 'text-emerald-400 font-semibold'
+                                : vodSavedTimeModel.tone === 'neutral'
+                                  ? 'text-slate-500'
+                                  : 'text-slate-400'
+                            }`}
+                            title="Wall-clock time saved across the full video at your active playback speed"
+                          >
+                            {vodSavedTimeModel.text}
+                          </span>
+                        )}
                       </div>
 
-                      {durationSlotModel.text && (
-                        <>
-                          <span
-                            className="hidden sm:inline-block w-px h-3.5 bg-slate-700"
-                            aria-hidden="true"
-                          />
-                          <button
-                            type="button"
-                            disabled={!durationSlotModel.clickable}
-                            onClick={() => {
-                              if (durationSlotModel.clickable) {
-                                handleJumpToLive();
+                      {/* Style A Full-Italic 1-Click Channel Rule Slot */}
+                      <div className="inline-flex items-center gap-1.5 italic text-[11.5px] shrink-0 ml-auto">
+                        {!matchedRule ? (
+                          <>
+                            <span className="text-slate-400 whitespace-nowrap">No rule</span>
+                            <button
+                              type="button"
+                              aria-disabled={isAdPlaying ? true : undefined}
+                              onClick={() => {
+                                const matchingPreset = presets.find(
+                                  (p) => Math.abs(p.speed - ruleActionSpeed) < 0.01
+                                );
+                                handleAssignChannelSpeed(
+                                  ruleActionSpeed,
+                                  matchingPreset ? matchingPreset.id : 'custom',
+                                  'Watch toolbar (+ Save Rule)'
+                                );
+                              }}
+                              className={`italic px-2 py-0.5 rounded-md border border-white/12 bg-white/[0.04] text-[11px] font-medium text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                isAdPlaying
+                                  ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                  : 'hover:bg-white/10 hover:text-white'
+                              }`}
+                              title={
+                                isAdPlaying
+                                  ? 'Speed locked during ad'
+                                  : `Save ${formatSpeed(ruleActionSpeed)}× as permanent Channel Rule for ${currentVideo.channelName}`
                               }
-                            }}
-                            className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] font-mono tabular-nums whitespace-nowrap shrink-0 transition-colors ${
-                              durationSlotModel.clickable
-                                ? 'border border-slate-700/90 text-slate-200 hover:bg-slate-800 hover:border-red-500/60 cursor-pointer'
-                                : durationSlotModel.mode === 'live-head'
-                                  ? 'border border-transparent text-slate-100 font-semibold cursor-default'
-                                  : 'border border-transparent text-slate-400 cursor-default'
-                            }`}
-                            title={durationSlotModel.title}
-                          >
-                            {durationSlotModel.mode !== 'vod' && (
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                  durationSlotModel.mode === 'live-head'
-                                    ? 'bg-red-500'
-                                    : 'bg-amber-500'
-                                }`}
-                                aria-hidden="true"
-                              />
-                            )}
-                            <span className="inline-grid items-center text-left">
-                              <span
-                                aria-hidden="true"
-                                className="col-start-1 row-start-1 invisible pointer-events-none select-none"
-                              >
-                                {buildDurationSizerText(durationSlotModel.text)}
-                              </span>
-                              <span className="col-start-1 row-start-1">
-                                {durationSlotModel.text}
-                              </span>
+                            >
+                              + Save {formatCompactSpeed(ruleActionSpeed)}× Rule
+                            </button>
+                          </>
+                        ) : isSessionActive && !isAdPlaying ? (
+                          <>
+                            <span className="text-slate-400 whitespace-nowrap tabular-nums">
+                              Rule:{' '}
+                              <strong className="font-semibold text-slate-200">
+                                {formatCompactSpeed(baselineSpeed)}×
+                              </strong>
                             </span>
-                          </button>
-                        </>
-                      )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const matchingPreset = presets.find(
+                                  (p) => Math.abs(p.speed - ruleActionSpeed) < 0.01
+                                );
+                                handleAssignChannelSpeed(
+                                  ruleActionSpeed,
+                                  matchingPreset ? matchingPreset.id : 'custom',
+                                  'Watch toolbar (Update Rule)'
+                                );
+                              }}
+                              className="italic px-2 py-0.5 rounded-md border border-amber-500/45 bg-amber-500/10 hover:bg-amber-500/20 text-[11px] font-medium text-amber-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                              title={`Update ${currentVideo.channelName} rule from ${formatSpeed(baselineSpeed)}× to ${formatSpeed(ruleActionSpeed)}×`}
+                            >
+                              Update → {formatCompactSpeed(ruleActionSpeed)}×
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-400 whitespace-nowrap tabular-nums">
+                              Rule:{' '}
+                              <strong className="font-semibold text-slate-200">
+                                {formatCompactSpeed(baselineSpeed)}×
+                              </strong>
+                            </span>
+                            <button
+                              type="button"
+                              aria-disabled={isAdPlaying ? true : undefined}
+                              onClick={handleClearBarChannelRule}
+                              className={`italic px-2 py-0.5 rounded-md border border-white/12 bg-white/[0.04] text-[11px] font-medium text-slate-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                isAdPlaying
+                                  ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                  : 'hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-200'
+                              }`}
+                              title={
+                                isAdPlaying
+                                  ? 'Speed locked during ad'
+                                  : `Clear saved Channel Rule for ${currentVideo.channelName}`
+                              }
+                            >
+                              Clear ×
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  </div>
+                )}
+
+                <div>
+                  <h2 className="text-lg sm:text-xl font-bold text-slate-100">
+                    {currentVideo.title}
+                  </h2>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                    <span>{currentVideo.viewsLabel}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{currentVideo.publishedLabel}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{currentVideo.handle}</span>
+                  </div>
+                </div>
+
+                {/* Native YouTube Channel Owner & Actions Row (100% Untouched by Cadence in v1.4.0) */}
+                <div className="flex flex-wrap items-center justify-between gap-4 py-3.5 border-y border-slate-800">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 text-slate-100 font-display font-bold text-sm flex items-center justify-center shrink-0">
+                      {currentVideo.channelName.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm text-slate-100 truncate">
+                        {currentVideo.channelName}
+                      </div>
+                      <div className="text-xs text-slate-400 truncate">
+                        {currentVideo.subscribers}
+                      </div>
+                    </div>
+                    <span className="ml-2 px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-950 text-xs font-semibold whitespace-nowrap shrink-0 select-none">
+                      Subscribe
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-slate-300 select-none">
+                    <span className="px-3 py-1.5 rounded-full bg-slate-800/90 border border-slate-700/80 font-medium whitespace-nowrap">
+                      Like · Share
+                    </span>
+                    <span className="px-3 py-1.5 rounded-full bg-slate-800/90 border border-slate-700/80 font-medium whitespace-nowrap">
+                      Save
+                    </span>
+                  </div>
                 </div>
 
                 {/* Channel / Playlist Switcher Queue */}
@@ -2157,7 +2751,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     Show Speed Bar Below Video
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Session-only speed bar with remaining time beside Subscribe
+                    Full-width 3-row speed, skip &amp; rule deck above video title
                   </div>
                 </div>
                 <input
@@ -2165,6 +2759,25 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                   checked={settings.showInPageControlBar}
                   onChange={(e) =>
                     onUpdateSettings({ showInPageControlBar: e.target.checked })
+                  }
+                  className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
+                />
+              </label>
+
+              <label className="flex items-start justify-between gap-3 cursor-pointer">
+                <div>
+                  <div className="text-xs font-semibold text-slate-100">
+                    Convert Shorts to Standard Player
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    Auto-redirects /shorts/ links &amp; URLs to /watch player
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.convertShortsToWatch !== false}
+                  onChange={(e) =>
+                    onUpdateSettings({ convertShortsToWatch: e.target.checked })
                   }
                   className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
                 />

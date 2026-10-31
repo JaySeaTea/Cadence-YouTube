@@ -37,7 +37,7 @@
   let isDestroyed = false;
 
   let state = {
-    settings: {"enabled":true,"perChannelSpeedEnabled":true,"autoRememberManualSpeed":false,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"settingsSchemaVersion":2},
+    settings: {"enabled":true,"perChannelSpeedEnabled":true,"autoRememberManualSpeed":false,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"settingsSchemaVersion":3},
     presets: [{"id":"music","label":"Music & Performance","description":"Preserves natural pitch, rhythm, and studio mix timing.","speed":1},{"id":"educational","label":"Educational & Explainer","description":"Brisk comprehension pace for tutorials, science, and essays.","speed":1.5},{"id":"podcast","label":"Podcast & Lecture","description":"High-efficiency cadence for long-form conversations and seminars.","speed":2}],
     rules: [{"id":"rule-velvet-room","channelName":"Velvet Room Sessions","handle":"@velvetroomsessions","channelId":"UC8velvetRoomMusic01","presetId":"music","customSpeed":1,"updatedAt":"2026-10-23"},{"id":"rule-orbital-lab","channelName":"Orbital Mechanics Lab","handle":"@orbitalmechanics","channelId":"UC4orbitalLabEdu02","presetId":"educational","customSpeed":1.5,"updatedAt":"2026-10-23"},{"id":"rule-longform-archive","channelName":"The Longform Archive","handle":"@longformarchive","channelId":"UC9longformPod03","presetId":"podcast","customSpeed":2,"updatedAt":"2026-10-23"},{"id":"rule-systems-craft","channelName":"Systems Craft","handle":"@systemscraft","channelId":"UC2systemsCraft04","presetId":"educational","customSpeed":1.5,"updatedAt":"2026-10-23"}],
   };
@@ -51,6 +51,7 @@
   let remainingState = {
     videoId: null,
     rawRemainingSec: null,
+    rawDurationSec: null,
     playbackRate: null,
     isAd: false,
     isLive: false,
@@ -66,6 +67,7 @@
   let barToastReason = null;
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
+  let barResizeObserver = null;
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -73,6 +75,34 @@
     '<path d="M8 6.5V9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
     '<circle cx="8" cy="11.5" r="0.75" fill="currentColor"/>' +
     '</svg>';
+
+  const CADENCE_EMBLEM_SVG =
+    '<svg class="cadence-brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
+    '<rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>' +
+    '<path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>' +
+    '<rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>' +
+    '</svg>';
+
+  const REPLAY_ICON_SVG =
+    '<svg class="cadence-seek-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>' +
+    '<path d="M3 3v5h5"/>' +
+    '</svg>';
+
+  const SKIP_ICON_SVG =
+    '<svg class="cadence-seek-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>' +
+    '<path d="M21 3v5h-5"/>' +
+    '</svg>';
+
+  function disconnectBarResizeObserver() {
+    if (barResizeObserver) {
+      try {
+        barResizeObserver.disconnect();
+      } catch (_) {}
+      barResizeObserver = null;
+    }
+  }
 
   function clearBarMountRetry() {
     if (barMountRetryTimer) {
@@ -105,6 +135,7 @@
     clearTimeout(toastTimeout);
     hideBarToast(true);
     clearBarMountRetry();
+    disconnectBarResizeObserver();
     try {
       lifecycleController.abort();
     } catch (_) {}
@@ -193,6 +224,21 @@
     return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
   }
 
+  function formatExactMinutesSeconds(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec < 60) {
+      return `${safeSec}s`;
+    }
+    const mins = Math.floor(safeSec / 60);
+    const secs = safeSec % 60;
+    if (mins >= 60) {
+      const hrs = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+    }
+    return secs > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${mins}m`;
+  }
+
   function formatRemainingReadout(rawRemainingSec, speed) {
     if (typeof rawRemainingSec !== 'number' || !Number.isFinite(rawRemainingSec) || rawRemainingSec < 0) {
       return '';
@@ -204,6 +250,23 @@
 
   function isWatchLocation() {
     return location.pathname.startsWith('/watch');
+  }
+
+  function maybeRedirectShortsInContent() {
+    if (
+      !state.settings ||
+      state.settings.enabled === false ||
+      state.settings.convertShortsToWatch === false
+    ) {
+      return false;
+    }
+    const m = location.pathname.match(/^\/shorts\/([A-Za-z0-9_-]{6,})/);
+    if (!m || !m[1]) return false;
+    const params = new URLSearchParams(location.search);
+    params.set('v', m[1]);
+    params.delete('feature');
+    location.replace('/watch?' + params.toString() + (location.hash || ''));
+    return true;
   }
 
   function postToBridge(type, payload) {
@@ -226,6 +289,7 @@
       teardownInstance();
       return;
     }
+    if (maybeRedirectShortsInContent()) return;
     postToBridge('COMMAND', { action: 'FORCE_DETECT' });
   };
 
@@ -396,6 +460,17 @@
     return false;
   }
 
+  function isAnyLiveStreamActive() {
+    if (remainingState.isLive) return true;
+    const player = getWatchPlayerElement();
+    if (!player) return false;
+    const liveTime = player.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
+    );
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    return Boolean(liveTime && badge instanceof HTMLElement && !badge.hasAttribute('hidden'));
+  }
+
   function getConfiguredSpeedForChannel(meta) {
     if (!state.settings.enabled) return 1.0;
     clearSessionOverrideIfMatchesBaseline(meta);
@@ -488,6 +563,107 @@
     };
   }
 
+  function computeSavedTimeModel() {
+    // Strictly VOD-only: never show on any Live Stream (neither Live End nor Live DVR) or during Ads
+    if (
+      !currentChannel ||
+      isCurrentAdActive() ||
+      remainingState.hidden ||
+      isAnyLiveStreamActive()
+    ) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+    if (
+      remainingState.videoId &&
+      currentChannel.videoId &&
+      remainingState.videoId !== currentChannel.videoId
+    ) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+
+    let durationSec =
+      typeof remainingState.rawDurationSec === 'number' &&
+      Number.isFinite(remainingState.rawDurationSec) &&
+      remainingState.rawDurationSec > 0
+        ? remainingState.rawDurationSec
+        : null;
+
+    if (durationSec === null) {
+      const video =
+        document.querySelector('ytd-watch-flexy video.html5-main-video') ||
+        document.querySelector('#movie_player video.html5-main-video') ||
+        document.querySelector('video.html5-main-video');
+      if (video && Number.isFinite(video.duration) && video.duration > 0) {
+        durationSec = video.duration;
+      }
+    }
+
+    if (durationSec === null || durationSec < 5) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+
+    const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
+    const realTotalSec = Math.round(durationSec / effectiveSpeed);
+    const deltaSec = Math.round(durationSec - realTotalSec);
+
+    if (Math.abs(deltaSec) < 3) {
+      return {
+        visible: true,
+        tone: 'neutral',
+        text: '0s saved',
+        title: 'Playing at standard 1.0× speed',
+      };
+    }
+
+    if (deltaSec > 0) {
+      return {
+        visible: true,
+        tone: 'saved',
+        text: `Saves ${formatExactMinutesSeconds(deltaSec)}`,
+        title: `Total wall-clock time saved on this video at ${formatDisplaySpeed(effectiveSpeed)}×`,
+      };
+    }
+
+    return {
+      visible: true,
+      tone: 'slower',
+      text: `+${formatExactMinutesSeconds(Math.abs(deltaSec))}`,
+      title: `Adds ${formatExactMinutesSeconds(Math.abs(deltaSec))} to total video duration at ${formatDisplaySpeed(effectiveSpeed)}×`,
+    };
+  }
+
+  function syncRow1BrandCollapse(bar) {
+    if (!bar) return;
+    const rowTop = bar.querySelector('.cadence-row-top');
+    const leftEl = bar.querySelector('.cadence-row-top-left');
+    const brandBtn = bar.querySelector('.cadence-brand-btn');
+    const sizerEl = bar.querySelector('.cadence-brand-sizer');
+    if (!rowTop || !leftEl || !brandBtn) return;
+
+    const availableWidth = rowTop.clientWidth;
+    if (availableWidth <= 0) return;
+
+    const leftWidth = Math.ceil(leftEl.getBoundingClientRect().width);
+    const fullBrandWidth = Math.ceil(
+      (sizerEl && sizerEl.getBoundingClientRect().width) || 206
+    );
+    const shouldCollapse = leftWidth + fullBrandWidth + 16 > availableWidth;
+    brandBtn.classList.toggle('is-tagline-collapsed', shouldCollapse);
+  }
+
+  function ensureBarResizeObserver(bar) {
+    disconnectBarResizeObserver();
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    barResizeObserver = new ResizeObserver(() => {
+      syncRow1BrandCollapse(bar);
+    });
+    barResizeObserver.observe(bar);
+    const rowTop = bar.querySelector('.cadence-row-top');
+    const leftEl = bar.querySelector('.cadence-row-top-left');
+    if (rowTop) barResizeObserver.observe(rowTop);
+    if (leftEl) barResizeObserver.observe(leftEl);
+  }
+
   function applyDurationModelToBar(bar, model) {
     if (!bar) return;
     const wrapEl = bar.querySelector('.cadence-remaining-wrap');
@@ -543,10 +719,37 @@
     }
   }
 
+  function applySavedTimeModelToBar(bar, savedModel) {
+    if (!bar) return;
+    const savedEl = bar.querySelector('.cadence-saved-time');
+    if (!savedEl) return;
+
+    if (!savedModel || !savedModel.visible || !savedModel.text) {
+      if (savedEl.style.display !== 'none') {
+        savedEl.style.display = 'none';
+      }
+      return;
+    }
+
+    if (savedEl.style.display !== 'inline-block') {
+      savedEl.style.display = 'inline-block';
+    }
+    if (savedEl.textContent !== savedModel.text) {
+      savedEl.textContent = savedModel.text;
+    }
+    const nextTitle = savedModel.title || '';
+    if (savedEl.title !== nextTitle) {
+      savedEl.title = nextTitle;
+    }
+    savedEl.classList.toggle('is-saved', savedModel.tone === 'saved');
+  }
+
   function updateRemainingReadoutInPlace() {
-    const bar = document.getElementById('cadence-owner-bar');
+    const bar = document.getElementById('cadence-watch-bar');
     if (!bar) return;
     applyDurationModelToBar(bar, computeDurationSlotModel());
+    applySavedTimeModelToBar(bar, computeSavedTimeModel());
+    syncRow1BrandCollapse(bar);
   }
 
   function pushConfigToBridge(targetSpeed, showOnBadge = true) {
@@ -561,6 +764,7 @@
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+      convertShortsToWatch: state.settings.convertShortsToWatch !== false,
       hasSessionOverride: hasSession,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
@@ -580,7 +784,7 @@
 
   function positionBarToast() {
     const toastEl = document.getElementById('cadence-bar-toast');
-    const bar = document.getElementById('cadence-owner-bar');
+    const bar = document.getElementById('cadence-watch-bar');
     if (!toastEl || !bar || !isWatchLocation()) {
       if (toastEl) toastEl.classList.remove('cadence-visible');
       return false;
@@ -590,8 +794,7 @@
       toastEl.classList.remove('cadence-visible');
       return false;
     }
-    const anchorEl = bar.querySelector('.cadence-bar-buttons') || bar;
-    const anchorRect = anchorEl.getBoundingClientRect();
+    const anchorRect = barRect;
     const toastWidth = toastEl.offsetWidth || 214;
     const toastHeight = toastEl.offsetHeight || 28;
     const viewportW = window.innerWidth || document.documentElement.clientWidth || 1024;
@@ -676,6 +879,8 @@
       if (barToastVisible) {
         positionBarToast();
       }
+      const bar = document.getElementById('cadence-watch-bar');
+      if (bar) syncRow1BrandCollapse(bar);
     },
     { passive: true, signal: lifecycleSignal }
   );
@@ -784,6 +989,12 @@
     }
     if (!meta || !meta.channelName) return false;
     const cleanSpeed = clampSpeed(speed);
+    const matchedPreset =
+      presetId !== 'custom'
+        ? state.presets.find((p) => p.id === presetId)
+        : state.presets.find((p) => Math.abs(Number(p.speed) - cleanSpeed) < 0.01);
+    const resolvedPresetId = matchedPreset ? matchedPreset.id : presetId;
+
     const existingIdx = state.rules.findIndex(
       (r) =>
         (meta.channelId && r.channelId && r.channelId === meta.channelId) ||
@@ -796,7 +1007,7 @@
       channelName: meta.channelName,
       handle: meta.handle || '@' + meta.channelName.toLowerCase().replace(/\s+/g, ''),
       channelId: meta.channelId || '',
-      presetId,
+      presetId: resolvedPresetId,
       customSpeed: cleanSpeed,
       updatedAt: new Date().toISOString().slice(0, 10),
     };
@@ -813,6 +1024,75 @@
       renderInPageBar();
     }
     return saved;
+  }
+
+  async function clearChannelRule(meta) {
+    if (isDestroyed || !isExtensionContextValid()) {
+      teardownInstance();
+      return false;
+    }
+    const matched = findMatchingRule(meta);
+    if (!matched) return false;
+
+    const nextRules = state.rules.filter((r) => r.id !== matched.id);
+    state.rules = nextRules;
+    sessionOverride = { videoId: null, speed: null };
+    const saved = await safeStorageSet({ rules: nextRules });
+    if (saved && currentChannel) {
+      const fallbackSpeed = getEffectiveSpeedForChannel(currentChannel);
+      remainingState.playbackRate = fallbackSpeed;
+      pushConfigToBridge(fallbackSpeed, true);
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: fallbackSpeed });
+      renderInPageBar();
+      showPlayerToast(
+        `Cleared Rule · Default ${formatDisplaySpeed(fallbackSpeed)}×`
+      );
+    }
+    return saved;
+  }
+
+  function applySeekFromBar(deltaSec) {
+    if (isDestroyed || !isExtensionContextValid()) {
+      teardownInstance();
+      return;
+    }
+    const delta = Number(deltaSec) || 0;
+    if (!delta) return;
+
+    if (isCurrentAdActive()) {
+      renderInPageBar();
+      showBarToast('Skip locked during ad', 2400, 'ad');
+      showPlayerToast('Skip locked during ad', true, true);
+      return;
+    }
+
+    if (!currentChannel) {
+      currentChannel = extractDomChannelFallback();
+    }
+    const liveAtHead = isLiveAtHeadForChannel(currentChannel);
+    if (liveAtHead && delta > 0) {
+      renderInPageBar();
+      showBarToast('Stream is currently at live end', 2400, 'live');
+      showPlayerToast('Stream is currently at live end', true, true);
+      return;
+    }
+
+    hideBarToast();
+    if (delta < 0) {
+      const existingBanner = document.querySelector('.cadence-stopped-banner');
+      if (existingBanner) {
+        existingBanner.classList.remove('cadence-visible');
+      }
+      if (liveAtHead) {
+        remainingState.isAtLiveHead = false;
+      }
+    }
+
+    postToBridge('COMMAND', {
+      action: 'SEEK_BY_SECONDS',
+      deltaSec: delta,
+    });
+    showPlayerToast(delta < 0 ? `Replay ${Math.abs(delta)}s` : `Skip +${delta}s`);
   }
 
   function applySessionSpeedFromBar(nextSpeed) {
@@ -946,12 +1226,37 @@
     }, 150);
   }
 
+  function resolveWatchBarMountPoint() {
+    const aboveTheFold =
+      document.querySelector('ytd-watch-flexy ytd-watch-metadata #above-the-fold') ||
+      document.querySelector('ytd-watch-metadata #above-the-fold');
+    if (aboveTheFold) {
+      const titleEl = aboveTheFold.querySelector(':scope > #title') || aboveTheFold.firstElementChild;
+      return { container: aboveTheFold, beforeNode: titleEl || null };
+    }
+    const watchMetadata =
+      document.querySelector('ytd-watch-flexy ytd-watch-metadata') ||
+      document.querySelector('ytd-watch-metadata');
+    if (watchMetadata) {
+      const titleEl = watchMetadata.querySelector('#title') || watchMetadata.firstElementChild;
+      return { container: watchMetadata, beforeNode: titleEl || null };
+    }
+    return null;
+  }
+
   function renderInPageBar() {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
     }
-    let existing = document.getElementById('cadence-owner-bar');
+
+    // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
+    const legacyOwnerBar = document.getElementById('cadence-owner-bar');
+    if (legacyOwnerBar) {
+      legacyOwnerBar.remove();
+    }
+
+    let existing = document.getElementById('cadence-watch-bar');
     if (existing && existing.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
       existing.remove();
       existing = null;
@@ -960,6 +1265,7 @@
     if (!isWatchLocation()) {
       clearBarMountRetry();
       hideBarToast(true);
+      disconnectBarResizeObserver();
       if (existing) existing.remove();
       return;
     }
@@ -970,33 +1276,43 @@
     if (!state.settings.enabled || !state.settings.showInPageControlBar || !currentChannel) {
       clearBarMountRetry();
       hideBarToast(true);
+      disconnectBarResizeObserver();
       if (existing) existing.remove();
       return;
     }
 
-    const ownerContainer =
-      document.querySelector('ytd-watch-flexy ytd-watch-metadata #owner') ||
-      document.querySelector('ytd-watch-metadata #owner') ||
-      document.querySelector('#above-the-fold #owner');
-    if (!ownerContainer) {
+    const mountPoint = resolveWatchBarMountPoint();
+    if (!mountPoint || !mountPoint.container) {
       scheduleBarMountRetryIfNeeded();
       return;
     }
     clearBarMountRetry();
 
     let bar = existing;
-    if (!bar || bar.parentElement !== ownerContainer) {
+    if (!bar || bar.parentElement !== mountPoint.container) {
       if (bar) bar.remove();
       bar = document.createElement('div');
-      bar.id = 'cadence-owner-bar';
-      bar.className = 'cadence-owner-bar';
+      bar.id = 'cadence-watch-bar';
+      bar.className = 'cadence-watch-bar';
       bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
-      ownerContainer.appendChild(bar);
+      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
+        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
+      } else {
+        mountPoint.container.prepend(bar);
+      }
+    } else if (
+      mountPoint.beforeNode &&
+      mountPoint.beforeNode.parentElement === mountPoint.container &&
+      bar.nextElementSibling !== mountPoint.beforeNode &&
+      bar !== mountPoint.beforeNode
+    ) {
+      mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
     }
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
     const adActive = isCurrentAdActive();
     const matchedRule = findMatchingRule(currentChannel);
+    const ruleResolvedSpeed = matchedRule ? resolveSpeedForRule(matchedRule) : null;
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
@@ -1006,76 +1322,188 @@
     const isStepUpLiveBlocked = !adActive && liveAtHead && effectiveSpeed + 0.05 > 1.01;
     const liveBlockedTooltip = 'Unavailable while synced at live end — rewind stream to speed up';
     const adBlockedTooltip = 'Speed locked during ad';
+    const adSkipBlockedTooltip = 'Skip locked during ad';
+
     const modePrefix = adActive
-      ? 'Ad'
+      ? 'Sponsored Ad'
       : isSessionActive
-        ? 'Session'
+        ? 'Session Override'
         : matchedRule
-          ? 'Rule'
+          ? 'Channel Rule'
           : 'Default';
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
     const tooltip = adActive
       ? isSessionActive
         ? `Ad playing at 1× · Session ${formatDisplaySpeed(sessionOverride.speed)}× restores automatically after ad`
-        : `Ad playing at 1× · Speed locked during ad`
+        : 'Ad playing at 1× · Controls paused until ad ends'
       : isSessionActive
         ? `Session override for this video only · Baseline is ${formatDisplaySpeed(baselineSpeed)}×`
         : isLiveRuleClamped
           ? `Live stream at live end · Saved ${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge`
-          : 'Session-only speed bar · Does not overwrite saved channel rules';
+          : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
+
     const durationModel = computeDurationSlotModel();
+    const savedTimeModel = computeSavedTimeModel();
+
+    let ruleSlotHtml = '';
+    if (!matchedRule) {
+      const saveTargetRate = adActive ? baselineSpeed : effectiveSpeed;
+      ruleSlotHtml = `
+        <span class="cadence-rule-status">No rule</span>
+        <button type="button" data-rule-action="save" class="cadence-rule-action-btn${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : `Save ${formatDisplaySpeed(saveTargetRate)}× as a Rule for ${currentChannel.channelName || 'this channel'}`}">
+          <span class="cadence-rule-plus" aria-hidden="true">+</span>
+          <span>Save ${formatDisplaySpeed(saveTargetRate)}× Rule</span>
+        </button>
+      `;
+    } else if (isSessionActive && !adActive) {
+      ruleSlotHtml = `
+        <span class="cadence-rule-status">Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <button type="button" data-rule-action="update" class="cadence-rule-action-btn is-update" title="${`Update ${currentChannel.channelName || 'channel'} Rule from ${formatDisplaySpeed(ruleResolvedSpeed)}× to ${formatDisplaySpeed(effectiveSpeed)}×`}">
+          <span>Update → ${formatDisplaySpeed(effectiveSpeed)}×</span>
+        </button>
+      `;
+    } else {
+      ruleSlotHtml = `
+        <span class="cadence-rule-status">Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <button type="button" data-rule-action="clear" class="cadence-rule-action-btn${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : 'Clear saved Rule and revert to Default speed'}">
+          <span>Clear</span>
+          <span class="cadence-rule-clear-x" aria-hidden="true">×</span>
+        </button>
+      `;
+    }
 
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+    const replaySteps = [-60, -30, -10];
+    const skipSteps = [10, 30, 60];
+    const seekForwardBlocked = adActive || liveAtHead;
+
     bar.innerHTML = `
-      <span class="cadence-bar-label ${!adActive && isSessionActive ? 'is-session' : ''}" title="${tooltip}">
-        <span class="cadence-bar-label-sizer" aria-hidden="true">Session · <strong>8.88×</strong></span>
-        <span class="cadence-bar-label-text">${modePrefix} · <strong>${formatCompactSpeed(displayedBarRate)}×</strong></span>
+      <span class="cadence-brand-sizer" aria-hidden="true">
+        ${CADENCE_EMBLEM_SVG}
+        <span class="cadence-brand-name">Cadence</span>
+        <span class="cadence-brand-tagline">- YouTube at your speed</span>
       </span>
-      <div class="cadence-bar-buttons">
-        ${quickSpeeds
-          .map((spd) => {
-            const isActive = !adActive && Math.abs(effectiveSpeed - spd) < 0.015;
-            const isLiveBlocked = !adActive && liveAtHead && spd > 1.01;
-            const isDisabledVisual = adActive || isLiveBlocked;
-            const chipClasses = [
-              'cadence-speed-chip',
-              isActive ? 'active' : '',
-              adActive ? 'is-ad-blocked' : isLiveBlocked ? 'is-live-blocked' : '',
-            ]
-              .filter(Boolean)
-              .join(' ');
-            const chipTitle = adActive
-              ? adBlockedTooltip
-              : isLiveBlocked
-                ? liveBlockedTooltip
-                : `Set ${formatDisplaySpeed(spd)}× for this video session only`;
-            return `
-          <button type="button" data-speed="${spd}" class="${chipClasses}"${isDisabledVisual ? ' aria-disabled="true"' : ''} title="${chipTitle}">
-            ${formatDisplaySpeed(spd)}×
-          </button>
-        `;
-          })
-          .join('')}
-      </div>
-      <span class="cadence-bar-divider" aria-hidden="true"></span>
-      <div class="cadence-bar-Fine">
-        <button type="button" data-step="-0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : 'Slow down by 0.05× for this video session'}">−0.05</button>
-        <button type="button" data-step="0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Speed up by 0.05× for this video session'}">+0.05</button>
-        <button type="button" data-action="reset" class="cadence-reset-chip ${!adActive && isSessionActive ? 'is-active' : ''}${adActive ? ' is-ad-blocked' : ''}" ${!adActive && !isSessionActive ? 'disabled' : ''}${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : `Reset to ${matchedRule ? 'channel rule' : 'default'} (${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)`}">Reset</button>
-      </div>
-      <span class="cadence-remaining-wrap" style="display:none;">
-        <span class="cadence-bar-divider" aria-hidden="true"></span>
-        <button type="button" class="cadence-remaining-slot" disabled>
-          <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
-          <span class="cadence-remaining-time-grid">
-            <span class="cadence-remaining-sizer" aria-hidden="true"></span>
-            <span class="cadence-remaining-time"></span>
+
+      <div class="cadence-row-top">
+        <div class="cadence-row-top-left">
+          <span class="cadence-source-readout ${adActive || isSessionActive ? 'is-highlighted' : ''}" title="${tooltip}">
+            <span>${modePrefix} ·</span>
+            <span class="cadence-rate-grid">
+              <span class="cadence-rate-sizer" aria-hidden="true">8.88×</span>
+              <strong class="cadence-rate-value">${formatCompactSpeed(displayedBarRate)}×</strong>
+            </span>
           </span>
+          ${
+            adActive
+              ? `
+          <span class="cadence-bar-divider" aria-hidden="true"></span>
+          <span class="cadence-ad-paused-note">Controls paused until ad ends</span>
+          `
+              : `
+          <span class="cadence-remaining-wrap" style="display:none;">
+            <span class="cadence-bar-divider" aria-hidden="true"></span>
+            <button type="button" class="cadence-remaining-slot" disabled>
+              <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
+              <span class="cadence-remaining-time-grid">
+                <span class="cadence-remaining-sizer" aria-hidden="true"></span>
+                <span class="cadence-remaining-time"></span>
+              </span>
+            </button>
+          </span>
+          `
+          }
+        </div>
+
+        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Channel Rules)">
+          ${CADENCE_EMBLEM_SVG}
+          <span class="cadence-brand-name">Cadence</span>
+          <span class="cadence-brand-tagline">- YouTube at your speed</span>
         </button>
-      </span>
+      </div>
+
+      <div class="cadence-row-mid">
+        <div class="cadence-bar-buttons">
+          ${quickSpeeds
+            .map((spd) => {
+              const isActive = !adActive && Math.abs(effectiveSpeed - spd) < 0.015;
+              const isLiveBlocked = !adActive && liveAtHead && spd > 1.01;
+              const isDisabledVisual = adActive || isLiveBlocked;
+              const chipClasses = [
+                'cadence-speed-chip',
+                isActive ? 'active' : '',
+                adActive ? 'is-ad-blocked' : isLiveBlocked ? 'is-live-blocked' : '',
+              ]
+                .filter(Boolean)
+                .join(' ');
+              const chipTitle = adActive
+                ? adBlockedTooltip
+                : isLiveBlocked
+                  ? liveBlockedTooltip
+                  : `Set ${formatDisplaySpeed(spd)}× for this video session only`;
+              return `
+            <button type="button" data-speed="${spd}" class="${chipClasses}"${isDisabledVisual ? ' aria-disabled="true"' : ''} title="${chipTitle}">
+              ${formatDisplaySpeed(spd)}×
+            </button>
+          `;
+            })
+            .join('')}
+        </div>
+
+        <div class="cadence-seek-group">
+          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : ''}">
+            <span class="cadence-seek-icon-cell" title="Replay seconds" aria-hidden="true">${REPLAY_ICON_SVG}</span>
+            ${replaySteps
+              .map(
+                (sec) => `
+              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : `Replay ${Math.abs(sec)} seconds`}">${Math.abs(sec)}</button>
+            `
+              )
+              .join('')}
+          </div>
+          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : liveAtHead ? ' is-live-blocked' : ''}">
+            ${skipSteps
+              .map(
+                (sec) => `
+              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${seekForwardBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : liveAtHead ? 'Stream is currently at live end' : `Skip ahead ${sec} seconds`}">${sec}</button>
+            `
+              )
+              .join('')}
+            <span class="cadence-seek-icon-cell" title="Skip ahead seconds" aria-hidden="true">${SKIP_ICON_SVG}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cadence-row-bot">
+        <div class="cadence-fine-group">
+          <button type="button" data-step="-0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : 'Decrease playback speed by 0.05× for this video session'}">−0.05</button>
+          <button type="button" data-step="0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Increase playback speed by 0.05× for this video session'}">+0.05</button>
+          <button type="button" data-action="reset" class="cadence-reset-chip ${!adActive && isSessionActive ? 'is-active' : ''}${adActive ? ' is-ad-blocked' : ''}" ${!adActive && !isSessionActive ? 'disabled' : ''}${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : `Reset session override to ${matchedRule ? 'Rule' : 'Default'} (${formatDisplaySpeed(liveAtHead && baselineSpeed > 1.01 ? 1.0 : baselineSpeed)}×)`}">Reset</button>
+          <span class="cadence-saved-time" style="display:none;"></span>
+        </div>
+
+        <div class="cadence-rule-slot">
+          ${ruleSlotHtml}
+        </div>
+      </div>
     `;
 
-    applyDurationModelToBar(bar, durationModel);
+    if (!adActive) {
+      applyDurationModelToBar(bar, durationModel);
+    }
+    applySavedTimeModelToBar(bar, savedTimeModel);
+    ensureBarResizeObserver(bar);
+    syncRow1BrandCollapse(bar);
+
+    const brandBtn = bar.querySelector('.cadence-brand-btn');
+    if (brandBtn) {
+      brandBtn.addEventListener(
+        'click',
+        () => {
+          safeSendMessage({ type: 'CADENCE_OPEN_OPTIONS' });
+        },
+        { signal: lifecycleSignal }
+      );
+    }
 
     bar.querySelectorAll('.cadence-speed-chip').forEach((btn) => {
       btn.addEventListener(
@@ -1083,6 +1511,17 @@
         () => {
           const chosen = Number(btn.getAttribute('data-speed'));
           applySessionSpeedFromBar(chosen);
+        },
+        { signal: lifecycleSignal }
+      );
+    });
+
+    bar.querySelectorAll('.cadence-seek-btn').forEach((btn) => {
+      btn.addEventListener(
+        'click',
+        () => {
+          const delta = Number(btn.getAttribute('data-seek')) || 0;
+          applySeekFromBar(delta);
         },
         { signal: lifecycleSignal }
       );
@@ -1112,6 +1551,48 @@
           }
           if (!hasActiveSessionOverride(currentChannel && currentChannel.videoId)) return;
           resetSessionSpeedFromBar();
+        },
+        { signal: lifecycleSignal }
+      );
+    }
+
+    const ruleActionBtn = bar.querySelector('.cadence-rule-action-btn');
+    if (ruleActionBtn) {
+      ruleActionBtn.addEventListener(
+        'click',
+        async () => {
+          if (isCurrentAdActive()) {
+            showBarToast('Speed locked during ad', 2400, 'ad');
+            showPlayerToast('Speed locked during ad', true, true);
+            return;
+          }
+          if (!currentChannel) {
+            currentChannel = extractDomChannelFallback();
+          }
+          if (!currentChannel) return;
+
+          const action = ruleActionBtn.getAttribute('data-rule-action');
+          if (action === 'clear') {
+            await clearChannelRule(currentChannel);
+            return;
+          }
+          if (action === 'save' || action === 'update') {
+            const targetRate = clampSpeed(getEffectiveSpeedForChannel(currentChannel));
+            sessionOverride = { videoId: null, speed: null };
+            const ok = await saveChannelSpeed(currentChannel, targetRate, 'custom');
+            if (ok) {
+              const applied = getEffectiveSpeedForChannel(currentChannel);
+              remainingState.playbackRate = applied;
+              pushConfigToBridge(applied, true);
+              postToBridge('COMMAND', { action: 'SET_SPEED', speed: applied });
+              renderInPageBar();
+              showPlayerToast(
+                action === 'update'
+                  ? `Updated Rule → ${formatDisplaySpeed(targetRate)}×`
+                  : `Saved ${formatDisplaySpeed(targetRate)}× Rule`
+              );
+            }
+          }
         },
         { signal: lifecycleSignal }
       );
@@ -1156,6 +1637,7 @@
     remainingState = {
       videoId: null,
       rawRemainingSec: null,
+      rawDurationSec: null,
       playbackRate: null,
       isAd: false,
       isLive: false,
@@ -1167,9 +1649,12 @@
     lastToastedVideoId = null;
     clearBarMountRetry();
     hideBarToast(true);
+    disconnectBarResizeObserver();
 
-    const existingBar = document.getElementById('cadence-owner-bar');
+    const existingBar = document.getElementById('cadence-watch-bar');
     if (existingBar) existingBar.remove();
+    const legacyBar = document.getElementById('cadence-owner-bar');
+    if (legacyBar) legacyBar.remove();
     const existingBanner = document.querySelector('.cadence-stopped-banner');
     if (existingBanner) existingBanner.classList.remove('cadence-visible');
 
@@ -1187,6 +1672,7 @@
       return;
     }
     if (!isWatchLocation()) {
+      maybeRedirectShortsInContent();
       handleLeftWatchPage();
       return;
     }
@@ -1315,7 +1801,26 @@
             showBarToast('Speed locked during ad', 2400, 'ad');
             showPlayerToast('Speed locked during ad', true, true);
           }
+        } else if (type === 'AD_SKIP_BLOCKED') {
+          remainingState.isAd = true;
+          if (currentChannel) {
+            currentChannel = { ...currentChannel, isAd: true };
+          }
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Skip locked during ad', 2400, 'ad');
+            showPlayerToast('Skip locked during ad', true, true);
+          }
+        } else if (type === 'LIVE_HEAD_SKIP_BLOCKED') {
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Stream is currently at live end', 2400, 'live');
+            showPlayerToast('Stream is currently at live end', true, true);
+          }
         } else if (type === 'LIVE_CAUGHT_UP') {
+          const fromSeek = Boolean(payload && payload.fromSeek);
           const hadFastRate =
             activeSpeed > 1.01 ||
             Boolean(
@@ -1339,7 +1844,9 @@
             const headSpeed = currentChannel ? getEffectiveSpeedForChannel(currentChannel) : 1.0;
             pushConfigToBridge(headSpeed, Boolean(state.settings.perChannelSpeedEnabled));
             renderInPageBar();
-            if (hadFastRate) {
+            if (fromSeek) {
+              showPlayerToast('Synced to Live · 1.0×');
+            } else if (hadFastRate) {
               showPlayerToast('Caught up to Live · 1.0×');
             }
           }
@@ -1351,6 +1858,8 @@
             videoId: payload.videoId || null,
             rawRemainingSec:
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
+            rawDurationSec:
+              typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
             isAd: Boolean(payload.isAd),
@@ -1431,6 +1940,7 @@
             remainingState = {
               videoId: payload.videoId,
               rawRemainingSec: null,
+              rawDurationSec: null,
               playbackRate: null,
               isAd: false,
               isLive: false,
@@ -1454,6 +1964,7 @@
           postToBridge('CONFIG_UPDATE', {
             enabled: state.settings.enabled,
             perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+            convertShortsToWatch: state.settings.convertShortsToWatch !== false,
             stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
             defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
             targetSpeed: activeSpeed,
@@ -1477,6 +1988,7 @@
               remainingState = {
                 videoId: payload.videoId,
                 rawRemainingSec: null,
+                rawDurationSec: null,
                 playbackRate: null,
                 isAd: Boolean(payload.isAd),
                 isLive: false,
@@ -1727,6 +2239,20 @@
       if (changes.settings) state.settings = changes.settings.newValue;
       if (changes.presets) state.presets = changes.presets.newValue;
       if (changes.rules) state.rules = changes.rules.newValue;
+
+      if (maybeRedirectShortsInContent()) return;
+
+      postToBridge('CONFIG_UPDATE', {
+        enabled: state.settings.enabled,
+        perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+        convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+        hasSessionOverride: Boolean(
+          currentChannel && hasActiveSessionOverride(currentChannel.videoId)
+        ),
+        stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
+        defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
+        targetSpeed: activeSpeed,
+      });
       applyForCurrentChannel(false);
     });
   } catch (_) {
@@ -1740,9 +2266,12 @@
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
 
+    if (maybeRedirectShortsInContent()) return;
+
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+      convertShortsToWatch: state.settings.convertShortsToWatch !== false,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,
