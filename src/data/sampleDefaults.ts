@@ -4,7 +4,7 @@ import {
   ExtensionSettings,
 } from '../types/extension';
 
-export const EXTENSION_VERSION = '1.4.0';
+export const EXTENSION_VERSION = '1.4.1';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,

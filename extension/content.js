@@ -56,6 +56,7 @@
     isAd: false,
     isLive: false,
     isAtLiveHead: false,
+    isDvrSupported: true,
     dvrLagSec: null,
     isPaused: false,
     hidden: true,
@@ -434,6 +435,13 @@
     if (!liveTime || !(badge instanceof HTMLElement) || badge.hasAttribute('hidden')) {
       return false;
     }
+    const curTimeEl = liveTime.querySelector('.ytp-time-current');
+    if (curTimeEl) {
+      const rawTxt = (curTimeEl.textContent || '').trim();
+      if (/^[-−]\s*\d+:\d{2}/.test(rawTxt)) {
+        return false;
+      }
+    }
     try {
       const style = window.getComputedStyle(badge);
       if (style.display === 'none' || style.visibility === 'hidden') return false;
@@ -744,9 +752,41 @@
     savedEl.classList.toggle('is-saved', savedModel.tone === 'saved');
   }
 
+  function computeBarUiModeSignature() {
+    if (!currentChannel) return 'none';
+    const adActive = isCurrentAdActive();
+    const liveAtHead = !adActive && isLiveAtHeadForChannel(currentChannel);
+    const dvrUnsupported =
+      !adActive && Boolean(remainingState.isLive && remainingState.isDvrSupported === false);
+    const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
+    const matchedRule = findMatchingRule(currentChannel);
+    const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+    const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
+    return [
+      adActive ? 'ad' : liveAtHead ? 'live-head' : remainingState.isLive ? 'live-dvr' : 'vod',
+      dvrUnsupported ? 'nodvr' : 'dvr',
+      formatCompactSpeed(displayedBarRate),
+      isSessionActive ? 'session' : matchedRule ? 'rule' : 'default',
+    ].join('|');
+  }
+
   function updateRemainingReadoutInPlace() {
     const bar = document.getElementById('cadence-watch-bar');
-    if (!bar) return;
+    if (!bar) {
+      if (
+        isWatchLocation() &&
+        state.settings.enabled &&
+        state.settings.showInPageControlBar &&
+        currentChannel
+      ) {
+        renderInPageBar();
+      }
+      return;
+    }
+    if (bar.getAttribute('data-bar-ui-mode') !== computeBarUiModeSignature()) {
+      renderInPageBar();
+      return;
+    }
     applyDurationModelToBar(bar, computeDurationSlotModel());
     applySavedTimeModelToBar(bar, computeSavedTimeModel());
     syncRow1BrandCollapse(bar);
@@ -1076,15 +1116,18 @@
       showPlayerToast('Stream is currently at live end', true, true);
       return;
     }
+    if (remainingState.isLive && remainingState.isDvrSupported === false) {
+      renderInPageBar();
+      showBarToast('Rewind unavailable on this live stream', 2400, 'live');
+      showPlayerToast('Rewind unavailable on this live stream', true, true);
+      return;
+    }
 
     hideBarToast();
     if (delta < 0) {
       const existingBanner = document.querySelector('.cadence-stopped-banner');
       if (existingBanner) {
         existingBanner.classList.remove('cadence-visible');
-      }
-      if (liveAtHead) {
-        remainingState.isAtLiveHead = false;
       }
     }
 
@@ -1317,10 +1360,13 @@
     const isSessionActive = hasActiveSessionOverride(currentChannel.videoId);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
     const liveAtHead = !adActive && isLiveAtHeadForChannel(currentChannel);
+    const dvrUnsupported =
+      !adActive && Boolean(remainingState.isLive && remainingState.isDvrSupported === false);
     const isLiveRuleClamped =
       !adActive && !isSessionActive && liveAtHead && baselineSpeed > 1.01;
     const isStepUpLiveBlocked = !adActive && liveAtHead && effectiveSpeed + 0.05 > 1.01;
     const liveBlockedTooltip = 'Unavailable while synced at live end — rewind stream to speed up';
+    const dvrUnsupportedTooltip = 'Rewind unavailable on this live stream';
     const adBlockedTooltip = 'Speed locked during ad';
     const adSkipBlockedTooltip = 'Skip locked during ad';
 
@@ -1375,7 +1421,10 @@
     const quickSpeeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
     const replaySteps = [-60, -30, -10];
     const skipSteps = [10, 30, 60];
-    const seekForwardBlocked = adActive || liveAtHead;
+    const seekBackwardBlocked = adActive || dvrUnsupported;
+    const seekForwardBlocked = adActive || liveAtHead || dvrUnsupported;
+
+    bar.setAttribute('data-bar-ui-mode', computeBarUiModeSignature());
 
     bar.innerHTML = `
       <span class="cadence-brand-sizer" aria-hidden="true">
@@ -1450,21 +1499,21 @@
         </div>
 
         <div class="cadence-seek-group">
-          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : ''}">
+          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : dvrUnsupported ? ' is-live-blocked' : ''}">
             <span class="cadence-seek-icon-cell" title="Replay seconds" aria-hidden="true">${REPLAY_ICON_SVG}</span>
             ${replaySteps
               .map(
                 (sec) => `
-              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : `Replay ${Math.abs(sec)} seconds`}">${Math.abs(sec)}</button>
+              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${seekBackwardBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : dvrUnsupported ? dvrUnsupportedTooltip : `Replay ${Math.abs(sec)} seconds`}">${Math.abs(sec)}</button>
             `
               )
               .join('')}
           </div>
-          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : liveAtHead ? ' is-live-blocked' : ''}">
+          <div class="cadence-seek-capsule${adActive ? ' is-ad-blocked' : liveAtHead || dvrUnsupported ? ' is-live-blocked' : ''}">
             ${skipSteps
               .map(
                 (sec) => `
-              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${seekForwardBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : liveAtHead ? 'Stream is currently at live end' : `Skip ahead ${sec} seconds`}">${sec}</button>
+              <button type="button" data-seek="${sec}" class="cadence-seek-btn"${seekForwardBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adSkipBlockedTooltip : dvrUnsupported ? dvrUnsupportedTooltip : liveAtHead ? 'Stream is currently at live end' : `Skip ahead ${sec} seconds`}">${sec}</button>
             `
               )
               .join('')}
@@ -1642,6 +1691,7 @@
       isAd: false,
       isLive: false,
       isAtLiveHead: false,
+      isDvrSupported: true,
       dvrLagSec: null,
       isPaused: false,
       hidden: true,
@@ -1819,6 +1869,14 @@
             showBarToast('Stream is currently at live end', 2400, 'live');
             showPlayerToast('Stream is currently at live end', true, true);
           }
+        } else if (type === 'LIVE_DVR_UNAVAILABLE') {
+          remainingState.isLive = true;
+          remainingState.isDvrSupported = false;
+          if (state.settings.enabled) {
+            renderInPageBar();
+            showBarToast('Rewind unavailable on this live stream', 2400, 'live');
+            showPlayerToast('Rewind unavailable on this live stream', true, true);
+          }
         } else if (type === 'LIVE_CAUGHT_UP') {
           const fromSeek = Boolean(payload && payload.fromSeek);
           const hadFastRate =
@@ -1865,6 +1923,7 @@
             isAd: Boolean(payload.isAd),
             isLive: Boolean(payload.isLive),
             isAtLiveHead: Boolean(payload.isAtLiveHead),
+            isDvrSupported: payload.isDvrSupported !== false,
             dvrLagSec: typeof payload.dvrLagSec === 'number' ? payload.dvrLagSec : null,
             isPaused: Boolean(payload.isPaused),
             hidden: Boolean(payload.hidden),
@@ -1895,19 +1954,41 @@
             if (hasAboveOneOverride) {
               sessionOverride = { videoId: null, speed: null };
             }
-            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
-              pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
+            if (
+              currentChannel &&
+              state.settings.enabled &&
+              (state.settings.perChannelSpeedEnabled ||
+                hasActiveSessionOverride(currentChannel.videoId))
+            ) {
+              const clampedSpeed = getEffectiveSpeedForChannel(currentChannel);
+              remainingState.playbackRate = clampedSpeed;
+              pushConfigToBridge(clampedSpeed, true);
             }
             renderInPageBar();
           } else if (prevLiveAtHead && !nowLiveAtHead && remainingState.isLive) {
             if (barToastReason === 'live') hideBarToast();
-            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
-              pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
+            if (
+              currentChannel &&
+              state.settings.enabled &&
+              (state.settings.perChannelSpeedEnabled ||
+                hasActiveSessionOverride(currentChannel.videoId))
+            ) {
+              const dvrSpeed = getEffectiveSpeedForChannel(currentChannel);
+              remainingState.playbackRate = dvrSpeed;
+              pushConfigToBridge(dvrSpeed, true);
+              if (Math.abs(dvrSpeed - 1.0) > 0.015) {
+                postToBridge('COMMAND', { action: 'SET_SPEED', speed: dvrSpeed });
+              }
             }
             renderInPageBar();
           } else if (prevIsLive !== remainingState.isLive) {
             if (!remainingState.isLive && barToastReason === 'live') hideBarToast();
-            if (currentChannel && state.settings.enabled && state.settings.perChannelSpeedEnabled) {
+            if (
+              currentChannel &&
+              state.settings.enabled &&
+              (state.settings.perChannelSpeedEnabled ||
+                hasActiveSessionOverride(currentChannel.videoId))
+            ) {
               pushConfigToBridge(getEffectiveSpeedForChannel(currentChannel), true);
             }
             renderInPageBar();
@@ -1945,6 +2026,7 @@
               isAd: false,
               isLive: false,
               isAtLiveHead: false,
+              isDvrSupported: true,
               dvrLagSec: null,
               isPaused: false,
               hidden: true,
@@ -1993,6 +2075,7 @@
                 isAd: Boolean(payload.isAd),
                 isLive: false,
                 isAtLiveHead: false,
+                isDvrSupported: true,
                 dvrLagSec: null,
                 isPaused: false,
                 hidden: true,

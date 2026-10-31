@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Cadence — Per-Channel Speed & Playlist Stop for YouTube",
   "short_name": "Cadence",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.",
   "permissions": [
     "storage",

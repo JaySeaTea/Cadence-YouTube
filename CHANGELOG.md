@@ -4,6 +4,15 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-10-31
+
+### Fixed
+- **Live Stream & Live DVR Seek Coordinate Space — Eliminated Stream Restarts on Replay/Skip Ahead (#19)**: Fixed `SEEK_BY_SECONDS` and `JUMP_TO_LIVE` in `page-bridge.js` mixing `HTMLMediaElement.currentTime` (MSE session buffer offset, which starts near `0` on tab load or resets across out-of-buffer DASH seeks) with `#movie_player.getProgressState().seekableStart` and `#movie_player.seekTo()` (which operate in YouTube's broadcast uptime timeline). Live seeks and wall-clock DVR anchors now track `#movie_player.getCurrentTime()` / `getProgressState().current` in a single consistent coordinate space, and non-DVR broadcasts (`isLiveDvrEnabled: false` / `allowSeeking: false`) now surface `"Rewind unavailable on this live stream"` without reloading the stream.
+- **Toolbar Live-Head vs. Live-DVR Desync & False `"Stream is currently at live end"` Warnings (#19)**:
+  - Removed premature `remainingState.isAtLiveHead = false` optimistic mutation inside `applySeekFromBar` in `content.js` that prevented `TIME_REMAINING_UPDATE` from detecting `Live → Live DVR` transitions and left Row 2 / Row 3 advancing speeds and skip capsules greyed out (`.is-live-blocked`) even while Row 1 displayed `"3m behind Live"`.
+  - Stamped `data-bar-ui-mode` on `#cadence-watch-bar` and enforced automatic full re-render fallback in `updateRemainingReadoutInPlace()` whenever live/ad/DVR/speed state diverges from rendered DOM attributes.
+  - Prevented stale `.ytp-live-badge` DOM attributes (left unrefreshed by YouTube while `#movie_player` has `.ytp-autohide` and the cursor is on the below-video Cadence toolbar) from overriding `getProgressState().isAtLiveHead === false` or measured DVR lag, and gated the `8.5s` catch-up handoff strictly behind active `> 1.0×` catch-up so `−10s` replays at `1.0×` enter and remain cleanly in Live DVR mode.
+
 ## [1.4.0] - 2026-10-31
 
 ### Added
