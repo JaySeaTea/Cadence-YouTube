@@ -20,7 +20,6 @@ export interface ChannelRule {
 export interface ExtensionSettings {
   enabled: boolean;
   perChannelSpeedEnabled: boolean;
-  autoRememberManualSpeed: boolean;
   defaultSpeed: number;
   stopAfterVideoEnds: boolean;
   showInPageControlBar: boolean;

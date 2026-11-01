@@ -24,13 +24,12 @@
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
-    autoRememberManualSpeed: false,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
     convertShortsToWatch: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 3,
+    settingsSchemaVersion: 4,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -42,7 +41,6 @@
       ];
 
   const toggleSpeed = document.getElementById('toggle-speed');
-  const toggleRemember = document.getElementById('toggle-remember');
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
@@ -71,7 +69,6 @@
   }
 
   toggleSpeed.checked = Boolean(settings.perChannelSpeedEnabled);
-  toggleRemember.checked = Boolean(settings.autoRememberManualSpeed);
   toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
   toggleBar.checked = settings.showInPageControlBar !== false;
   if (toggleShorts) {
@@ -89,7 +86,6 @@
   }
 
   toggleSpeed.addEventListener('change', () => updateSetting({ perChannelSpeedEnabled: toggleSpeed.checked }));
-  toggleRemember.addEventListener('change', () => updateSetting({ autoRememberManualSpeed: toggleRemember.checked }));
   toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
   toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
   if (toggleShorts) {

@@ -5,12 +5,14 @@ import { EXTENSION_VERSION } from '../data/initialData';
 interface InstallGuideProps {
   ruleCount: number;
   onDownloadZip: () => void;
+  onDownloadCwsZip: () => void;
   onNavigateToRules: () => void;
 }
 
 export const InstallGuide: React.FC<InstallGuideProps> = ({
   ruleCount,
   onDownloadZip,
+  onDownloadCwsZip,
   onNavigateToRules,
 }) => {
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -29,51 +31,63 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
     <div className="space-y-10">
       <div className="pb-6 border-b border-slate-800/90">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 [text-wrap:balance]">
-          Load or Update Your Extension in Chrome
+          Load Unpacked or Export Chrome Web Store Package
         </h1>
         <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-slate-400">
           Install Cadence{' '}
           <span className="font-mono tabular-nums text-slate-200">v{EXTENSION_VERSION}</span> using
-          Chrome’s unpacked extension loader. Pull updates with{' '}
+          Chrome’s unpacked extension loader, or export{' '}
           <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-            git pull
+            CWS.zip
           </code>{' '}
-          and click Reload on{' '}
+          with root-level{' '}
           <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-            chrome://extensions
+            manifest.json
           </code>
-          —Cadence cleanly retires prior listeners and preserves your saved channel rules.
+          , minimal permissions (
+          <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+            storage
+          </code>
+          ,{' '}
+          <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+            scripting
+          </code>
+          ), and zero pre-seeded sample rules ready for the Chrome Web Store Developer Dashboard.
         </p>
       </div>
 
-      {/* Standalone /extension Repository Folder vs Custom .zip Export */}
+      {/* Standalone /extension & CWS.zip Export */}
       <div className="bg-[#111827] border border-slate-800/90 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="space-y-1 max-w-2xl">
           <h2 className="text-base font-bold text-slate-100">
-            Cloning from GitHub? Load the Standalone /extension Folder Directly
+            Chrome Web Store Ready: /extension &amp; CWS.zip
           </h2>
           <p className="text-sm text-slate-400 leading-relaxed">
-            This repository includes a ready-to-load unpacked Chrome extension in{' '}
+            Both{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
               /extension
             </code>{' '}
-            seeded with 4 sample channel rules. Point Chrome’s{' '}
-            <strong className="text-slate-200">Load unpacked</strong> button directly at{' '}
+            and{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-              /extension
+              CWS.zip
+            </code>{' '}
+            start cleanly with <strong className="text-slate-200">0 sample channel rules</strong>,{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+              minimum_chrome_version: 111
             </code>
-            , then use <strong className="text-slate-200">Import JSON</strong> /{' '}
+            , and zero browsing-history permission prompts. Use{' '}
+            <strong className="text-slate-200">Import JSON</strong> /{' '}
             <strong className="text-slate-200">Backup JSON</strong> on the Chrome Options page to
-            manage your personal subscriptions privately.
+            manage your personal subscriptions locally.
           </p>
         </div>
         <button
           type="button"
-          onClick={onDownloadZip}
+          onClick={onDownloadCwsZip}
           className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer tabular-nums"
         >
           <Download className="w-3.5 h-3.5" />
-          Download v{EXTENSION_VERSION} (.zip)
+          Download CWS.zip (v{EXTENSION_VERSION})
         </button>
       </div>
 

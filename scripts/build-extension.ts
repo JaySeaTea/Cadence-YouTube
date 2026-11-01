@@ -1,15 +1,17 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import JSZip from 'jszip';
 import {
   DEFAULT_PRESETS,
   DEFAULT_SETTINGS,
-  INITIAL_CHANNEL_RULES,
+  EXTENSION_VERSION,
 } from '../src/data/sampleDefaults';
 import { buildExtensionFiles } from '../src/extension/generateExtensionZip';
 
 const EXTENSION_OUT_DIR = path.join(process.cwd(), 'extension');
 const ICONS_OUT_DIR = path.join(EXTENSION_OUT_DIR, 'icons');
+const CWS_ZIP_OUT_PATH = path.join(process.cwd(), 'CWS.zip');
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -166,25 +168,32 @@ function renderCadenceIconPng(size: number): Buffer {
 async function main() {
   await fs.mkdir(ICONS_OUT_DIR, { recursive: true });
 
-  const files = buildExtensionFiles(
-    DEFAULT_SETTINGS,
-    DEFAULT_PRESETS,
-    INITIAL_CHANNEL_RULES
-  );
+  // Chrome Web Store & standalone unpacked builds start with 0 pre-seeded channel rules
+  const files = buildExtensionFiles(DEFAULT_SETTINGS, DEFAULT_PRESETS, []);
+  const zip = new JSZip();
 
   for (const file of files) {
     const outPath = path.join(EXTENSION_OUT_DIR, file.path);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, file.content, 'utf-8');
+    zip.file(file.path, file.content);
   }
 
   for (const size of [16, 32, 48, 128]) {
     const pngBuffer = renderCadenceIconPng(size);
     await fs.writeFile(path.join(ICONS_OUT_DIR, `icon${size}.png`), pngBuffer);
+    zip.file(`icons/icon${size}.png`, pngBuffer);
   }
 
+  const cwsZipBuffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
+  await fs.writeFile(CWS_ZIP_OUT_PATH, cwsZipBuffer);
+
   console.log(
-    `Generated standalone Chrome extension in /extension (${files.length} source files + 4 PNG icons, ${INITIAL_CHANNEL_RULES.length} sample rules).`
+    `Generated standalone Chrome extension v${EXTENSION_VERSION} in /extension and root-level CWS.zip (${(cwsZipBuffer.byteLength / 1024).toFixed(1)} KB, 0 sample rules).`
   );
 }
 

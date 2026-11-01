@@ -836,20 +836,6 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       clearBarToast();
     }
 
-    if (settings.enabled && settings.autoRememberManualSpeed) {
-      setSessionOverrideSpeed(null);
-      setPlaybackSpeed(clean);
-      const matchedPreset = presets.find((p) => Math.abs(p.speed - clean) < 0.01);
-      onSaveChannelRule(
-        currentVideo,
-        clean,
-        matchedPreset ? matchedPreset.id : 'custom',
-        'Auto-remembered from YouTube player'
-      );
-      triggerToast(`Remembered ${formatSpeed(clean)}× for ${currentVideo.channelName}`);
-      return;
-    }
-
     const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
     if (matchesBaseline) {
       const wasOverridden = sessionOverrideSpeed !== null;
@@ -1681,8 +1667,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 {showNativeGearMenu && (
                   <div className="absolute right-4 bottom-14 z-30 w-52 p-2 rounded-lg bg-slate-950/95 border border-slate-700 text-white shadow-lg">
                     <div className="px-2.5 py-1.5 text-[11px] text-slate-400 border-b border-slate-800">
-                      YouTube Gear Menu (
-                      {settings.autoRememberManualSpeed ? 'Saves Rule' : 'Session-Only'})
+                      YouTube Gear Menu (Session-Only)
                     </div>
                     <div className="grid grid-cols-2 gap-1 pt-1.5">
                       {[0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5].map((spd) => (
@@ -2691,10 +2676,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
               <label className="flex items-start justify-between gap-3 cursor-pointer">
                 <div>
                   <div className="text-xs font-semibold text-slate-100">
-                    Per-Channel Auto Playback Speed
+                    Per-Channel Playback Speed
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Applies saved speed automatically whenever a channel plays
+                    Auto-apply saved speed on channel load
                   </div>
                 </div>
                 <input
@@ -2710,29 +2695,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
               <label className="flex items-start justify-between gap-3 cursor-pointer">
                 <div>
                   <div className="text-xs font-semibold text-slate-100">
-                    Remember Manual Speed Changes
-                  </div>
-                  <div className="text-[11px] text-slate-400 mt-0.5">
-                    Also save YouTube gear-menu adjustments to channel rules
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={settings.autoRememberManualSpeed}
-                  onChange={(e) =>
-                    onUpdateSettings({ autoRememberManualSpeed: e.target.checked })
-                  }
-                  className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
-                />
-              </label>
-
-              <label className="flex items-start justify-between gap-3 cursor-pointer">
-                <div>
-                  <div className="text-xs font-semibold text-slate-100">
                     Stop Playback After Video Ends
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Prevents auto-play on Watch Later, saved playlists, and Up Next
+                    Blocks Up Next, Watch Later &amp; Playlists
                   </div>
                 </div>
                 <input
@@ -2751,7 +2717,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     Show Speed Bar Below Video
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Full-width 3-row speed, skip &amp; rule deck above video title
+                    Full-width speed, skip &amp; rule deck above title
                   </div>
                 </div>
                 <input
@@ -2770,7 +2736,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                     Convert Shorts to Standard Player
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    Auto-redirects /shorts/ links &amp; URLs to /watch player
+                    Auto-redirect /shorts/ &amp; rewrite feed links
                   </div>
                 </div>
                 <input

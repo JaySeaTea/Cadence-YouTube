@@ -1,6 +1,6 @@
 # Cadence — Per-Channel Speed & Playlist Stop for YouTube
 
-**Cadence** (`v1.4.1`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
+**Cadence** (`v1.5.0`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
 
 1. **Automatic Per-Channel Playback Speeds + Full-Width 3-Row Watch Deck**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup, Options page, or directly from the watch toolbar's italic 1-click **Rule** slot (`+ Save Rule`, `Update →`, `Clear ×`). Whenever a video starts, Cadence locks in its saved rate within milliseconds, locks speed and skip adjustments during ads (`"Speed locked during ad"` / `"Skip locked during ad"`), and restores any active Session override or Channel Rule automatically when an ad finishes. Mounted full-width directly **above `#title`** inside `ytd-watch-metadata #above-the-fold` (leaving Subscribe, Like, and Share 100% untouched), the 3-row deck includes `0.75×`–`2.0×` quick presets, `±0.05` fine steppers, **10s / 30s / 60s Replay & Skip Ahead capsules**, real-time **remaining duration** (`11m left @ 1.75×`), **VOD wall-clock saved time** (`Saves 6m 09s`), **live broadcast detection** (`● Live`) with `1.0×` live-end clamp, and a monotonic **Live DVR catch-up countdown** (`−10m · Live in 10m @ 2.0×`).
 2. **Automatic Shorts-to-Watch Conversion (`/shorts/` → `/watch`)**: Enabled by default (with a 1-click toggle in the Extension Popup), Cadence rewrites `<a href*="/shorts/">` feed links to `/watch?v=<id>` in-place and redirects direct or SPA `/shorts/<id>` routes with history-safe `location.replace`—giving every Short a full timeline scrubber, per-channel speed lock, and below-video transport deck without trapping your browser Back button.
@@ -11,17 +11,19 @@
 ## Repository Structure
 
 ```text
+├── CWS.zip                     # Ready-to-upload Chrome Web Store package (manifest.json at root)
+├── PRIVACY.md                  # Chrome Web Store Privacy Policy & permission disclosures
 ├── extension/                  # Standalone Manifest V3 Chrome Extension (Load Unpacked directly!)
-│   ├── manifest.json           # Manifest V3 config (v1.4.1 — storage, tabs, scripting, activeTab)
-│   ├── background.js           # Service worker: v3 schema sync, badge readout & open-tab attach
+│   ├── manifest.json           # Manifest V3 config (v1.5.0 — storage, scripting, Chrome 111+)
+│   ├── background.js           # Service worker: v4 schema sync, badge readout & open-tab attach
 │   ├── page-bridge.js          # MAIN-world bridge for #movie_player API, seek, Shorts & stop guard
 │   ├── content.js              # ISOLATED-world 3-row watch deck above #title, rule slot & popup API
 │   ├── content.css             # Light/dark styles for full-width 3-row deck & end-stop banner
-│   ├── popup.html / popup.js   # Dark-mode toolbar popup (presets, ±0.05× stepper & Shorts toggle)
+│   ├── popup.html / popup.js   # Dark-mode toolbar popup (presets, ±0.05× stepper & 4 core toggles)
 │   ├── options.html / .js      # Full-tab rule manager with version readout, JSON Import & Backup
 │   └── icons/                  # 16×16, 32×32, 48×48, and 128×128 extension icons
 ├── scripts/
-│   └── build-extension.ts      # Regenerates /extension from canonical TypeScript templates
+│   └── build-extension.ts      # Regenerates /extension and root-level CWS.zip (0 sample rules)
 ├── src/                        # Interactive React + Tailwind dark-mode simulator & rule studio
 └── server.ts                   # Express + Vite dev/start server with gitignored local state API
 ```
@@ -43,16 +45,16 @@ You can load Cadence directly from a cloned copy of this repository—no build s
 
 ---
 
-## Keeping Your Personal Subscriptions Private
+## Privacy & Backing Up Your Channel Rules
 
-To keep personal YouTube subscriptions out of version control, the repository ships with **4 starter sample rules** (`Velvet Room Sessions`, `Orbital Mechanics Lab`, `The Longform Archive`, and `Systems Craft`) and ignores local workspace data (`data/` in `.gitignore`).
+Cadence collects **zero user data** and makes **zero external network requests** (see [`PRIVACY.md`](./PRIVACY.md)). Both `/extension` and `CWS.zip` ship with **0 pre-seeded channel rules** so fresh installs start completely clean, while local workbench state in `data/` remains gitignored.
 
 ### Backing Up & Restoring Your Personal Rules
 Both the **Chrome Extension Options Page** (`All Channel Rules` in the popup) and the **Web Workbench** (`Channel Rules` tab) share the exact same JSON format (`cadence-channel-rules.json`):
 
 - **Save a backup**: Click **Backup JSON** on Chrome's Options page (or in the Web Workbench) to download your `{ presets, rules }` file locally.
 - **Restore or transfer**: Click **Import JSON** on any machine to non-destructively merge your personal channel list into Chrome's `chrome.storage.local`.
-- **Reset to starter defaults**: Click **Reset Samples** at any time to restore the 4 sample channels.
+- **Reset category presets**: Click **Reset Presets** on Chrome's Options page to restore the default `1.0× / 1.5× / 2.0×` category multipliers without affecting saved channels.
 
 ---
 
@@ -67,8 +69,8 @@ npm install
 # Start the Express + Vite workbench on http://localhost:3000
 npm run dev
 
-# Regenerate the standalone /extension folder from TypeScript sources
-npm run build:extension
+# Regenerate standalone /extension folder and Chrome Web Store CWS.zip
+npm run package:cws
 
 # Type-check and build production assets
 npm run lint
@@ -95,6 +97,7 @@ This repository includes structured GitHub Issue Forms in `.github/ISSUE_TEMPLAT
 
 ---
 
-## License
+## Privacy & License
 
-Released under the [MIT License](./LICENSE).
+- **Privacy Policy**: See [`PRIVACY.md`](./PRIVACY.md) — 100% local `chrome.storage.local` storage, zero telemetry, zero remote code.
+- **License**: Released under the [MIT License](./LICENSE).

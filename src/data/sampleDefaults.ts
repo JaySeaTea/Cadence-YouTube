@@ -4,18 +4,17 @@ import {
   ExtensionSettings,
 } from '../types/extension';
 
-export const EXTENSION_VERSION = '1.4.1';
+export const EXTENSION_VERSION = '1.5.0';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,
   perChannelSpeedEnabled: true,
-  autoRememberManualSpeed: false,
   defaultSpeed: 1.0,
   stopAfterVideoEnds: true,
   showInPageControlBar: true,
   showSpeedToast: true,
   convertShortsToWatch: true,
-  settingsSchemaVersion: 3,
+  settingsSchemaVersion: 4,
 };
 
 export const DEFAULT_PRESETS: CategoryPreset[] = [

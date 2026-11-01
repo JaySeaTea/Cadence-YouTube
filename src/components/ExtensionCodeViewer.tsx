@@ -12,6 +12,7 @@ interface ExtensionCodeViewerProps {
   presets: CategoryPreset[];
   rules: ChannelRule[];
   onDownloadZip: () => void;
+  onDownloadCwsZip: () => void;
 }
 
 export const ExtensionCodeViewer: React.FC<ExtensionCodeViewerProps> = ({
@@ -19,10 +20,12 @@ export const ExtensionCodeViewer: React.FC<ExtensionCodeViewerProps> = ({
   presets,
   rules,
   onDownloadZip,
+  onDownloadCwsZip,
 }) => {
+  const [previewStoreClean, setPreviewStoreClean] = useState<boolean>(true);
   const files = useMemo(
-    () => buildExtensionFiles(settings, presets, rules),
-    [settings, presets, rules]
+    () => buildExtensionFiles(settings, presets, previewStoreClean ? [] : rules),
+    [settings, presets, rules, previewStoreClean]
   );
 
   const [selectedPath, setSelectedPath] = useState<string>('manifest.json');
@@ -48,27 +51,43 @@ export const ExtensionCodeViewer: React.FC<ExtensionCodeViewerProps> = ({
             Manifest V3 Extension Source Files
           </h1>
           <p className="mt-2 text-[15px] leading-relaxed text-slate-400">
-            Inspect every file included in your Chrome extension package. Your {rules.length}{' '}
-            persisted channel rules and speed presets are automatically compiled into{' '}
+            Inspect every file included in the Chrome Web Store package (
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-              background.js
-            </code>{' '}
-            and{' '}
-            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-              content.js
+              CWS.zip
             </code>
-            .
+            , 0 pre-seeded rules, minimal{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+              storage + scripting
+            </code>{' '}
+            permissions) or export a custom bundle with your {rules.length} workbench rules.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onDownloadZip}
-          className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <Download className="w-4 h-4" />
-          Download .zip Package
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap shrink-0">
+          <button
+            type="button"
+            onClick={() => setPreviewStoreClean((prev) => !prev)}
+            className="px-3 py-2.5 text-xs font-semibold text-slate-200 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {previewStoreClean ? 'Viewing: Clean CWS Build' : `Viewing: Workbench (${rules.length} rules)`}
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadZip}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold text-slate-200 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Custom .zip
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadCwsZip}
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            Download CWS.zip
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 bg-[#111827] border border-slate-800/90 rounded-xl overflow-hidden">

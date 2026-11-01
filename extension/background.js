@@ -2,13 +2,12 @@ const INITIAL_STATE = {
   "settings": {
     "enabled": true,
     "perChannelSpeedEnabled": true,
-    "autoRememberManualSpeed": false,
     "defaultSpeed": 1,
     "stopAfterVideoEnds": true,
     "showInPageControlBar": true,
     "showSpeedToast": true,
     "convertShortsToWatch": true,
-    "settingsSchemaVersion": 3
+    "settingsSchemaVersion": 4
   },
   "presets": [
     {
@@ -30,44 +29,7 @@ const INITIAL_STATE = {
       "speed": 2
     }
   ],
-  "rules": [
-    {
-      "id": "rule-velvet-room",
-      "channelName": "Velvet Room Sessions",
-      "handle": "@velvetroomsessions",
-      "channelId": "UC8velvetRoomMusic01",
-      "presetId": "music",
-      "customSpeed": 1,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-orbital-lab",
-      "channelName": "Orbital Mechanics Lab",
-      "handle": "@orbitalmechanics",
-      "channelId": "UC4orbitalLabEdu02",
-      "presetId": "educational",
-      "customSpeed": 1.5,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-longform-archive",
-      "channelName": "The Longform Archive",
-      "handle": "@longformarchive",
-      "channelId": "UC9longformPod03",
-      "presetId": "podcast",
-      "customSpeed": 2,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-systems-craft",
-      "channelName": "Systems Craft",
-      "handle": "@systemscraft",
-      "channelId": "UC2systemsCraft04",
-      "presetId": "educational",
-      "customSpeed": 1.5,
-      "updatedAt": "2026-10-23"
-    }
-  ]
+  "rules": []
 };
 
 function formatBadgeSpeed(speed) {
@@ -114,53 +76,61 @@ async function injectIntoExistingYouTubeTabs() {
   } catch (_) {}
 }
 
+const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
+  'UC8velvetRoomMusic01',
+  'UC4orbitalLabEdu02',
+  'UC9longformPod03',
+  'UC2systemsCraft04',
+]);
+
 chrome.runtime.onInstalled.addListener(async () => {
   const existing = await chrome.storage.local.get(['settings', 'presets', 'rules']);
   const nextPayload = {};
+  const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
+
   if (!existing.settings) {
+    const cleanInitialSettings = { ...INITIAL_STATE.settings };
+    delete cleanInitialSettings.autoRememberManualSpeed;
     nextPayload.settings = {
-      ...INITIAL_STATE.settings,
-      autoRememberManualSpeed: false,
+      ...cleanInitialSettings,
       convertShortsToWatch:
-        typeof INITIAL_STATE.settings.convertShortsToWatch === 'boolean'
-          ? INITIAL_STATE.settings.convertShortsToWatch
+        typeof cleanInitialSettings.convertShortsToWatch === 'boolean'
+          ? cleanInitialSettings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 3,
+      settingsSchemaVersion: 4,
     };
-  } else if ((existing.settings.settingsSchemaVersion || 1) < 3) {
-    const prevVersion = existing.settings.settingsSchemaVersion || 1;
-    nextPayload.settings = {
+  } else if (prevSchemaVersion < 4) {
+    const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
-      autoRememberManualSpeed:
-        prevVersion < 2 ? false : Boolean(existing.settings.autoRememberManualSpeed),
       convertShortsToWatch:
         typeof existing.settings.convertShortsToWatch === 'boolean'
           ? existing.settings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 3,
+      settingsSchemaVersion: 4,
     };
+    delete migratedSettings.autoRememberManualSpeed;
+    nextPayload.settings = migratedSettings;
   }
-  if (!existing.presets) nextPayload.presets = INITIAL_STATE.presets;
+
+  if (!existing.presets) {
+    nextPayload.presets = INITIAL_STATE.presets;
+  }
+
   if (!Array.isArray(existing.rules)) {
-    nextPayload.rules = INITIAL_STATE.rules;
-  } else {
-    const mergedRules = [...existing.rules];
-    for (const seedRule of INITIAL_STATE.rules) {
-      const alreadyExists = mergedRules.some(
-        (r) =>
-          (seedRule.handle &&
-            r.handle &&
-            r.handle.toLowerCase() === seedRule.handle.toLowerCase()) ||
-          r.channelName.toLowerCase() === seedRule.channelName.toLowerCase()
-      );
-      if (!alreadyExists) {
-        mergedRules.push(seedRule);
-      }
+    nextPayload.rules = Array.isArray(INITIAL_STATE.rules) ? INITIAL_STATE.rules : [];
+  } else if (prevSchemaVersion < 4 && INITIAL_STATE.rules.length === 0) {
+    const cleanedRules = existing.rules.filter(
+      (r) => !(r && r.channelId && LEGACY_SAMPLE_CHANNEL_IDS.has(r.channelId))
+    );
+    if (cleanedRules.length !== existing.rules.length) {
+      nextPayload.rules = cleanedRules;
     }
-    nextPayload.rules = mergedRules;
   }
-  await chrome.storage.local.set(nextPayload);
+
+  if (Object.keys(nextPayload).length > 0) {
+    await chrome.storage.local.set(nextPayload);
+  }
   await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
   await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
   await injectIntoExistingYouTubeTabs();

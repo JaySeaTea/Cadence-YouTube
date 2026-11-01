@@ -14,7 +14,10 @@ import {
   EXTENSION_VERSION,
   INITIAL_CHANNEL_RULES,
 } from './data/initialData';
-import { downloadExtensionZip } from './extension/generateExtensionZip';
+import {
+  downloadCwsExtensionZip,
+  downloadExtensionZip,
+} from './extension/generateExtensionZip';
 import { SimulatorWorkspace } from './components/SimulatorWorkspace';
 import { ChannelRulesManager } from './components/ChannelRulesManager';
 import { ExtensionCodeViewer } from './components/ExtensionCodeViewer';
@@ -71,14 +74,14 @@ function normalizeSettingsSchema(
   raw: Partial<ExtensionSettings> | undefined
 ): ExtensionSettings {
   const merged: ExtensionSettings = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  delete (merged as unknown as Record<string, unknown>).autoRememberManualSpeed;
   const rawVersion = raw?.settingsSchemaVersion ?? 1;
-  if (rawVersion < 2) {
-    merged.autoRememberManualSpeed = false;
-  }
   if (rawVersion < 3) {
     merged.convertShortsToWatch =
       typeof raw?.convertShortsToWatch === 'boolean' ? raw.convertShortsToWatch : true;
-    merged.settingsSchemaVersion = 3;
+  }
+  if (rawVersion < 4) {
+    merged.settingsSchemaVersion = 4;
   }
   return merged;
 }
@@ -369,6 +372,20 @@ export default function App() {
     }
   };
 
+  const handleDownloadCwsZip = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      await downloadCwsExtensionZip();
+      addLog(
+        `Exported clean CWS.zip (v${EXTENSION_VERSION})`,
+        'Bundled Chrome Web Store package with 0 sample rules and minimal permissions'
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const navItems: { id: ActiveTab; label: string }[] = [
     { id: 'simulator', label: 'Live Simulator' },
     { id: 'layout', label: 'v1.4.0 Layout Lab' },
@@ -497,6 +514,7 @@ export default function App() {
             presets={presets}
             rules={rules}
             onDownloadZip={handleDownloadZip}
+            onDownloadCwsZip={handleDownloadCwsZip}
           />
         )}
 
@@ -504,6 +522,7 @@ export default function App() {
           <InstallGuide
             ruleCount={rules.length}
             onDownloadZip={handleDownloadZip}
+            onDownloadCwsZip={handleDownloadCwsZip}
             onNavigateToRules={() => setActiveTab('rules')}
           />
         )}

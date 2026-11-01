@@ -4,6 +4,18 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-31
+
+### Changed
+- **Chrome Web Store Least-Privilege Permissions (`manifest.json`)**: Dropped `"tabs"` and `"activeTab"` from `permissions`, keeping only `["storage", "scripting"]` plus `host_permissions: ["*://*.youtube.com/*"]` and declaring `"minimum_chrome_version": "111"` (for declarative `MAIN`-world content scripts). Eliminates Chrome's *"Read your browsing history"* install warning while preserving zero-refresh attachment on YouTube tabs.
+- **Clean Zero-Rule Production Install (`/extension` & `CWS.zip`)**: Standalone `/extension` and `CWS.zip` builds now initialize with `0` pre-seeded channel rules instead of fictional demo channels, replace `Reset Samples` on the Options page with `Reset Presets` (`1.0× / 1.5× / 2.0×`), and automatically strip legacy demo channel IDs during the `settingsSchemaVersion: 4` upgrade while preserving all user-saved YouTube channels.
+
+### Removed
+- **Retired `"Remember Manual Changes"` Toggle (`autoRememberManualSpeed`)**: Removed the legacy gear-menu auto-save toggle from the Extension Popup and runtime engine now that the below-video 3-row watch deck features a dedicated 1-click **Rule** slot (`+ Save X× Rule` / `Update → X×`). All manual player and toolbar speed adjustments consistently act as temporary single-video Session Overrides until explicitly saved.
+
+### Added
+- **Privacy Policy (`PRIVACY.md`) & Root-Level Store Archive (`CWS.zip`)**: Added a Chrome Web Store-compliant Privacy Policy documenting local-only `chrome.storage.local` persistence and permission justifications, alongside deterministic `CWS.zip` packaging (`npm run package:cws`).
+
 ## [1.4.1] - 2026-10-31
 
 ### Fixed

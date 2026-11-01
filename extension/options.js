@@ -1,64 +1,24 @@
 (async () => {
-  const SAMPLE_DEFAULTS = {
-  "presets": [
-    {
-      "id": "music",
-      "label": "Music & Performance",
-      "description": "Preserves natural pitch, rhythm, and studio mix timing.",
-      "speed": 1
-    },
-    {
-      "id": "educational",
-      "label": "Educational & Explainer",
-      "description": "Brisk comprehension pace for tutorials, science, and essays.",
-      "speed": 1.5
-    },
-    {
-      "id": "podcast",
-      "label": "Podcast & Lecture",
-      "description": "High-efficiency cadence for long-form conversations and seminars.",
-      "speed": 2
-    }
-  ],
-  "rules": [
-    {
-      "id": "rule-velvet-room",
-      "channelName": "Velvet Room Sessions",
-      "handle": "@velvetroomsessions",
-      "channelId": "UC8velvetRoomMusic01",
-      "presetId": "music",
-      "customSpeed": 1,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-orbital-lab",
-      "channelName": "Orbital Mechanics Lab",
-      "handle": "@orbitalmechanics",
-      "channelId": "UC4orbitalLabEdu02",
-      "presetId": "educational",
-      "customSpeed": 1.5,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-longform-archive",
-      "channelName": "The Longform Archive",
-      "handle": "@longformarchive",
-      "channelId": "UC9longformPod03",
-      "presetId": "podcast",
-      "customSpeed": 2,
-      "updatedAt": "2026-10-23"
-    },
-    {
-      "id": "rule-systems-craft",
-      "channelName": "Systems Craft",
-      "handle": "@systemscraft",
-      "channelId": "UC2systemsCraft04",
-      "presetId": "educational",
-      "customSpeed": 1.5,
-      "updatedAt": "2026-10-23"
-    }
-  ]
-};
+  const DEFAULT_PRESETS = [
+  {
+    "id": "music",
+    "label": "Music & Performance",
+    "description": "Preserves natural pitch, rhythm, and studio mix timing.",
+    "speed": 1
+  },
+  {
+    "id": "educational",
+    "label": "Educational & Explainer",
+    "description": "Brisk comprehension pace for tutorials, science, and essays.",
+    "speed": 1.5
+  },
+  {
+    "id": "podcast",
+    "label": "Podcast & Lecture",
+    "description": "High-efficiency cadence for long-form conversations and seminars.",
+    "speed": 2
+  }
+];
 
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
@@ -72,10 +32,8 @@
   let stored = await chrome.storage.local.get(['presets', 'rules']);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
-    : SAMPLE_DEFAULTS.presets.map((p) => ({ ...p }));
-  let rules = Array.isArray(stored.rules)
-    ? stored.rules
-    : SAMPLE_DEFAULTS.rules.map((r) => ({ ...r }));
+    : DEFAULT_PRESETS.map((p) => ({ ...p }));
+  let rules = Array.isArray(stored.rules) ? stored.rules : [];
 
   const presetsEl = document.getElementById('presets-list');
   const rulesEl = document.getElementById('rules-list');
@@ -86,7 +44,7 @@
   const importInputEl = document.getElementById('import-json-input');
   const importBtnEl = document.getElementById('btn-import-json');
   const exportBtnEl = document.getElementById('btn-export-json');
-  const resetBtnEl = document.getElementById('btn-reset-samples');
+  const resetBtnEl = document.getElementById('btn-reset-presets');
   const statusBannerEl = document.getElementById('status-banner');
   let statusTimer = null;
 
@@ -299,12 +257,11 @@
   });
 
   resetBtnEl.addEventListener('click', async () => {
-    presets = SAMPLE_DEFAULTS.presets.map((p) => ({ ...p }));
-    rules = SAMPLE_DEFAULTS.rules.map((r) => ({ ...r }));
-    await chrome.storage.local.set({ presets, rules });
+    presets = DEFAULT_PRESETS.map((p) => ({ ...p }));
+    await chrome.storage.local.set({ presets });
     renderPresets();
     renderRules();
-    showStatus('Reset extension to the 4 starter sample rules.');
+    showStatus('Reset category speed profiles to default 1.0× / 1.5× / 2.0×.');
   });
 
   form.addEventListener('submit', async (e) => {

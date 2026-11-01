@@ -6,8 +6,8 @@ import {
 } from '../types/extension';
 import {
   DEFAULT_PRESETS,
+  DEFAULT_SETTINGS,
   EXTENSION_VERSION,
-  INITIAL_CHANNEL_RULES,
 } from '../data/sampleDefaults';
 
 export interface GeneratedExtensionFile {
@@ -30,7 +30,8 @@ export function buildExtensionFiles(
       version: EXTENSION_VERSION,
       description:
         'Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.',
-      permissions: ['storage', 'tabs', 'scripting', 'activeTab'],
+      minimum_chrome_version: '111',
+      permissions: ['storage', 'scripting'],
       host_permissions: ['*://*.youtube.com/*'],
       background: {
         service_worker: 'background.js',
@@ -127,53 +128,61 @@ async function injectIntoExistingYouTubeTabs() {
   } catch (_) {}
 }
 
+const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
+  'UC8velvetRoomMusic01',
+  'UC4orbitalLabEdu02',
+  'UC9longformPod03',
+  'UC2systemsCraft04',
+]);
+
 chrome.runtime.onInstalled.addListener(async () => {
   const existing = await chrome.storage.local.get(['settings', 'presets', 'rules']);
   const nextPayload = {};
+  const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
+
   if (!existing.settings) {
+    const cleanInitialSettings = { ...INITIAL_STATE.settings };
+    delete cleanInitialSettings.autoRememberManualSpeed;
     nextPayload.settings = {
-      ...INITIAL_STATE.settings,
-      autoRememberManualSpeed: false,
+      ...cleanInitialSettings,
       convertShortsToWatch:
-        typeof INITIAL_STATE.settings.convertShortsToWatch === 'boolean'
-          ? INITIAL_STATE.settings.convertShortsToWatch
+        typeof cleanInitialSettings.convertShortsToWatch === 'boolean'
+          ? cleanInitialSettings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 3,
+      settingsSchemaVersion: 4,
     };
-  } else if ((existing.settings.settingsSchemaVersion || 1) < 3) {
-    const prevVersion = existing.settings.settingsSchemaVersion || 1;
-    nextPayload.settings = {
+  } else if (prevSchemaVersion < 4) {
+    const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
-      autoRememberManualSpeed:
-        prevVersion < 2 ? false : Boolean(existing.settings.autoRememberManualSpeed),
       convertShortsToWatch:
         typeof existing.settings.convertShortsToWatch === 'boolean'
           ? existing.settings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 3,
+      settingsSchemaVersion: 4,
     };
+    delete migratedSettings.autoRememberManualSpeed;
+    nextPayload.settings = migratedSettings;
   }
-  if (!existing.presets) nextPayload.presets = INITIAL_STATE.presets;
+
+  if (!existing.presets) {
+    nextPayload.presets = INITIAL_STATE.presets;
+  }
+
   if (!Array.isArray(existing.rules)) {
-    nextPayload.rules = INITIAL_STATE.rules;
-  } else {
-    const mergedRules = [...existing.rules];
-    for (const seedRule of INITIAL_STATE.rules) {
-      const alreadyExists = mergedRules.some(
-        (r) =>
-          (seedRule.handle &&
-            r.handle &&
-            r.handle.toLowerCase() === seedRule.handle.toLowerCase()) ||
-          r.channelName.toLowerCase() === seedRule.channelName.toLowerCase()
-      );
-      if (!alreadyExists) {
-        mergedRules.push(seedRule);
-      }
+    nextPayload.rules = Array.isArray(INITIAL_STATE.rules) ? INITIAL_STATE.rules : [];
+  } else if (prevSchemaVersion < 4 && INITIAL_STATE.rules.length === 0) {
+    const cleanedRules = existing.rules.filter(
+      (r) => !(r && r.channelId && LEGACY_SAMPLE_CHANNEL_IDS.has(r.channelId))
+    );
+    if (cleanedRules.length !== existing.rules.length) {
+      nextPayload.rules = cleanedRules;
     }
-    nextPayload.rules = mergedRules;
   }
-  await chrome.storage.local.set(nextPayload);
+
+  if (Object.keys(nextPayload).length > 0) {
+    await chrome.storage.local.set(nextPayload);
+  }
   await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
   await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
   await injectIntoExistingYouTubeTabs();
@@ -4695,52 +4704,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           hideBarToast();
 
-          if (state.settings.autoRememberManualSpeed) {
+          const matchedRule = findMatchingRule(currentChannel);
+          const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+          const activeVid = currentChannel.videoId || payload.videoId || 'active';
+          const wasOverridden = hasActiveSessionOverride(activeVid);
+
+          if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
             sessionOverride = { videoId: null, speed: null };
-            const matchingPreset = state.presets.find(
-              (p) => Math.abs(p.speed - cleanManualSpeed) < 0.01
-            );
-            const saved = await saveChannelSpeed(
-              currentChannel,
-              cleanManualSpeed,
-              matchingPreset ? matchingPreset.id : 'custom'
-            );
-            if (!saved) return;
-            pushConfigToBridge(cleanManualSpeed, true);
+            const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
+            pushConfigToBridge(effectiveBaseline, true);
+            renderInPageBar();
+            const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
             showPlayerToast(
-              \`Remembered \${formatDisplaySpeed(cleanManualSpeed)}× for \${currentChannel.channelName}\`
+              wasOverridden
+                ? \`Restored \${formatDisplaySpeed(effectiveBaseline)}× (\${baselineLabel})\`
+                : \`\${formatDisplaySpeed(effectiveBaseline)}× · \${baselineLabel}\`
             );
           } else {
-            const matchedRule = findMatchingRule(currentChannel);
-            const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
-            const activeVid = currentChannel.videoId || payload.videoId || 'active';
-            const wasOverridden = hasActiveSessionOverride(activeVid);
-
-            if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
-              sessionOverride = { videoId: null, speed: null };
-              const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
-              pushConfigToBridge(effectiveBaseline, true);
-              renderInPageBar();
-              const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
-              showPlayerToast(
-                wasOverridden
-                  ? \`Restored \${formatDisplaySpeed(effectiveBaseline)}× (\${baselineLabel})\`
-                  : \`\${formatDisplaySpeed(effectiveBaseline)}× · \${baselineLabel}\`
-              );
-            } else {
-              sessionOverride = {
-                videoId: activeVid,
-                speed: cleanManualSpeed,
-              };
-              pushConfigToBridge(sessionOverride.speed, true);
-              renderInPageBar();
-              const suffix = matchedRule
-                ? \`Rule \${formatDisplaySpeed(baselineSpeed)}× unchanged\`
-                : 'This video only';
-              showPlayerToast(
-                \`Session \${formatDisplaySpeed(sessionOverride.speed)}× · \${suffix}\`
-              );
-            }
+            sessionOverride = {
+              videoId: activeVid,
+              speed: cleanManualSpeed,
+            };
+            pushConfigToBridge(sessionOverride.speed, true);
+            renderInPageBar();
+            const suffix = matchedRule
+              ? \`Rule \${formatDisplaySpeed(baselineSpeed)}× unchanged\`
+              : 'This video only';
+            showPlayerToast(
+              \`Session \${formatDisplaySpeed(sessionOverride.speed)}× · \${suffix}\`
+            );
           }
         } else if (type === 'PLAYBACK_STOPPED') {
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
@@ -5909,13 +5901,6 @@ html[dark] .cadence-rule-plus {
       </div>
       <div class="row">
         <div>
-          <div class="row-label">Remember Manual Changes</div>
-          <div class="row-sub">Also save YouTube gear-menu speed to rules</div>
-        </div>
-        <input type="checkbox" id="toggle-remember" />
-      </div>
-      <div class="row">
-        <div>
           <div class="row-label">Stop Playback After Video Ends</div>
           <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
         </div>
@@ -5973,13 +5958,12 @@ html[dark] .cadence-rule-plus {
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
-    autoRememberManualSpeed: false,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
     convertShortsToWatch: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 3,
+    settingsSchemaVersion: 4,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
@@ -5991,7 +5975,6 @@ html[dark] .cadence-rule-plus {
       ];
 
   const toggleSpeed = document.getElementById('toggle-speed');
-  const toggleRemember = document.getElementById('toggle-remember');
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
@@ -6020,7 +6003,6 @@ html[dark] .cadence-rule-plus {
   }
 
   toggleSpeed.checked = Boolean(settings.perChannelSpeedEnabled);
-  toggleRemember.checked = Boolean(settings.autoRememberManualSpeed);
   toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
   toggleBar.checked = settings.showInPageControlBar !== false;
   if (toggleShorts) {
@@ -6038,7 +6020,6 @@ html[dark] .cadence-rule-plus {
   }
 
   toggleSpeed.addEventListener('change', () => updateSetting({ perChannelSpeedEnabled: toggleSpeed.checked }));
-  toggleRemember.addEventListener('change', () => updateSetting({ autoRememberManualSpeed: toggleRemember.checked }));
   toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
   toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
   if (toggleShorts) {
@@ -6554,14 +6535,7 @@ html[dark] .cadence-rule-plus {
 })();
 `;
 
-  const sampleDefaultsJson = JSON.stringify(
-    {
-      presets: DEFAULT_PRESETS,
-      rules: INITIAL_CHANNEL_RULES,
-    },
-    null,
-    2
-  );
+  const defaultPresetsJson = JSON.stringify(DEFAULT_PRESETS, null, 2);
 
   const optionsHtml = `<!doctype html>
 <html lang="en" style="color-scheme: dark;">
@@ -6704,7 +6678,7 @@ html[dark] .cadence-rule-plus {
           <input type="file" id="import-json-input" accept="application/json,.json" style="display:none;" />
           <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
           <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
-          <button type="button" id="btn-reset-samples" class="ghost">Reset Samples</button>
+          <button type="button" id="btn-reset-presets" class="ghost">Reset Presets</button>
         </div>
       </div>
 
@@ -6744,7 +6718,7 @@ html[dark] .cadence-rule-plus {
 `;
 
   const optionsJs = `(async () => {
-  const SAMPLE_DEFAULTS = ${sampleDefaultsJson};
+  const DEFAULT_PRESETS = ${defaultPresetsJson};
 
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
@@ -6758,10 +6732,8 @@ html[dark] .cadence-rule-plus {
   let stored = await chrome.storage.local.get(['presets', 'rules']);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
-    : SAMPLE_DEFAULTS.presets.map((p) => ({ ...p }));
-  let rules = Array.isArray(stored.rules)
-    ? stored.rules
-    : SAMPLE_DEFAULTS.rules.map((r) => ({ ...r }));
+    : DEFAULT_PRESETS.map((p) => ({ ...p }));
+  let rules = Array.isArray(stored.rules) ? stored.rules : [];
 
   const presetsEl = document.getElementById('presets-list');
   const rulesEl = document.getElementById('rules-list');
@@ -6772,7 +6744,7 @@ html[dark] .cadence-rule-plus {
   const importInputEl = document.getElementById('import-json-input');
   const importBtnEl = document.getElementById('btn-import-json');
   const exportBtnEl = document.getElementById('btn-export-json');
-  const resetBtnEl = document.getElementById('btn-reset-samples');
+  const resetBtnEl = document.getElementById('btn-reset-presets');
   const statusBannerEl = document.getElementById('status-banner');
   let statusTimer = null;
 
@@ -6985,12 +6957,11 @@ html[dark] .cadence-rule-plus {
   });
 
   resetBtnEl.addEventListener('click', async () => {
-    presets = SAMPLE_DEFAULTS.presets.map((p) => ({ ...p }));
-    rules = SAMPLE_DEFAULTS.rules.map((r) => ({ ...r }));
-    await chrome.storage.local.set({ presets, rules });
+    presets = DEFAULT_PRESETS.map((p) => ({ ...p }));
+    await chrome.storage.local.set({ presets });
     renderPresets();
     renderRules();
-    showStatus('Reset extension to the 4 starter sample rules.');
+    showStatus('Reset category speed profiles to default 1.0× / 1.5× / 2.0×.');
   });
 
   form.addEventListener('submit', async (e) => {
@@ -7055,7 +7026,7 @@ html[dark] .cadence-rule-plus {
     {
       path: 'manifest.json',
       language: 'json',
-      description: `Manifest V3 (v${EXTENSION_VERSION}) running MAIN and ISOLATED scripts at document_start for millisecond speed lock and Shorts conversion.`,
+      description: `Manifest V3 (v${EXTENSION_VERSION}) with minimal storage + scripting permissions, minimum_chrome_version 111, and YouTube host access.`,
       content: manifestJson,
     },
     {
@@ -7083,14 +7054,14 @@ html[dark] .cadence-rule-plus {
       path: 'background.js',
       language: 'javascript',
       description:
-        'Service worker handling v3 settings migration (Shorts conversion enabled by default), options launcher, badge updates, and open-tab attachment.',
+        'Service worker handling v4 clean-store schema migration, empty initial rules, options launcher, badge updates, and open-tab attachment.',
       content: backgroundJs,
     },
     {
       path: 'popup.html',
       language: 'html',
       description:
-        'Native dark-mode toolbar popup with Shorts-to-Watch toggle, full-width speed bar toggle, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
+        'Native dark-mode toolbar popup with 4 focused toggles, Category Presets, Quick Speeds, and Fine ±0.05× Channel Rules.',
       content: popupHtml,
     },
     {
@@ -7104,14 +7075,14 @@ html[dark] .cadence-rule-plus {
       path: 'options.html',
       language: 'html',
       description:
-        'Full-tab dark-mode Chrome extension options page with dynamic version readout, JSON Import, JSON Backup, and Reset Samples.',
+        'Full-tab dark-mode Chrome extension options page with dynamic version readout, JSON Import, JSON Backup, and Reset Presets.',
       content: optionsHtml,
     },
     {
       path: 'options.js',
       language: 'javascript',
       description:
-        'Options page controller displaying active version and supporting category profiles, per-channel rules, JSON import/export, and sample reset.',
+        'Options page controller displaying active version and supporting category profiles, per-channel rules, JSON import/export, and preset reset.',
       content: optionsJs,
     },
   ];
@@ -7165,10 +7136,11 @@ async function renderExtensionIconBlob(size: number): Promise<Blob> {
   });
 }
 
-export async function downloadExtensionZip(
+async function triggerZipDownload(
   settings: ExtensionSettings,
   presets: CategoryPreset[],
-  rules: ChannelRule[]
+  rules: ChannelRule[],
+  filename: string
 ): Promise<void> {
   const zip = new JSZip();
   const files = buildExtensionFiles(settings, presets, rules);
@@ -7183,13 +7155,34 @@ export async function downloadExtensionZip(
     zip.file(`icons/icon${sz}.png`, iconBlob);
   }
 
-  const archiveBlob = await zip.generateAsync({ type: 'blob' });
+  const archiveBlob = await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
   const downloadUrl = URL.createObjectURL(archiveBlob);
   const anchor = document.createElement('a');
   anchor.href = downloadUrl;
-  anchor.download = 'cadence-youtube-extension.zip';
+  anchor.download = filename;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(downloadUrl), 2000);
+}
+
+export async function downloadExtensionZip(
+  settings: ExtensionSettings,
+  presets: CategoryPreset[],
+  rules: ChannelRule[]
+): Promise<void> {
+  return triggerZipDownload(
+    settings,
+    presets,
+    rules,
+    'cadence-youtube-extension.zip'
+  );
+}
+
+export async function downloadCwsExtensionZip(): Promise<void> {
+  return triggerZipDownload(DEFAULT_SETTINGS, DEFAULT_PRESETS, [], 'CWS.zip');
 }

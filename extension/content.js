@@ -37,9 +37,9 @@
   let isDestroyed = false;
 
   let state = {
-    settings: {"enabled":true,"perChannelSpeedEnabled":true,"autoRememberManualSpeed":false,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"settingsSchemaVersion":3},
+    settings: {"enabled":true,"perChannelSpeedEnabled":true,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"settingsSchemaVersion":4},
     presets: [{"id":"music","label":"Music & Performance","description":"Preserves natural pitch, rhythm, and studio mix timing.","speed":1},{"id":"educational","label":"Educational & Explainer","description":"Brisk comprehension pace for tutorials, science, and essays.","speed":1.5},{"id":"podcast","label":"Podcast & Lecture","description":"High-efficiency cadence for long-form conversations and seminars.","speed":2}],
-    rules: [{"id":"rule-velvet-room","channelName":"Velvet Room Sessions","handle":"@velvetroomsessions","channelId":"UC8velvetRoomMusic01","presetId":"music","customSpeed":1,"updatedAt":"2026-10-23"},{"id":"rule-orbital-lab","channelName":"Orbital Mechanics Lab","handle":"@orbitalmechanics","channelId":"UC4orbitalLabEdu02","presetId":"educational","customSpeed":1.5,"updatedAt":"2026-10-23"},{"id":"rule-longform-archive","channelName":"The Longform Archive","handle":"@longformarchive","channelId":"UC9longformPod03","presetId":"podcast","customSpeed":2,"updatedAt":"2026-10-23"},{"id":"rule-systems-craft","channelName":"Systems Craft","handle":"@systemscraft","channelId":"UC2systemsCraft04","presetId":"educational","customSpeed":1.5,"updatedAt":"2026-10-23"}],
+    rules: [],
   };
 
   let currentChannel = null;
@@ -2121,52 +2121,35 @@
           }
           hideBarToast();
 
-          if (state.settings.autoRememberManualSpeed) {
+          const matchedRule = findMatchingRule(currentChannel);
+          const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
+          const activeVid = currentChannel.videoId || payload.videoId || 'active';
+          const wasOverridden = hasActiveSessionOverride(activeVid);
+
+          if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
             sessionOverride = { videoId: null, speed: null };
-            const matchingPreset = state.presets.find(
-              (p) => Math.abs(p.speed - cleanManualSpeed) < 0.01
-            );
-            const saved = await saveChannelSpeed(
-              currentChannel,
-              cleanManualSpeed,
-              matchingPreset ? matchingPreset.id : 'custom'
-            );
-            if (!saved) return;
-            pushConfigToBridge(cleanManualSpeed, true);
+            const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
+            pushConfigToBridge(effectiveBaseline, true);
+            renderInPageBar();
+            const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
             showPlayerToast(
-              `Remembered ${formatDisplaySpeed(cleanManualSpeed)}× for ${currentChannel.channelName}`
+              wasOverridden
+                ? `Restored ${formatDisplaySpeed(effectiveBaseline)}× (${baselineLabel})`
+                : `${formatDisplaySpeed(effectiveBaseline)}× · ${baselineLabel}`
             );
           } else {
-            const matchedRule = findMatchingRule(currentChannel);
-            const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
-            const activeVid = currentChannel.videoId || payload.videoId || 'active';
-            const wasOverridden = hasActiveSessionOverride(activeVid);
-
-            if (Math.abs(cleanManualSpeed - baselineSpeed) < 0.015) {
-              sessionOverride = { videoId: null, speed: null };
-              const effectiveBaseline = getEffectiveSpeedForChannel(currentChannel);
-              pushConfigToBridge(effectiveBaseline, true);
-              renderInPageBar();
-              const baselineLabel = matchedRule ? 'Channel Rule' : 'Default';
-              showPlayerToast(
-                wasOverridden
-                  ? `Restored ${formatDisplaySpeed(effectiveBaseline)}× (${baselineLabel})`
-                  : `${formatDisplaySpeed(effectiveBaseline)}× · ${baselineLabel}`
-              );
-            } else {
-              sessionOverride = {
-                videoId: activeVid,
-                speed: cleanManualSpeed,
-              };
-              pushConfigToBridge(sessionOverride.speed, true);
-              renderInPageBar();
-              const suffix = matchedRule
-                ? `Rule ${formatDisplaySpeed(baselineSpeed)}× unchanged`
-                : 'This video only';
-              showPlayerToast(
-                `Session ${formatDisplaySpeed(sessionOverride.speed)}× · ${suffix}`
-              );
-            }
+            sessionOverride = {
+              videoId: activeVid,
+              speed: cleanManualSpeed,
+            };
+            pushConfigToBridge(sessionOverride.speed, true);
+            renderInPageBar();
+            const suffix = matchedRule
+              ? `Rule ${formatDisplaySpeed(baselineSpeed)}× unchanged`
+              : 'This video only';
+            showPlayerToast(
+              `Session ${formatDisplaySpeed(sessionOverride.speed)}× · ${suffix}`
+            );
           }
         } else if (type === 'PLAYBACK_STOPPED') {
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
