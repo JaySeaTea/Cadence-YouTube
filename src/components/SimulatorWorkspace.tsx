@@ -206,11 +206,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [collapseTagline, setCollapseTagline] = useState<boolean>(false);
   const [unconvertedShortsActive, setUnconvertedShortsActive] = useState<boolean>(false);
+  const [liveDvrEnabled, setLiveDvrEnabled] = useState<boolean>(true);
+  const [nonDvrRuleClamped, setNonDvrRuleClamped] = useState<boolean>(false);
 
   const currentTimeRef = useRef<number>(1440);
   const liveEdgeRef = useRef<number>(3600);
   const adRemainingRef = useRef<number>(0);
   const wasBehindLiveRef = useRef<boolean>(false);
+  const liveDvrEnabledRef = useRef<boolean>(true);
+  const nonDvrRuleClampedRef = useRef<boolean>(false);
   const sessionOverrideRef = useRef<number | null>(null);
   const baselineSpeedRef = useRef<number>(1.0);
   const toastTimerRef = useRef<number | null>(null);
@@ -257,6 +261,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   sessionOverrideRef.current = sessionOverrideSpeed;
   baselineSpeedRef.current = baselineSpeed;
+  liveDvrEnabledRef.current = liveDvrEnabled;
+  nonDvrRuleClampedRef.current = nonDvrRuleClamped;
 
   const clearBarToast = () => {
     if (barToastTimerRef.current) {
@@ -372,7 +378,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     manualSource = true,
     overrideMode?: Exclude<PlaylistContextMode, 'youtube_home'>,
     startBehindSec = 0,
-    keepShortsUnconverted = false
+    keepShortsUnconverted = false,
+    dvrEnabledOverride?: boolean
   ) => {
     const nextVid = SIMULATED_VIDEOS[index];
     const wasHome = playlistMode === 'youtube_home';
@@ -382,6 +389,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       setPlaylistMode('standalone');
     }
 
+    const nextDvrEnabled =
+      typeof dvrEnabledOverride === 'boolean' ? dvrEnabledOverride : liveDvrEnabled;
+    if (typeof dvrEnabledOverride === 'boolean') {
+      setLiveDvrEnabled(dvrEnabledOverride);
+      liveDvrEnabledRef.current = dvrEnabledOverride;
+    }
+    setNonDvrRuleClamped(false);
+    nonDvrRuleClampedRef.current = false;
+
     setUnconvertedShortsActive(keepShortsUnconverted);
     setCurrentVideoIndex(index);
     syncAdRemaining(0);
@@ -390,10 +406,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     setPopupToast(null);
     if (nextVid.isLiveStream) {
       const startEdge = nextVid.initialLiveEdgeSec || 3600;
-      const safeBehind = Math.max(0, startBehindSec);
+      const safeBehind = nextDvrEnabled ? Math.max(0, startBehindSec) : 0;
       syncLiveEdge(startEdge);
       syncTime(Math.max(0, startEdge - safeBehind));
-      wasBehindLiveRef.current = safeBehind >= 3;
+      wasBehindLiveRef.current = nextDvrEnabled && safeBehind >= 3;
     } else {
       wasBehindLiveRef.current = false;
       syncTime(0);
@@ -561,7 +577,45 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
       if (isLiveStream) {
         const nextEdge = liveEdgeRef.current;
+        const dvrOn = liveDvrEnabledRef.current;
         const lagBefore = Math.max(0, nextEdge - currentTimeRef.current);
+
+        if (!dvrOn) {
+          wasBehindLiveRef.current = false;
+          if (isPlaying) {
+            const clampedSubOne =
+              nonDvrRuleClampedRef.current &&
+              sessionOverrideRef.current === null &&
+              playbackSpeed < 0.99;
+            const effectiveLiveRate =
+              playbackSpeed > 1.01 || clampedSubOne ? 1.0 : playbackSpeed;
+            playSubtleCadenceTick(effectiveLiveRate);
+            const candidateTime =
+              currentTimeRef.current + (tickMs / 1000) * effectiveLiveRate;
+            // Simulate non-DVR MSE buffer limit (~2.0s drift = ~8s wall time at 0.75×) forcing catch-up
+            if (effectiveLiveRate < 0.99 && nextEdge - candidateTime >= 2.0) {
+              syncTime(nextEdge);
+              setNonDvrRuleClamped(true);
+              nonDvrRuleClampedRef.current = true;
+              setSessionOverrideSpeed(null);
+              sessionOverrideRef.current = null;
+              setPlaybackSpeed(
+                baselineSpeedRef.current < 0.99 ? 1.0 : baselineSpeedRef.current
+              );
+              triggerToast('Caught up to Live · 1.0×', true, false);
+              onAddLog(
+                'Live stream forced catch-up — reset speed to 1.0×',
+                `Non-DVR MSE buffer exhausted at ${formatSpeed(effectiveLiveRate)}× on "${currentVideo.title}" — cleared constant warning and synced to 1.0×`
+              );
+            } else if (candidateTime >= nextEdge - 0.05) {
+              syncTime(nextEdge);
+            } else {
+              syncTime(candidateTime);
+            }
+          }
+          return;
+        }
+
         if (!wasBehindLiveRef.current && lagBefore >= 3) {
           wasBehindLiveRef.current = true;
         }
@@ -660,7 +714,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   }, [autoAdvancingCountdown, currentVideoIndex, isHomeBrowseMode]);
 
   const rawDvrLagSec = isLiveStream ? Math.max(0, liveEdgeTime - currentTime) : 0;
-  if (isLiveStream) {
+  if (isLiveStream && liveDvrEnabled) {
     if (!wasBehindLiveRef.current && rawDvrLagSec >= 3) {
       wasBehindLiveRef.current = true;
     } else if (wasBehindLiveRef.current && rawDvrLagSec <= 1) {
@@ -670,24 +724,35 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     wasBehindLiveRef.current = false;
   }
 
-  const dvrLagSec = isLiveStream ? Math.max(0, Math.round(rawDvrLagSec)) : 0;
-  const isAtLiveHead = isLiveStream && !wasBehindLiveRef.current && dvrLagSec < 3;
+  const dvrLagSec = isLiveStream && liveDvrEnabled ? Math.max(0, Math.round(rawDvrLagSec)) : 0;
+  const isAtLiveHead =
+    isLiveStream && (!liveDvrEnabled || (!wasBehindLiveRef.current && dvrLagSec < 3));
   const isLiveHeadClamped =
     !isAdPlaying && settings.enabled && isLiveStream && isAtLiveHead && playbackSpeed > 1.01;
+  const isNonDvrSubOneClamped =
+    !isAdPlaying &&
+    settings.enabled &&
+    isLiveStream &&
+    !liveDvrEnabled &&
+    nonDvrRuleClamped &&
+    sessionOverrideSpeed === null &&
+    playbackSpeed < 0.99;
   const effectiveSpeed = isAdPlaying
     ? 1.0
     : isLiveStream && isAtLiveHead && playbackSpeed > 1.01
       ? 1.0
-      : playbackSpeed;
+      : isNonDvrSubOneClamped
+        ? 1.0
+        : playbackSpeed;
 
   useEffect(() => {
-    if (barToastReason === 'live' && (!isLiveStream || !isAtLiveHead)) {
+    if (barToastReason === 'live' && (!isLiveStream || (!isAtLiveHead && liveDvrEnabled))) {
       clearBarToast();
     }
     if (barToastReason === 'ad' && !isAdPlaying) {
       clearBarToast();
     }
-  }, [isLiveStream, isAtLiveHead, isAdPlaying, barToastReason]);
+  }, [isLiveStream, isAtLiveHead, liveDvrEnabled, isAdPlaying, barToastReason]);
 
   const handleSessionBarSpeedChange = (newSpeed: number) => {
     const clean = clampSpeed(newSpeed);
@@ -721,7 +786,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         return;
       }
       clearBarToast();
+      setNonDvrRuleClamped(false);
+      nonDvrRuleClampedRef.current = false;
       if (Math.abs(clean - 1.0) < 0.015) {
+        if (!liveDvrEnabled) {
+          setNonDvrRuleClamped(true);
+          nonDvrRuleClampedRef.current = true;
+          syncTime(liveEdgeRef.current);
+        }
         setSessionOverrideSpeed(null);
         setPlaybackSpeed(baselineSpeed);
         triggerToast('1.0× · Live');
@@ -729,6 +801,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       }
     } else {
       clearBarToast();
+      setNonDvrRuleClamped(false);
+      nonDvrRuleClampedRef.current = false;
     }
 
     const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
@@ -826,7 +900,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         return;
       }
       clearBarToast();
+      setNonDvrRuleClamped(false);
+      nonDvrRuleClampedRef.current = false;
       if (Math.abs(clean - 1.0) < 0.015) {
+        if (!liveDvrEnabled) {
+          setNonDvrRuleClamped(true);
+          nonDvrRuleClampedRef.current = true;
+          syncTime(liveEdgeRef.current);
+        }
         setSessionOverrideSpeed(null);
         setPlaybackSpeed(baselineSpeed);
         triggerToast('1.0× · Live');
@@ -834,6 +915,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       }
     } else {
       clearBarToast();
+      setNonDvrRuleClamped(false);
+      nonDvrRuleClampedRef.current = false;
     }
 
     const matchesBaseline = Math.abs(clean - baselineSpeed) < 0.015;
@@ -895,6 +978,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       return;
     }
     clearBarToast();
+    setNonDvrRuleClamped(false);
+    nonDvrRuleClampedRef.current = false;
     setPopupToast(null);
     setSessionOverrideSpeed(null);
     setPlaybackSpeed(clean);
@@ -913,6 +998,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
   const handleRewindDvr = (secondsBehind: number) => {
     if (!isLiveStream) return;
+    if (!liveDvrEnabled) {
+      triggerBarToast('Rewind unavailable on this live stream', 'live');
+      triggerToast('Rewind unavailable on this live stream', true, true);
+      onAddLog(
+        'Blocked rewind on non-DVR live stream',
+        `DVR is disabled on "${currentVideo.title}" — surfaced rewind-unavailable warning`
+      );
+      return;
+    }
     clearBarToast();
     const target = Math.max(0, liveEdgeRef.current - secondsBehind);
     wasBehindLiveRef.current = secondsBehind >= 3;
@@ -940,9 +1034,16 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     wasBehindLiveRef.current = false;
     syncTime(liveEdgeRef.current);
     setIsPlaying(true);
-    if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
+    if (!liveDvrEnabled) {
+      setNonDvrRuleClamped(true);
+      nonDvrRuleClampedRef.current = true;
+    }
+    if (
+      sessionOverrideSpeed !== null &&
+      (sessionOverrideSpeed > 1.01 || (!liveDvrEnabled && sessionOverrideSpeed < 0.99))
+    ) {
       setSessionOverrideSpeed(null);
-      setPlaybackSpeed(baselineSpeed);
+      setPlaybackSpeed(baselineSpeed < 0.99 && !liveDvrEnabled ? 1.0 : baselineSpeed);
     }
     setPopupToast(null);
     triggerToast('Jumped to Live · 1.0×');
@@ -957,14 +1058,61 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const handleQuickTestLiveDvr = () => {
     const liveIdx = SIMULATED_VIDEOS.findIndex((v) => v.isLiveStream);
     if (liveIdx < 0) return;
+    setLiveDvrEnabled(true);
+    liveDvrEnabledRef.current = true;
     if (currentVideoIndex !== liveIdx || isHomeBrowseMode) {
-      selectVideo(liveIdx, true, 'standalone', 600);
+      selectVideo(liveIdx, true, 'standalone', 600, false, true);
       onAddLog(
         'Opened Live DVR scenario (10m behind)',
         `Testing real-time Back-to-Live catch-up math on "${SIMULATED_VIDEOS[liveIdx].title}"`
       );
     } else {
-      handleRewindDvr(600);
+      clearBarToast();
+      const target = Math.max(0, liveEdgeRef.current - 600);
+      wasBehindLiveRef.current = true;
+      syncTime(target);
+      setStoppedByCadence(false);
+      triggerToast('Rewound 10m into DVR buffer');
+      onAddLog('DVR rewound 10m behind live', 'Switched live stream to DVR Enabled mode');
+    }
+  };
+
+  const handleQuickTestLiveNoDvr = () => {
+    const liveIdx = SIMULATED_VIDEOS.findIndex((v) => v.isLiveStream);
+    if (liveIdx < 0) return;
+    selectVideo(liveIdx, true, 'standalone', 0, false, false);
+    onAddLog(
+      'Opened Live (Rewind Disabled) scenario',
+      'Try clicking 0.75× or −0.05 to see the constant Row 1 warning until the stream catches up and resets to 1.0×'
+    );
+  };
+
+  const handleToggleLiveDvrMode = () => {
+    if (!isLiveStream) return;
+    const nextDvr = !liveDvrEnabled;
+    setLiveDvrEnabled(nextDvr);
+    liveDvrEnabledRef.current = nextDvr;
+    setNonDvrRuleClamped(false);
+    nonDvrRuleClampedRef.current = false;
+    clearBarToast();
+    if (!nextDvr) {
+      wasBehindLiveRef.current = false;
+      syncTime(liveEdgeRef.current);
+      if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
+        setSessionOverrideSpeed(null);
+        setPlaybackSpeed(baselineSpeed);
+      }
+      triggerToast('DVR Disabled · Rewind unavailable on this live stream', true, true);
+      onAddLog(
+        'Switched Live Stream to Rewind Disabled (enableDvr: false)',
+        'Slowed playback (< 1.0×) shows a constant warning until MSE buffer catch-up resets to 1.0×'
+      );
+    } else {
+      triggerToast('DVR Enabled · Rewind & catch-up active', true, false);
+      onAddLog(
+        'Switched Live Stream to DVR Enabled (enableDvr: true)',
+        'Full DVR rewind and > 1.0× catch-up unlocked'
+      );
     }
   };
 
@@ -1002,6 +1150,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         onAddLog(
           'Blocked skip ahead at live end',
           `Held live edge on "${currentVideo.title}" — stream is currently at live end`
+        );
+        return;
+      }
+      if (!liveDvrEnabled) {
+        triggerBarToast('Rewind unavailable on this live stream', 'live');
+        triggerToast('Rewind unavailable on this live stream', true, true);
+        onAddLog(
+          'Blocked seek on non-DVR live stream',
+          `Rewind is disabled on "${currentVideo.title}"`
         );
         return;
       }
@@ -1120,11 +1277,22 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       };
     }
     if (isLiveStream) {
+      if (!liveDvrEnabled && effectiveSpeed < 0.99) {
+        return {
+          mode: 'live-nodvr-slow' as const,
+          text: 'Rewind unavailable on this live stream',
+          title:
+            'Rewind unavailable on this live stream — slowed playback continues until the stream catches up and resets to 1.0× (click to return to 1.0× now)',
+          clickable: true,
+        };
+      }
       if (isAtLiveHead) {
         return {
           mode: 'live-head' as const,
           text: 'Live',
-          title: 'Live broadcast · Synced at live edge',
+          title: liveDvrEnabled
+            ? 'Live broadcast · Synced at live edge'
+            : 'Live broadcast · Rewind disabled by creator',
           clickable: false,
         };
       }
@@ -1162,7 +1330,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const isSessionActive =
     sessionOverrideSpeed !== null && Math.abs(sessionOverrideSpeed - baselineSpeed) >= 0.015;
   const ruleActionSpeed = clampSpeed(
-    sessionOverrideSpeed !== null ? sessionOverrideSpeed : playbackSpeed
+    sessionOverrideSpeed !== null ? sessionOverrideSpeed : effectiveSpeed
   );
   const vodSavedTimeModel =
     !isAdPlaying && !isLiveStream
@@ -1196,6 +1364,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     settings.showInPageControlBar,
     isAdPlaying,
     isLiveStream,
+    liveDvrEnabled,
     isAtLiveHead,
     isSessionActive,
     Boolean(matchedRule),
@@ -1213,7 +1382,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           : playlistMode === 'creator_playlist'
             ? `Creator Series Playlist · ${SIMULATED_VIDEOS.length} videos`
             : isLiveStream
-              ? 'Live Broadcast · DVR Enabled'
+              ? liveDvrEnabled
+                ? 'Live Broadcast · DVR Enabled'
+                : 'Live Broadcast · Rewind Disabled'
               : 'Standalone Watch Page';
 
   const badgeText =
@@ -1299,6 +1470,16 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
           >
             <Radio className="w-3.5 h-3.5 text-red-500" />
             Test Live DVR (−10m)
+          </button>
+
+          <button
+            type="button"
+            onClick={handleQuickTestLiveNoDvr}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-200 bg-[#111827] border border-amber-500/40 rounded-lg hover:bg-amber-500/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Switch to a Rewind-Disabled Live Stream (enableDvr: false) — click 0.75× or −0.05 to test the v1.5.1 constant warning and automatic catch-up reset to 1.0×"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            Test Live (No Rewind)
           </button>
 
           <button
@@ -1692,10 +1873,17 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-3 pt-6">
                   <div
                     className={`group relative h-1.5 bg-white/25 rounded-full mb-3 ${
-                      isAdPlaying ? 'cursor-default' : 'cursor-pointer'
+                      isAdPlaying || (isLiveStream && !liveDvrEnabled)
+                        ? 'cursor-default'
+                        : 'cursor-pointer'
                     }`}
                     onClick={(e) => {
                       if (isAdPlaying) return;
+                      if (isLiveStream && !liveDvrEnabled) {
+                        triggerBarToast('Rewind unavailable on this live stream', 'live');
+                        triggerToast('Rewind unavailable on this live stream', true, true);
+                        return;
+                      }
                       const rect = e.currentTarget.getBoundingClientRect();
                       const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
                       const targetTime = ratio * timelineHorizon;
@@ -1781,25 +1969,27 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       </button>
 
                       {isLiveStream ? (
-                        <div className="inline-flex items-center gap-2">
+                        <div className="inline-flex items-center gap-2 flex-wrap">
                           <button
                             type="button"
-                            disabled={isAtLiveHead}
+                            disabled={isAtLiveHead && (liveDvrEnabled || effectiveSpeed >= 0.99)}
                             onClick={handleJumpToLive}
                             className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
-                              isAtLiveHead
+                              isAtLiveHead && (liveDvrEnabled || effectiveSpeed >= 0.99)
                                 ? 'text-white cursor-default'
                                 : 'bg-white/10 hover:bg-white/20 text-slate-200 cursor-pointer'
                             }`}
                             title={
-                              isAtLiveHead
+                              isAtLiveHead && (liveDvrEnabled || effectiveSpeed >= 0.99)
                                 ? 'Synced at live broadcast head'
                                 : 'Native YouTube LIVE button — click to jump to live head'
                             }
                           >
                             <span
                               className={`w-2 h-2 rounded-full ${
-                                isAtLiveHead ? 'bg-red-500' : 'bg-slate-400'
+                                isAtLiveHead && (liveDvrEnabled || effectiveSpeed >= 0.99)
+                                  ? 'bg-red-500'
+                                  : 'bg-slate-400'
                               }`}
                               aria-hidden="true"
                             />
@@ -1807,30 +1997,47 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleRewindDvr(600)}
-                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
-                            title="Simulate rewinding 10 minutes into the live DVR buffer"
-                          >
-                            −10m DVR
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRewindDvr(120)}
+                            onClick={handleToggleLiveDvrMode}
                             disabled={isAdPlaying}
-                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
-                            title="Simulate rewinding 2 minutes into the live DVR buffer"
+                            className={`px-2 py-0.5 rounded border text-[11px] font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                              liveDvrEnabled
+                                ? 'bg-white/10 hover:bg-white/20 border-white/15 text-emerald-300'
+                                : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-400/50 text-amber-200'
+                            }`}
+                            title="Toggle YouTube stream creator DVR setting (enableDvr: true vs false)"
                           >
-                            −2m DVR
+                            {liveDvrEnabled ? 'DVR: On' : 'DVR: Off (No Rewind)'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRewindDvr(15)}
-                            disabled={isAdPlaying}
-                            className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
-                            title="Simulate rewinding 15 seconds behind live to watch accelerated playback catch up and re-activate the red LIVE badge"
-                          >
-                            −15s DVR
-                          </button>
+                          {liveDvrEnabled && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleRewindDvr(600)}
+                                className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                                title="Simulate rewinding 10 minutes into the live DVR buffer"
+                              >
+                                −10m DVR
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRewindDvr(120)}
+                                disabled={isAdPlaying}
+                                className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                                title="Simulate rewinding 2 minutes into the live DVR buffer"
+                              >
+                                −2m DVR
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRewindDvr(15)}
+                                disabled={isAdPlaying}
+                                className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 disabled:opacity-45 text-[11px] font-mono tabular-nums text-white/90 whitespace-nowrap shrink-0 cursor-pointer"
+                                title="Simulate rewinding 15 seconds behind live to watch accelerated playback catch up and re-activate the red LIVE badge"
+                              >
+                                −15s DVR
+                              </button>
+                            </>
+                          )}
                         </div>
                       ) : (
                         <span className="text-xs font-mono tabular-nums text-white/90">
@@ -1968,31 +2175,42 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                                     handleJumpToLive();
                                   }
                                 }}
-                                className={`inline-flex items-center gap-1.5 rounded text-[11.5px] font-mono tabular-nums whitespace-nowrap shrink-0 transition-colors ${
-                                  durationSlotModel.clickable
-                                    ? 'px-1.5 py-0.5 border border-slate-700/90 text-slate-200 hover:bg-slate-800 hover:border-red-500/60 cursor-pointer'
-                                    : durationSlotModel.mode === 'live-head'
-                                      ? 'text-slate-100 font-semibold cursor-default'
-                                      : 'text-slate-400 cursor-default'
+                                className={`inline-flex items-center gap-1.5 rounded text-[11.5px] whitespace-nowrap shrink-0 transition-colors ${
+                                  durationSlotModel.mode === 'live-nodvr-slow'
+                                    ? 'px-1.5 py-0.5 border border-amber-500/45 bg-amber-500/15 text-amber-200 font-medium hover:bg-amber-500/25 hover:border-amber-400/70 cursor-pointer'
+                                    : durationSlotModel.clickable
+                                      ? 'px-1.5 py-0.5 border border-slate-700/90 text-slate-200 font-mono tabular-nums hover:bg-slate-800 hover:border-red-500/60 cursor-pointer'
+                                      : durationSlotModel.mode === 'live-head'
+                                        ? 'text-slate-100 font-mono tabular-nums font-semibold cursor-default'
+                                        : 'text-slate-400 font-mono tabular-nums cursor-default'
                                 }`}
                                 title={durationSlotModel.title}
                               >
-                                {durationSlotModel.mode !== 'vod' && (
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                      durationSlotModel.mode === 'live-head'
-                                        ? 'bg-red-500'
-                                        : 'bg-amber-500'
-                                    }`}
+                                {durationSlotModel.mode === 'live-nodvr-slow' ? (
+                                  <AlertTriangle
+                                    className="w-3 h-3 text-amber-400 shrink-0"
                                     aria-hidden="true"
                                   />
+                                ) : (
+                                  durationSlotModel.mode !== 'vod' && (
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                        durationSlotModel.mode === 'live-head'
+                                          ? 'bg-red-500'
+                                          : 'bg-amber-500'
+                                      }`}
+                                      aria-hidden="true"
+                                    />
+                                  )
                                 )}
                                 <span className="inline-grid items-center text-left">
                                   <span
                                     aria-hidden="true"
                                     className="col-start-1 row-start-1 invisible pointer-events-none select-none"
                                   >
-                                    {buildDurationSizerText(durationSlotModel.text)}
+                                    {durationSlotModel.mode === 'live-nodvr-slow'
+                                      ? durationSlotModel.text
+                                      : buildDurationSizerText(durationSlotModel.text)}
                                   </span>
                                   <span className="col-start-1 row-start-1">
                                     {durationSlotModel.text}
@@ -2064,29 +2282,36 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           role="group"
                           aria-label="Replay 60, 30, or 10 seconds"
                         >
-                          {([60, 30, 10] as const).map((sec, idx) => (
-                            <button
-                              key={`back-${sec}`}
-                              type="button"
-                              aria-disabled={isAdPlaying ? true : undefined}
-                              onClick={() => handleSeekBySeconds(-sec)}
-                              className={`inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                                isAdPlaying
-                                  ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
-                                  : 'hover:bg-white/10 hover:text-white'
-                              }`}
-                              title={
-                                isAdPlaying
-                                  ? 'Skip locked during ad'
-                                  : `Replay ${sec} seconds`
-                              }
-                            >
-                              {idx === 0 && (
-                                <ReplayArcIcon className="w-3 h-3 text-slate-400 shrink-0" />
-                              )}
-                              <span>{sec}</span>
-                            </button>
-                          ))}
+                          {([60, 30, 10] as const).map((sec, idx) => {
+                            const replayNoDvrBlocked =
+                              !isAdPlaying && isLiveStream && !liveDvrEnabled;
+                            const replayBlocked = isAdPlaying || replayNoDvrBlocked;
+                            return (
+                              <button
+                                key={`back-${sec}`}
+                                type="button"
+                                aria-disabled={replayBlocked ? true : undefined}
+                                onClick={() => handleSeekBySeconds(-sec)}
+                                className={`inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-mono font-semibold tabular-nums text-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                                  replayBlocked
+                                    ? 'opacity-40 hover:opacity-70 hover:bg-amber-500/10'
+                                    : 'hover:bg-white/10 hover:text-white'
+                                }`}
+                                title={
+                                  isAdPlaying
+                                    ? 'Skip locked during ad'
+                                    : replayNoDvrBlocked
+                                      ? 'Rewind unavailable on this live stream'
+                                      : `Replay ${sec} seconds`
+                                }
+                              >
+                                {idx === 0 && (
+                                  <ReplayArcIcon className="w-3 h-3 text-slate-400 shrink-0" />
+                                )}
+                                <span>{sec}</span>
+                              </button>
+                            );
+                          })}
                         </div>
 
                         <div
@@ -2095,9 +2320,12 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           aria-label="Skip ahead 10, 30, or 60 seconds"
                         >
                           {([10, 30, 60] as const).map((sec, idx) => {
+                            const skipNoDvrBlocked =
+                              !isAdPlaying && isLiveStream && !liveDvrEnabled;
                             const skipLiveBlocked =
                               !isAdPlaying && isLiveStream && isAtLiveHead;
-                            const skipBlocked = isAdPlaying || skipLiveBlocked;
+                            const skipBlocked =
+                              isAdPlaying || skipNoDvrBlocked || skipLiveBlocked;
                             return (
                               <button
                                 key={`fwd-${sec}`}
@@ -2112,9 +2340,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                                 title={
                                   isAdPlaying
                                     ? 'Skip locked during ad'
-                                    : skipLiveBlocked
-                                      ? 'Stream is currently at live end'
-                                      : `Skip ahead ${sec} seconds`
+                                    : skipNoDvrBlocked
+                                      ? 'Rewind unavailable on this live stream'
+                                      : skipLiveBlocked
+                                        ? 'Stream is currently at live end'
+                                        : `Skip ahead ${sec} seconds`
                                 }
                               >
                                 <span>{sec}</span>

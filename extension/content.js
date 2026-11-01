@@ -62,6 +62,7 @@
     hidden: true,
   };
   let lastToastedVideoId = null;
+  let nonDvrClampedVideoId = null;
   let toastTimeout = null;
   let barToastTimeout = null;
   let barToastVisible = false;
@@ -493,6 +494,16 @@
     if (isLiveAtHeadForChannel(meta) && configured > 1.01) {
       return 1.0;
     }
+    if (
+      remainingState.isLive &&
+      remainingState.isDvrSupported === false &&
+      configured < 0.99 &&
+      meta &&
+      nonDvrClampedVideoId === meta.videoId &&
+      !hasActiveSessionOverride(meta.videoId)
+    ) {
+      return 1.0;
+    }
     return configured;
   }
 
@@ -509,6 +520,24 @@
     }
 
     if (remainingState.isLive) {
+      const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+      const liveRate = state.settings.enabled
+        ? effectiveSpeed
+        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
+          ? remainingState.playbackRate
+          : 1.0;
+
+      if (remainingState.isDvrSupported === false && liveRate < 0.99) {
+        return {
+          visible: true,
+          mode: 'live-nodvr-slow',
+          text: 'Rewind unavailable on this live stream',
+          title:
+            'Rewind unavailable on this live stream — slowed playback continues until the stream catches up and resets to 1.0× (click to return to 1.0× now)',
+          clickable: true,
+        };
+      }
+
       if (remainingState.isAtLiveHead) {
         return {
           visible: true,
@@ -521,12 +550,6 @@
 
       const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
       const lagLabel = formatCompactDuration(lagSec);
-      const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-      const liveRate = state.settings.enabled
-        ? effectiveSpeed
-        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
-          ? remainingState.playbackRate
-          : 1.0;
 
       if (liveRate > 1.02) {
         const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
@@ -677,6 +700,7 @@
     const wrapEl = bar.querySelector('.cadence-remaining-wrap');
     const slotBtn = bar.querySelector('.cadence-remaining-slot');
     const dotEl = bar.querySelector('.cadence-live-dot');
+    const warnIconEl = bar.querySelector('.cadence-remaining-warn-icon');
     const sizerEl = bar.querySelector('.cadence-remaining-sizer');
     const timeEl = bar.querySelector('.cadence-remaining-time');
     if (!wrapEl || !slotBtn || !dotEl || !timeEl) return;
@@ -691,7 +715,8 @@
     if (wrapEl.style.display !== 'inline-flex') {
       wrapEl.style.display = 'inline-flex';
     }
-    const nextSizer = buildDurationSizerText(model.text);
+    const nextSizer =
+      model.mode === 'live-nodvr-slow' ? model.text : buildDurationSizerText(model.text);
     if (sizerEl && sizerEl.textContent !== nextSizer) {
       sizerEl.textContent = nextSizer;
     }
@@ -708,6 +733,15 @@
     }
     slotBtn.classList.toggle('is-clickable', Boolean(model.clickable));
     slotBtn.classList.toggle('is-live-head', model.mode === 'live-head');
+    slotBtn.classList.toggle('is-nodvr-warning', model.mode === 'live-nodvr-slow');
+
+    if (warnIconEl) {
+      const wantWarnIcon = model.mode === 'live-nodvr-slow';
+      const expectedDisplay = wantWarnIcon ? 'inline-flex' : 'none';
+      if (warnIconEl.style.display !== expectedDisplay) {
+        warnIconEl.style.display = expectedDisplay;
+      }
+    }
 
     if (model.mode === 'live-head') {
       if (dotEl.style.display !== 'inline-block') dotEl.style.display = 'inline-block';
@@ -762,9 +796,11 @@
     const matchedRule = findMatchingRule(currentChannel);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
+    const durMode = adActive ? 'ad' : computeDurationSlotModel().mode;
     return [
       adActive ? 'ad' : liveAtHead ? 'live-head' : remainingState.isLive ? 'live-dvr' : 'vod',
       dvrUnsupported ? 'nodvr' : 'dvr',
+      durMode,
       formatCompactSpeed(displayedBarRate),
       isSessionActive ? 'session' : matchedRule ? 'rule' : 'default',
     ].join('|');
@@ -1169,12 +1205,16 @@
     }
 
     hideBarToast();
+    nonDvrClampedVideoId = null;
 
     if (liveAtHead && Math.abs(cleanSpeed - 1.0) < 0.015) {
+      if (remainingState.isLive && remainingState.isDvrSupported === false) {
+        nonDvrClampedVideoId = currentChannel.videoId;
+      }
       sessionOverride = { videoId: null, speed: null };
       remainingState.playbackRate = 1.0;
       pushConfigToBridge(1.0, true);
-      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0, fromUserGesture: true });
       renderInPageBar();
       showPlayerToast('1.0× · Live');
       return;
@@ -1253,7 +1293,11 @@
     remainingState.playbackRate = effectiveResetSpeed;
 
     pushConfigToBridge(effectiveResetSpeed, true);
-    postToBridge('COMMAND', { action: 'SET_SPEED', speed: effectiveResetSpeed });
+    postToBridge('COMMAND', {
+      action: 'SET_SPEED',
+      speed: effectiveResetSpeed,
+      fromUserGesture: true,
+    });
     renderInPageBar();
     showPlayerToast(
       `Reset to ${formatDisplaySpeed(effectiveResetSpeed)}× (${matchedRule ? 'Channel Rule' : 'Default'})`
@@ -1453,6 +1497,7 @@
             <span class="cadence-bar-divider" aria-hidden="true"></span>
             <button type="button" class="cadence-remaining-slot" disabled>
               <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
+              <span class="cadence-remaining-warn-icon" aria-hidden="true" style="display:none;">${WARNING_ICON_SVG}</span>
               <span class="cadence-remaining-time-grid">
                 <span class="cadence-remaining-sizer" aria-hidden="true"></span>
                 <span class="cadence-remaining-time"></span>
@@ -1654,12 +1699,16 @@
         () => {
           if (remainingSlotBtn.disabled) return;
           hideBarToast();
-          if (
-            currentChannel &&
-            hasActiveSessionOverride(currentChannel.videoId) &&
-            sessionOverride.speed > 1.01
-          ) {
-            sessionOverride = { videoId: null, speed: null };
+          const isNoDvrLive = Boolean(
+            remainingState.isLive && remainingState.isDvrSupported === false
+          );
+          if (currentChannel && hasActiveSessionOverride(currentChannel.videoId)) {
+            if (sessionOverride.speed > 1.01 || (isNoDvrLive && sessionOverride.speed < 0.99)) {
+              sessionOverride = { videoId: null, speed: null };
+            }
+          }
+          if (isNoDvrLive && currentChannel && currentChannel.videoId) {
+            nonDvrClampedVideoId = currentChannel.videoId;
           }
           remainingState.isAtLiveHead = true;
           remainingState.dvrLagSec = 0;
@@ -1667,7 +1716,7 @@
           remainingState.playbackRate = 1.0;
           const headSpeed = getEffectiveSpeedForChannel(currentChannel);
           pushConfigToBridge(headSpeed, true);
-          postToBridge('COMMAND', { action: 'JUMP_TO_LIVE' });
+          postToBridge('COMMAND', { action: 'JUMP_TO_LIVE', clampSubOne: isNoDvrLive });
           renderInPageBar();
           showPlayerToast('Jumped to Live · 1.0×');
         },
@@ -1683,6 +1732,7 @@
   function handleLeftWatchPage() {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
+    nonDvrClampedVideoId = null;
     remainingState = {
       videoId: null,
       rawRemainingSec: null,
@@ -1877,6 +1927,25 @@
             showBarToast('Rewind unavailable on this live stream', 2400, 'live');
             showPlayerToast('Rewind unavailable on this live stream', true, true);
           }
+        } else if (type === 'NON_DVR_FORCED_CATCHUP') {
+          sessionOverride = { videoId: null, speed: null };
+          const caughtVid =
+            (currentChannel && currentChannel.videoId) || (payload && payload.videoId) || null;
+          if (caughtVid) {
+            nonDvrClampedVideoId = caughtVid;
+          }
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          remainingState.isDvrSupported = false;
+          remainingState.dvrLagSec = 0;
+          remainingState.isPaused = false;
+          remainingState.playbackRate = 1.0;
+          if (state.settings.enabled) {
+            const headSpeed = currentChannel ? getEffectiveSpeedForChannel(currentChannel) : 1.0;
+            pushConfigToBridge(headSpeed, Boolean(state.settings.perChannelSpeedEnabled));
+            renderInPageBar();
+            showPlayerToast('Caught up to Live · 1.0×', true, false);
+          }
         } else if (type === 'LIVE_CAUGHT_UP') {
           const fromSeek = Boolean(payload && payload.fromSeek);
           const hadFastRate =
@@ -2016,6 +2085,9 @@
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
           }
+          if (nonDvrClampedVideoId && nonDvrClampedVideoId !== payload.videoId) {
+            nonDvrClampedVideoId = null;
+          }
           if (remainingState.videoId !== payload.videoId) {
             hideBarToast();
             remainingState = {
@@ -2063,6 +2135,9 @@
           const wasChannelAd = Boolean(currentChannel && currentChannel.isAd);
           if (payload.videoId && payload.videoId !== prevVideoId) {
             hideBarToast();
+            if (nonDvrClampedVideoId && nonDvrClampedVideoId !== payload.videoId) {
+              nonDvrClampedVideoId = null;
+            }
             if (sessionOverride.videoId !== payload.videoId) {
               sessionOverride = { videoId: null, speed: null };
             }
@@ -2120,6 +2195,9 @@
             return;
           }
           hideBarToast();
+          if (cleanManualSpeed < 0.99) {
+            nonDvrClampedVideoId = null;
+          }
 
           const matchedRule = findMatchingRule(currentChannel);
           const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
@@ -2220,6 +2298,7 @@
           isAd: adActive,
           isLive: Boolean(!adActive && (remainingState.isLive || liveAtHead)),
           isAtLiveHead: liveAtHead,
+          isDvrSupported: remainingState.isDvrSupported !== false,
         });
         return false;
       }
@@ -2274,13 +2353,18 @@
             return false;
           }
           hideBarToast();
+          nonDvrClampedVideoId = null;
           sessionOverride = { videoId: null, speed: null };
           saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
               const appliedSpeed = getEffectiveSpeedForChannel(targetMeta);
               remainingState.playbackRate = appliedSpeed;
               pushConfigToBridge(appliedSpeed, true);
-              postToBridge('COMMAND', { action: 'SET_SPEED', speed: appliedSpeed });
+              postToBridge('COMMAND', {
+                action: 'SET_SPEED',
+                speed: appliedSpeed,
+                fromUserGesture: true,
+              });
               renderInPageBar();
               showPlayerToast(`Saved ${formatDisplaySpeed(requestedSpeed)}× for ${targetMeta.channelName}`);
             }

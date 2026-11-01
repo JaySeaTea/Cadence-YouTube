@@ -142,6 +142,7 @@
           );
           let isLive = false;
           let isAtLiveHead = false;
+          let isDvrSupported = true;
 
           try {
             if (player && typeof player.getPlayerResponse === 'function') {
@@ -155,7 +156,12 @@
                 videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
-                if (!isAd && resp.videoDetails.isLive === true) isLive = true;
+                if (!isAd && resp.videoDetails.isLive === true) {
+                  isLive = true;
+                  if (resp.videoDetails.isLiveDvrEnabled === false) {
+                    isDvrSupported = false;
+                  }
+                }
               }
             }
             if (player && typeof player.getVideoData === 'function') {
@@ -178,11 +184,17 @@
                     badge.classList.contains('ytp-live-badge-is-livehead')
                 );
               }
-              if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
+              if (isLive && player && typeof player.getProgressState === 'function') {
                 const ps = player.getProgressState();
-                if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
+                if (ps && ps.allowSeeking === false) {
+                  isDvrSupported = false;
+                }
+                if (!isAtLiveHead && ps && ps.isAtLiveHead === true && !(video && video.paused)) {
                   isAtLiveHead = true;
                 }
+              }
+              if (isLive && !isDvrSupported) {
+                isAtLiveHead = true;
               }
             }
           } catch (_) {}
@@ -219,6 +231,7 @@
             isAd,
             isLive,
             isAtLiveHead,
+            isDvrSupported,
           };
         },
       });
@@ -271,6 +284,7 @@
   const activeChannel = detected.channel;
   let isAd = Boolean(detected.isAd);
   const isLive = Boolean(!isAd && detected.isLive);
+  const isDvrSupported = detected.isDvrSupported !== false;
   let isAtLiveHead = Boolean(!isAd && detected.isLive && detected.isAtLiveHead);
   let currentRule = findRuleForChannel(activeChannel);
   let sessionOverrideSpeed =
@@ -333,7 +347,13 @@
                 spd <= 2.0 &&
                 Math.abs(Math.round(spd * 20) - spd * 20) < 0.001
               ) {
-                p.setPlaybackRate(spd);
+                const avail =
+                  typeof p.getAvailablePlaybackRates === 'function'
+                    ? p.getAvailablePlaybackRates()
+                    : null;
+                if (!Array.isArray(avail) || avail.some((r) => Math.abs(Number(r) - spd) < 0.01)) {
+                  p.setPlaybackRate(spd);
+                }
               }
             } catch (_) {}
           },
@@ -380,9 +400,13 @@
       stepperValEl.textContent = '1.0×';
     } else if (isLive && isAtLiveHead) {
       statusEl.textContent =
-        currentRule && baseline > 1.01
-          ? `Live End (1.0×) · Rule ${formatSpeed(baseline)}×`
-          : 'Live Broadcast · At Live End';
+        !isDvrSupported && currentSpeed < 0.99
+          ? 'Rewind Unavailable · Resets to 1.0× on Catch-Up'
+          : currentRule && baseline > 1.01
+            ? `Live End (1.0×) · Rule ${formatSpeed(baseline)}×`
+            : !isDvrSupported
+              ? 'Live Broadcast · Rewind Disabled'
+              : 'Live Broadcast · At Live End';
       readoutEl.textContent = `${formatSpeed(currentSpeed)}×`;
       stepperValEl.textContent = `${formatSpeed(currentSpeed)}×`;
     } else if (sessionOverrideSpeed !== null) {
@@ -490,7 +514,7 @@
 
     currentSpeed = clean;
     sessionOverrideSpeed = null;
-    if (isLive && clean < 0.99) {
+    if (isLive && clean < 0.99 && isDvrSupported) {
       isAtLiveHead = false;
     }
 
@@ -556,7 +580,13 @@
               spd <= 2.0 &&
               Math.abs(Math.round(spd * 20) - spd * 20) < 0.001
             ) {
-              p.setPlaybackRate(spd);
+              const avail =
+                typeof p.getAvailablePlaybackRates === 'function'
+                  ? p.getAvailablePlaybackRates()
+                  : null;
+              if (!Array.isArray(avail) || avail.some((r) => Math.abs(Number(r) - spd) < 0.01)) {
+                p.setPlaybackRate(spd);
+              }
             }
           } catch (_) {}
         },

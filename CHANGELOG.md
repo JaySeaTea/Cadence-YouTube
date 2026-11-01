@@ -4,6 +4,17 @@ All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-11-01
+
+### Changed
+- **Slowed Playback (`< 1.0×`) on Rewind-Disabled Live Streams with Constant Warning & Automatic Catch-Up Reset**: On YouTube live streams where the creator disabled DVR rewind (`isLiveDvrEnabled: false` / `allowSeeking: false`), Cadence now allows slowed playback (`0.75×`, `−0.05`, etc.) across the watch toolbar, player gear menu, and keyboard shortcuts while displaying a **constant inline warning** (`⚠ Rewind unavailable on this live stream`) in Row 1 of the watch deck. As soon as YouTube's live latency controller or the browser's MSE `SourceBuffer` forces a live catch-up, Cadence automatically clamps playback speed back to `1.0×`, clears any `< 1.0×` session override and badge readout, dismisses the constant warning back to `● Live`, and confirms `"Caught up to Live · 1.0×"`. Clicking the inline Row 1 warning also lets you sync back to `1.0×` immediately at any time.
+
+### Fixed
+- **Non-DVR Live `HTMLMediaElement.playbackRate` Enforcement**: Prevented `#movie_player.getAvailablePlaybackRates()` (which often reports `[1]` on non-DVR live streams) from overwriting `< 1.0×` `video.playbackRate` adjustments, and kept `isAtLiveHead` locked on non-DVR streams so `> 1.0×` catch-up presets never falsely unlock while drifting inside the browser's short MSE buffer.
+
+### Added
+- **Interactive `Test Live (No Rewind)` Simulation in Web Workbench**: Added a 1-click **`Test Live (No Rewind)`** scenario and in-player **`DVR: On / Off`** toggle in the Web Workbench to preview the constant Row 1 warning and MSE buffer catch-up reset end-to-end.
+
 ## [1.5.0] - 2026-10-31
 
 ### Changed

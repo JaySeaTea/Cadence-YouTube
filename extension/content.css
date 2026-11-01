@@ -258,6 +258,48 @@ html[dark] .cadence-bar-divider {
   border-color: rgba(220, 38, 38, 0.55);
 }
 
+.cadence-remaining-slot.is-nodvr-warning {
+  font-family: Roboto, Arial, sans-serif;
+  font-weight: 500;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.38);
+  opacity: 1;
+}
+
+html[dark] .cadence-remaining-slot.is-nodvr-warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.44);
+}
+
+.cadence-remaining-slot.is-nodvr-warning:hover {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.65);
+}
+
+html[dark] .cadence-remaining-slot.is-nodvr-warning:hover {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: rgba(251, 191, 36, 0.7);
+}
+
+.cadence-remaining-warn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #d97706;
+}
+
+html[dark] .cadence-remaining-warn-icon {
+  color: #fbbf24;
+}
+
+.cadence-remaining-warn-icon .cadence-toast-warn-icon {
+  width: 12px;
+  height: 12px;
+}
+
 .cadence-live-dot {
   width: 6px;
   height: 6px;

@@ -291,6 +291,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let lastAutoLiveSyncAt = 0;
   let lastDvrRestoreAt = 0;
   let dvrRestoreAttempts = 0;
+  let nonDvrSlowActiveSince = 0;
+  let lastNonDvrSlowMediaTime = null;
+  let lastNonDvrSlowStreamTime = null;
+  let lastNonDvrSlowWallMs = 0;
+  let lastNonDvrCatchupAt = 0;
+  let nonDvrSubOneRuleClamped = false;
   let wasAdPlaying = false;
   let observedPlayerEl = null;
   let playerClassObserver = null;
@@ -590,6 +596,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (e.shiftKey && (e.key === '>' || e.key === '<' || e.key === '.' || e.key === ',')) {
         recentNativeSpeedGestureUntil = Date.now() + 2500;
+        if (e.key === '<' || e.key === ',') {
+          nonDvrSubOneRuleClamped = false;
+        }
         const activeEl = e.target;
         const isTyping =
           activeEl instanceof HTMLInputElement ||
@@ -762,6 +771,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastCatchupVideoSec = null;
     lastAutoLiveSyncAt = 0;
     dvrRestoreAttempts = 0;
+    nonDvrSlowActiveSince = 0;
+    lastNonDvrSlowMediaTime = null;
+    lastNonDvrSlowStreamTime = null;
+    lastNonDvrSlowWallMs = 0;
+    nonDvrSubOneRuleClamped = false;
   }
 
   function readPlayerStreamTimeSec(player, psOverride = null) {
@@ -880,7 +894,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 
-  function applyLiveHeadRateClamp(player, video) {
+  function applyLiveHeadRateClamp(player, video, clampSubOne = false) {
     isApplyingProgrammatically = true;
     clearTimeout(programmaticTimer);
     lastAppliedSpeed = 1.0;
@@ -888,17 +902,128 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (player && typeof player.setPlaybackRate === 'function') {
         const pr =
           typeof player.getPlaybackRate === 'function' ? Number(player.getPlaybackRate()) : 1.5;
-        if (!Number.isFinite(pr) || pr > 1.01) {
+        if (!Number.isFinite(pr) || pr > 1.01 || (clampSubOne && pr < 0.99)) {
           player.setPlaybackRate(1);
         }
       }
     } catch (_) {}
-    if (video && video.playbackRate > 1.01) {
+    if (video && (video.playbackRate > 1.01 || (clampSubOne && video.playbackRate < 0.99))) {
       video.playbackRate = 1.0;
     }
     programmaticTimer = setTimeout(() => {
       isApplyingProgrammatically = false;
     }, 350);
+  }
+
+  function handleNonDvrForcedCatchup(player, video) {
+    const now = Date.now();
+    if (now - lastNonDvrCatchupAt < 1500) return;
+    lastNonDvrCatchupAt = now;
+    nonDvrSlowActiveSince = 0;
+    lastNonDvrSlowMediaTime = null;
+    lastNonDvrSlowStreamTime = null;
+    lastNonDvrSlowWallMs = 0;
+    nonDvrSubOneRuleClamped = true;
+    explicitJumpToLiveUntil = now + 2800;
+    config.hasSessionOverride = false;
+    config.targetSpeed = 1.0;
+    window.__CADENCE_LAST_CONFIG__ = config;
+    const wasPlayingBefore = Boolean(video && !video.paused);
+    seekPlayerToLiveEdge(player, video);
+    applyLiveHeadRateClamp(player, video, true);
+    if (wasPlayingBefore && video && video.paused) {
+      video.play().catch(() => {});
+      try {
+        if (player && typeof player.playVideo === 'function') {
+          player.playVideo();
+        }
+      } catch (_) {}
+    }
+    postToContent('NON_DVR_FORCED_CATCHUP', {
+      videoId: getCurrentVideoId(player) || '',
+    });
+    emitTimeRemaining(true);
+    setTimeout(() => emitTimeRemaining(true), 90);
+  }
+
+  function checkNonDvrSlowForcedCatchup(player, video) {
+    if (!isSupportedWatchPage() || !config.enabled || !video) return;
+    if (isAdPlaying(player) || !isLiveBroadcast(player, video)) {
+      nonDvrSlowActiveSince = 0;
+      lastNonDvrSlowMediaTime = null;
+      lastNonDvrSlowStreamTime = null;
+      lastNonDvrSlowWallMs = 0;
+      return;
+    }
+    const vid = getCurrentVideoId(player) || '';
+    if (isLiveDvrSupported(player, video, vid) !== false) {
+      nonDvrSlowActiveSince = 0;
+      lastNonDvrSlowMediaTime = null;
+      lastNonDvrSlowStreamTime = null;
+      lastNonDvrSlowWallMs = 0;
+      return;
+    }
+
+    const now = Date.now();
+    const curMedia = Number.isFinite(video.currentTime) ? video.currentTime : null;
+    const curStream = readPlayerStreamTimeSec(player);
+    const activeRate = Number(video.playbackRate) || 1.0;
+
+    if (activeRate >= 0.99 || nonDvrSubOneRuleClamped) {
+      nonDvrSlowActiveSince = 0;
+      lastNonDvrSlowMediaTime = curMedia;
+      lastNonDvrSlowStreamTime = curStream;
+      lastNonDvrSlowWallMs = now;
+      return;
+    }
+
+    if (nonDvrSlowActiveSince === 0) {
+      nonDvrSlowActiveSince = now;
+      lastNonDvrSlowMediaTime = curMedia;
+      lastNonDvrSlowStreamTime = curStream;
+      lastNonDvrSlowWallMs = now;
+      return;
+    }
+
+    if (video.paused) {
+      lastNonDvrSlowWallMs = now;
+      return;
+    }
+
+    const activeElapsedMs = now - nonDvrSlowActiveSince;
+    const dtWallSec =
+      lastNonDvrSlowWallMs > 0 ? Math.max(0, (now - lastNonDvrSlowWallMs) / 1000) : 0;
+
+    // 1. Detect YouTube live latency controller snapping playhead forward to live edge
+    if (activeElapsedMs > 1400 && dtWallSec < 6) {
+      const mediaJumpedForward =
+        curMedia !== null &&
+        lastNonDvrSlowMediaTime !== null &&
+        curMedia - lastNonDvrSlowMediaTime > Math.max(1.5, dtWallSec * 1.05 + 1.25);
+      const streamJumpedForward =
+        curStream !== null &&
+        lastNonDvrSlowStreamTime !== null &&
+        curStream - lastNonDvrSlowStreamTime > Math.max(1.8, dtWallSec * 1.05 + 1.5);
+      if (mediaJumpedForward || streamJumpedForward) {
+        handleNonDvrForcedCatchup(player, video);
+        return;
+      }
+    }
+
+    // 2. Detect MSE SourceBuffer rear eviction gap behind slowed playhead
+    if (activeElapsedMs > 2000 && curMedia !== null && video.buffered && video.buffered.length > 0) {
+      try {
+        const bufStart = video.buffered.start(0);
+        if (Number.isFinite(bufStart) && bufStart > curMedia + 0.35) {
+          handleNonDvrForcedCatchup(player, video);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    lastNonDvrSlowMediaTime = curMedia;
+    lastNonDvrSlowStreamTime = curStream;
+    lastNonDvrSlowWallMs = now;
   }
 
   function syncNativeLiveBadgeOnCatchup(player, video) {
@@ -962,6 +1087,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (pausedAtWallMs > 0) {
       resumedAtWallMs = now;
       pausedAtWallMs = 0;
+    }
+
+    if (!dvrSupported) {
+      catchupMaxLagSec = null;
+      catchupActive = false;
+      lastCatchupVideoSec = null;
+      liveHeadHysteresisBehind = false;
+      dvrRestoreAttempts = 0;
+      return {
+        isAtLiveHead: true,
+        dvrLagSec: 0,
+        isPaused,
+        isDvrSupported: false,
+      };
     }
 
     let maxBufferedEnd = null;
@@ -1449,7 +1588,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             applyLiveHeadRateClamp(player, video);
           }
         }
-        liveRate = mediaRate < 0.99 ? mediaRate : 1.0;
+        if (dvr.isDvrSupported === false && nonDvrSubOneRuleClamped && mediaRate < 0.99 && config.enabled) {
+          applyLiveHeadRateClamp(player, video, true);
+          liveRate = 1.0;
+        } else {
+          liveRate = mediaRate < 0.99 ? mediaRate : 1.0;
+        }
       } else {
         if (dvr.isPaused) {
           liveRate = config.enabled
@@ -1661,10 +1805,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!forceResetOnBrowse && isAdPlaying(player)) return;
 
     const liveActive = !forceResetOnBrowse && Boolean(video && isLiveBroadcast(player, video));
+    let liveDvrState = null;
     if (liveActive) {
-      const dvr = measureLiveDvrState(player, video, getCurrentVideoId(player));
-      if (dvr.isAtLiveHead && numericSpeed > 1.01) {
+      liveDvrState = measureLiveDvrState(player, video, getCurrentVideoId(player));
+      if (liveDvrState.isAtLiveHead && numericSpeed > 1.01) {
         numericSpeed = 1.0;
+      }
+      if (
+        liveDvrState.isDvrSupported === false &&
+        numericSpeed < 0.99 &&
+        nonDvrSubOneRuleClamped
+      ) {
+        numericSpeed = 1.0;
+      }
+      if (liveDvrState.isDvrSupported === false) {
+        if (numericSpeed < 0.99) {
+          if (nonDvrSlowActiveSince === 0) {
+            nonDvrSlowActiveSince = Date.now();
+          }
+          lastNonDvrSlowMediaTime =
+            video && Number.isFinite(video.currentTime) ? video.currentTime : null;
+          lastNonDvrSlowStreamTime = readPlayerStreamTimeSec(player);
+          lastNonDvrSlowWallMs = Date.now();
+        } else {
+          nonDvrSlowActiveSince = 0;
+          lastNonDvrSlowMediaTime = null;
+          lastNonDvrSlowStreamTime = null;
+          lastNonDvrSlowWallMs = 0;
+        }
       }
     }
 
@@ -1693,14 +1861,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 ? curr
                 : best
             );
-            player.setPlaybackRate(Number(closestAvail));
+            if (!(numericSpeed < 0.99 && Number(closestAvail) >= 0.99)) {
+              player.setPlaybackRate(Number(closestAvail));
+            }
           }
         } else if (
           numericSpeed >= 0.25 &&
           numericSpeed <= 2.0 &&
           Math.abs(Math.round(numericSpeed * 4) - numericSpeed * 4) < 0.001
         ) {
-          player.setPlaybackRate(numericSpeed);
+          if (
+            !(liveActive && liveDvrState && liveDvrState.isDvrSupported === false && numericSpeed < 0.99)
+          ) {
+            player.setPlaybackRate(numericSpeed);
+          }
         }
       }
     } catch (_) {}
@@ -1717,7 +1891,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (vNow && !isAdPlaying(pNow)) {
           const nowLive = isLiveBroadcast(pNow, vNow);
           const nowDvr = nowLive ? measureLiveDvrState(pNow, vNow, getCurrentVideoId(pNow)) : null;
-          if ((!nowLive || (nowDvr && !nowDvr.isAtLiveHead)) && !vNow.paused) {
+          const allowLiveRateEnforce =
+            !nowLive ||
+            (nowDvr && !nowDvr.isAtLiveHead) ||
+            (numericSpeed < 0.99 && !nonDvrSubOneRuleClamped);
+          if (allowLiveRateEnforce && !vNow.paused) {
             if (Math.abs(vNow.playbackRate - numericSpeed) > 0.025) {
               vNow.playbackRate = numericSpeed;
             }
@@ -1860,6 +2038,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           emitTimeRemaining(true);
           return;
         }
+        if (
+          dvr.isDvrSupported === false &&
+          Number(config.targetSpeed) < 0.99 &&
+          nonDvrSubOneRuleClamped
+        ) {
+          applyLiveHeadRateClamp(player, video, true);
+          emitTimeRemaining(true);
+          return;
+        }
       }
       applyPlaybackSpeed(config.targetSpeed);
     }
@@ -1940,6 +2127,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       () => {
         checkAdTransition();
         checkNearVideoEnd();
+        checkNonDvrSlowForcedCatchup(getMoviePlayer(), video);
         emitTimeRemaining(false);
       },
       { signal: bridgeSignal }
@@ -1959,6 +2147,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           pendingSeekUntil = 0;
         }
         dvrRestoreAttempts = 0;
+        checkNonDvrSlowForcedCatchup(pNow, video);
         maybeRestoreDvrCatchupSpeed();
         emitTimeRemaining(true);
       },
@@ -2082,6 +2271,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
             emitTimeRemaining(true);
             return;
+          }
+          if (dvr.isDvrSupported === false) {
+            if (Date.now() <= recentNativeSpeedGestureUntil && newRate < 0.99) {
+              nonDvrSubOneRuleClamped = false;
+              nonDvrSlowActiveSince = Date.now();
+              lastNonDvrSlowMediaTime = Number.isFinite(video.currentTime)
+                ? video.currentTime
+                : null;
+              lastNonDvrSlowStreamTime = readPlayerStreamTimeSec(player);
+              lastNonDvrSlowWallMs = Date.now();
+            } else if (
+              Math.abs(newRate - 1.0) <= 0.03 &&
+              Date.now() > recentNativeSpeedGestureUntil &&
+              nonDvrSlowActiveSince > 0
+            ) {
+              if (Date.now() - nonDvrSlowActiveSince > 1200) {
+                handleNonDvrForcedCatchup(player, video);
+                return;
+              }
+              const targetSpd = Number(config.targetSpeed) || 1.0;
+              if (config.enabled && targetSpd < 0.99 && !nonDvrSubOneRuleClamped) {
+                setTimeout(() => applyPlaybackSpeed(targetSpd), 60);
+              }
+              emitTimeRemaining(true);
+              return;
+            }
           }
           if (Math.abs(newRate - 1.0) < 0.025 && Date.now() > recentNativeSpeedGestureUntil) {
             emitTimeRemaining(true);
@@ -2207,6 +2422,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               emitTimeRemaining(true);
               return;
             }
+          }
+          if (payload.fromUserGesture) {
+            nonDvrSubOneRuleClamped = false;
           }
           config.targetSpeed = payload.speed;
           window.__CADENCE_LAST_CONFIG__ = config;
@@ -2408,14 +2626,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else if (payload.action === 'JUMP_TO_LIVE') {
           const player = getMoviePlayer();
           const video = getMainVideo();
+          const vid = getCurrentVideoId(player) || '';
+          const shouldClampSubOne =
+            Boolean(payload.clampSubOne) || isLiveDvrSupported(player, video, vid) === false;
           explicitJumpToLiveUntil = Date.now() + 2800;
           recentBackwardSeekUntil = 0;
           pendingSeekTargetPlayheadSec = null;
           pendingSeekUntil = 0;
+          if (shouldClampSubOne) {
+            nonDvrSlowActiveSince = 0;
+            lastNonDvrSlowMediaTime = null;
+            lastNonDvrSlowStreamTime = null;
+            lastNonDvrSlowWallMs = 0;
+            nonDvrSubOneRuleClamped = true;
+            config.hasSessionOverride = false;
+            config.targetSpeed = 1.0;
+            window.__CADENCE_LAST_CONFIG__ = config;
+          }
           seekPlayerToLiveEdge(player, video);
           if (video) {
-            if (video.playbackRate > 1.01) {
-              applyLiveHeadRateClamp(player, video);
+            if (video.playbackRate > 1.01 || (shouldClampSubOne && video.playbackRate < 0.99)) {
+              applyLiveHeadRateClamp(player, video, shouldClampSubOne);
             }
             if (video.paused) {
               video.play().catch(() => {});
@@ -2550,6 +2781,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
+    checkNonDvrSlowForcedCatchup(getMoviePlayer(), getMainVideo());
     maybeRestoreDvrCatchupSpeed();
     emitTimeRemaining(false);
   }, 250);
@@ -2645,6 +2877,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hidden: true,
   };
   let lastToastedVideoId = null;
+  let nonDvrClampedVideoId = null;
   let toastTimeout = null;
   let barToastTimeout = null;
   let barToastVisible = false;
@@ -3076,6 +3309,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (isLiveAtHeadForChannel(meta) && configured > 1.01) {
       return 1.0;
     }
+    if (
+      remainingState.isLive &&
+      remainingState.isDvrSupported === false &&
+      configured < 0.99 &&
+      meta &&
+      nonDvrClampedVideoId === meta.videoId &&
+      !hasActiveSessionOverride(meta.videoId)
+    ) {
+      return 1.0;
+    }
     return configured;
   }
 
@@ -3092,6 +3335,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (remainingState.isLive) {
+      const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
+      const liveRate = state.settings.enabled
+        ? effectiveSpeed
+        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
+          ? remainingState.playbackRate
+          : 1.0;
+
+      if (remainingState.isDvrSupported === false && liveRate < 0.99) {
+        return {
+          visible: true,
+          mode: 'live-nodvr-slow',
+          text: 'Rewind unavailable on this live stream',
+          title:
+            'Rewind unavailable on this live stream — slowed playback continues until the stream catches up and resets to 1.0× (click to return to 1.0× now)',
+          clickable: true,
+        };
+      }
+
       if (remainingState.isAtLiveHead) {
         return {
           visible: true,
@@ -3104,12 +3365,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
       const lagLabel = formatCompactDuration(lagSec);
-      const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
-      const liveRate = state.settings.enabled
-        ? effectiveSpeed
-        : typeof remainingState.playbackRate === 'number' && remainingState.playbackRate > 0
-          ? remainingState.playbackRate
-          : 1.0;
 
       if (liveRate > 1.02) {
         const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
@@ -3260,6 +3515,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const wrapEl = bar.querySelector('.cadence-remaining-wrap');
     const slotBtn = bar.querySelector('.cadence-remaining-slot');
     const dotEl = bar.querySelector('.cadence-live-dot');
+    const warnIconEl = bar.querySelector('.cadence-remaining-warn-icon');
     const sizerEl = bar.querySelector('.cadence-remaining-sizer');
     const timeEl = bar.querySelector('.cadence-remaining-time');
     if (!wrapEl || !slotBtn || !dotEl || !timeEl) return;
@@ -3274,7 +3530,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (wrapEl.style.display !== 'inline-flex') {
       wrapEl.style.display = 'inline-flex';
     }
-    const nextSizer = buildDurationSizerText(model.text);
+    const nextSizer =
+      model.mode === 'live-nodvr-slow' ? model.text : buildDurationSizerText(model.text);
     if (sizerEl && sizerEl.textContent !== nextSizer) {
       sizerEl.textContent = nextSizer;
     }
@@ -3291,6 +3548,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     slotBtn.classList.toggle('is-clickable', Boolean(model.clickable));
     slotBtn.classList.toggle('is-live-head', model.mode === 'live-head');
+    slotBtn.classList.toggle('is-nodvr-warning', model.mode === 'live-nodvr-slow');
+
+    if (warnIconEl) {
+      const wantWarnIcon = model.mode === 'live-nodvr-slow';
+      const expectedDisplay = wantWarnIcon ? 'inline-flex' : 'none';
+      if (warnIconEl.style.display !== expectedDisplay) {
+        warnIconEl.style.display = expectedDisplay;
+      }
+    }
 
     if (model.mode === 'live-head') {
       if (dotEl.style.display !== 'inline-block') dotEl.style.display = 'inline-block';
@@ -3345,9 +3611,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const matchedRule = findMatchingRule(currentChannel);
     const effectiveSpeed = getEffectiveSpeedForChannel(currentChannel);
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
+    const durMode = adActive ? 'ad' : computeDurationSlotModel().mode;
     return [
       adActive ? 'ad' : liveAtHead ? 'live-head' : remainingState.isLive ? 'live-dvr' : 'vod',
       dvrUnsupported ? 'nodvr' : 'dvr',
+      durMode,
       formatCompactSpeed(displayedBarRate),
       isSessionActive ? 'session' : matchedRule ? 'rule' : 'default',
     ].join('|');
@@ -3752,12 +4020,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     hideBarToast();
+    nonDvrClampedVideoId = null;
 
     if (liveAtHead && Math.abs(cleanSpeed - 1.0) < 0.015) {
+      if (remainingState.isLive && remainingState.isDvrSupported === false) {
+        nonDvrClampedVideoId = currentChannel.videoId;
+      }
       sessionOverride = { videoId: null, speed: null };
       remainingState.playbackRate = 1.0;
       pushConfigToBridge(1.0, true);
-      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0 });
+      postToBridge('COMMAND', { action: 'SET_SPEED', speed: 1.0, fromUserGesture: true });
       renderInPageBar();
       showPlayerToast('1.0× · Live');
       return;
@@ -3836,7 +4108,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     remainingState.playbackRate = effectiveResetSpeed;
 
     pushConfigToBridge(effectiveResetSpeed, true);
-    postToBridge('COMMAND', { action: 'SET_SPEED', speed: effectiveResetSpeed });
+    postToBridge('COMMAND', {
+      action: 'SET_SPEED',
+      speed: effectiveResetSpeed,
+      fromUserGesture: true,
+    });
     renderInPageBar();
     showPlayerToast(
       \`Reset to \${formatDisplaySpeed(effectiveResetSpeed)}× (\${matchedRule ? 'Channel Rule' : 'Default'})\`
@@ -4036,6 +4312,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             <span class="cadence-bar-divider" aria-hidden="true"></span>
             <button type="button" class="cadence-remaining-slot" disabled>
               <span class="cadence-live-dot" aria-hidden="true" style="display:none;"></span>
+              <span class="cadence-remaining-warn-icon" aria-hidden="true" style="display:none;">\${WARNING_ICON_SVG}</span>
               <span class="cadence-remaining-time-grid">
                 <span class="cadence-remaining-sizer" aria-hidden="true"></span>
                 <span class="cadence-remaining-time"></span>
@@ -4237,12 +4514,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         () => {
           if (remainingSlotBtn.disabled) return;
           hideBarToast();
-          if (
-            currentChannel &&
-            hasActiveSessionOverride(currentChannel.videoId) &&
-            sessionOverride.speed > 1.01
-          ) {
-            sessionOverride = { videoId: null, speed: null };
+          const isNoDvrLive = Boolean(
+            remainingState.isLive && remainingState.isDvrSupported === false
+          );
+          if (currentChannel && hasActiveSessionOverride(currentChannel.videoId)) {
+            if (sessionOverride.speed > 1.01 || (isNoDvrLive && sessionOverride.speed < 0.99)) {
+              sessionOverride = { videoId: null, speed: null };
+            }
+          }
+          if (isNoDvrLive && currentChannel && currentChannel.videoId) {
+            nonDvrClampedVideoId = currentChannel.videoId;
           }
           remainingState.isAtLiveHead = true;
           remainingState.dvrLagSec = 0;
@@ -4250,7 +4531,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           remainingState.playbackRate = 1.0;
           const headSpeed = getEffectiveSpeedForChannel(currentChannel);
           pushConfigToBridge(headSpeed, true);
-          postToBridge('COMMAND', { action: 'JUMP_TO_LIVE' });
+          postToBridge('COMMAND', { action: 'JUMP_TO_LIVE', clampSubOne: isNoDvrLive });
           renderInPageBar();
           showPlayerToast('Jumped to Live · 1.0×');
         },
@@ -4266,6 +4547,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function handleLeftWatchPage() {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
+    nonDvrClampedVideoId = null;
     remainingState = {
       videoId: null,
       rawRemainingSec: null,
@@ -4460,6 +4742,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             showBarToast('Rewind unavailable on this live stream', 2400, 'live');
             showPlayerToast('Rewind unavailable on this live stream', true, true);
           }
+        } else if (type === 'NON_DVR_FORCED_CATCHUP') {
+          sessionOverride = { videoId: null, speed: null };
+          const caughtVid =
+            (currentChannel && currentChannel.videoId) || (payload && payload.videoId) || null;
+          if (caughtVid) {
+            nonDvrClampedVideoId = caughtVid;
+          }
+          remainingState.isLive = true;
+          remainingState.isAtLiveHead = true;
+          remainingState.isDvrSupported = false;
+          remainingState.dvrLagSec = 0;
+          remainingState.isPaused = false;
+          remainingState.playbackRate = 1.0;
+          if (state.settings.enabled) {
+            const headSpeed = currentChannel ? getEffectiveSpeedForChannel(currentChannel) : 1.0;
+            pushConfigToBridge(headSpeed, Boolean(state.settings.perChannelSpeedEnabled));
+            renderInPageBar();
+            showPlayerToast('Caught up to Live · 1.0×', true, false);
+          }
         } else if (type === 'LIVE_CAUGHT_UP') {
           const fromSeek = Boolean(payload && payload.fromSeek);
           const hadFastRate =
@@ -4599,6 +4900,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (sessionOverride.videoId !== payload.videoId) {
             sessionOverride = { videoId: null, speed: null };
           }
+          if (nonDvrClampedVideoId && nonDvrClampedVideoId !== payload.videoId) {
+            nonDvrClampedVideoId = null;
+          }
           if (remainingState.videoId !== payload.videoId) {
             hideBarToast();
             remainingState = {
@@ -4646,6 +4950,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const wasChannelAd = Boolean(currentChannel && currentChannel.isAd);
           if (payload.videoId && payload.videoId !== prevVideoId) {
             hideBarToast();
+            if (nonDvrClampedVideoId && nonDvrClampedVideoId !== payload.videoId) {
+              nonDvrClampedVideoId = null;
+            }
             if (sessionOverride.videoId !== payload.videoId) {
               sessionOverride = { videoId: null, speed: null };
             }
@@ -4703,6 +5010,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
           hideBarToast();
+          if (cleanManualSpeed < 0.99) {
+            nonDvrClampedVideoId = null;
+          }
 
           const matchedRule = findMatchingRule(currentChannel);
           const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
@@ -4803,6 +5113,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           isAd: adActive,
           isLive: Boolean(!adActive && (remainingState.isLive || liveAtHead)),
           isAtLiveHead: liveAtHead,
+          isDvrSupported: remainingState.isDvrSupported !== false,
         });
         return false;
       }
@@ -4857,13 +5168,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return false;
           }
           hideBarToast();
+          nonDvrClampedVideoId = null;
           sessionOverride = { videoId: null, speed: null };
           saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
               const appliedSpeed = getEffectiveSpeedForChannel(targetMeta);
               remainingState.playbackRate = appliedSpeed;
               pushConfigToBridge(appliedSpeed, true);
-              postToBridge('COMMAND', { action: 'SET_SPEED', speed: appliedSpeed });
+              postToBridge('COMMAND', {
+                action: 'SET_SPEED',
+                speed: appliedSpeed,
+                fromUserGesture: true,
+              });
               renderInPageBar();
               showPlayerToast(\`Saved \${formatDisplaySpeed(requestedSpeed)}× for \${targetMeta.channelName}\`);
             }
@@ -5199,6 +5515,48 @@ html[dark] .cadence-bar-divider {
 .cadence-remaining-slot.is-clickable:hover {
   background: rgba(148, 163, 184, 0.2);
   border-color: rgba(220, 38, 38, 0.55);
+}
+
+.cadence-remaining-slot.is-nodvr-warning {
+  font-family: Roboto, Arial, sans-serif;
+  font-weight: 500;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.38);
+  opacity: 1;
+}
+
+html[dark] .cadence-remaining-slot.is-nodvr-warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.44);
+}
+
+.cadence-remaining-slot.is-nodvr-warning:hover {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.65);
+}
+
+html[dark] .cadence-remaining-slot.is-nodvr-warning:hover {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: rgba(251, 191, 36, 0.7);
+}
+
+.cadence-remaining-warn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #d97706;
+}
+
+html[dark] .cadence-remaining-warn-icon {
+  color: #fbbf24;
+}
+
+.cadence-remaining-warn-icon .cadence-toast-warn-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .cadence-live-dot {
@@ -6076,6 +6434,7 @@ html[dark] .cadence-rule-plus {
           );
           let isLive = false;
           let isAtLiveHead = false;
+          let isDvrSupported = true;
 
           try {
             if (player && typeof player.getPlayerResponse === 'function') {
@@ -6089,7 +6448,12 @@ html[dark] .cadence-rule-plus {
                 videoId = resp.videoDetails.videoId;
                 channelId = resp.videoDetails.channelId || '';
                 channelName = resp.videoDetails.author || '';
-                if (!isAd && resp.videoDetails.isLive === true) isLive = true;
+                if (!isAd && resp.videoDetails.isLive === true) {
+                  isLive = true;
+                  if (resp.videoDetails.isLiveDvrEnabled === false) {
+                    isDvrSupported = false;
+                  }
+                }
               }
             }
             if (player && typeof player.getVideoData === 'function') {
@@ -6112,11 +6476,17 @@ html[dark] .cadence-rule-plus {
                     badge.classList.contains('ytp-live-badge-is-livehead')
                 );
               }
-              if (isLive && !isAtLiveHead && player && typeof player.getProgressState === 'function') {
+              if (isLive && player && typeof player.getProgressState === 'function') {
                 const ps = player.getProgressState();
-                if (ps && ps.isAtLiveHead === true && !(video && video.paused)) {
+                if (ps && ps.allowSeeking === false) {
+                  isDvrSupported = false;
+                }
+                if (!isAtLiveHead && ps && ps.isAtLiveHead === true && !(video && video.paused)) {
                   isAtLiveHead = true;
                 }
+              }
+              if (isLive && !isDvrSupported) {
+                isAtLiveHead = true;
               }
             }
           } catch (_) {}
@@ -6153,6 +6523,7 @@ html[dark] .cadence-rule-plus {
             isAd,
             isLive,
             isAtLiveHead,
+            isDvrSupported,
           };
         },
       });
@@ -6205,6 +6576,7 @@ html[dark] .cadence-rule-plus {
   const activeChannel = detected.channel;
   let isAd = Boolean(detected.isAd);
   const isLive = Boolean(!isAd && detected.isLive);
+  const isDvrSupported = detected.isDvrSupported !== false;
   let isAtLiveHead = Boolean(!isAd && detected.isLive && detected.isAtLiveHead);
   let currentRule = findRuleForChannel(activeChannel);
   let sessionOverrideSpeed =
@@ -6267,7 +6639,13 @@ html[dark] .cadence-rule-plus {
                 spd <= 2.0 &&
                 Math.abs(Math.round(spd * 20) - spd * 20) < 0.001
               ) {
-                p.setPlaybackRate(spd);
+                const avail =
+                  typeof p.getAvailablePlaybackRates === 'function'
+                    ? p.getAvailablePlaybackRates()
+                    : null;
+                if (!Array.isArray(avail) || avail.some((r) => Math.abs(Number(r) - spd) < 0.01)) {
+                  p.setPlaybackRate(spd);
+                }
               }
             } catch (_) {}
           },
@@ -6314,9 +6692,13 @@ html[dark] .cadence-rule-plus {
       stepperValEl.textContent = '1.0×';
     } else if (isLive && isAtLiveHead) {
       statusEl.textContent =
-        currentRule && baseline > 1.01
-          ? \`Live End (1.0×) · Rule \${formatSpeed(baseline)}×\`
-          : 'Live Broadcast · At Live End';
+        !isDvrSupported && currentSpeed < 0.99
+          ? 'Rewind Unavailable · Resets to 1.0× on Catch-Up'
+          : currentRule && baseline > 1.01
+            ? \`Live End (1.0×) · Rule \${formatSpeed(baseline)}×\`
+            : !isDvrSupported
+              ? 'Live Broadcast · Rewind Disabled'
+              : 'Live Broadcast · At Live End';
       readoutEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
       stepperValEl.textContent = \`\${formatSpeed(currentSpeed)}×\`;
     } else if (sessionOverrideSpeed !== null) {
@@ -6424,7 +6806,7 @@ html[dark] .cadence-rule-plus {
 
     currentSpeed = clean;
     sessionOverrideSpeed = null;
-    if (isLive && clean < 0.99) {
+    if (isLive && clean < 0.99 && isDvrSupported) {
       isAtLiveHead = false;
     }
 
@@ -6490,7 +6872,13 @@ html[dark] .cadence-rule-plus {
               spd <= 2.0 &&
               Math.abs(Math.round(spd * 20) - spd * 20) < 0.001
             ) {
-              p.setPlaybackRate(spd);
+              const avail =
+                typeof p.getAvailablePlaybackRates === 'function'
+                  ? p.getAvailablePlaybackRates()
+                  : null;
+              if (!Array.isArray(avail) || avail.some((r) => Math.abs(Number(r) - spd) < 0.01)) {
+                p.setPlaybackRate(spd);
+              }
             }
           } catch (_) {}
         },
