@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Copy, Download } from 'lucide-react';
 import { EXTENSION_VERSION } from '../data/initialData';
+import { PromoFrameStudio } from './PromoFrameStudio';
 
 interface InstallGuideProps {
   ruleCount: number;
@@ -90,6 +91,55 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
           Download CWS.zip (v{EXTENSION_VERSION})
         </button>
       </div>
+
+      {/* Promo Video & 4K Brand Emblem Assets */}
+      <div className="bg-[#111827] border border-slate-800/90 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+        <div className="flex items-start sm:items-center gap-4 max-w-2xl">
+          <img
+            src="/assets/cadence-emblem.svg"
+            alt="Cadence Emblem"
+            className="w-12 h-12 shrink-0 rounded-[11px] ring-1 ring-slate-700/80 shadow-md"
+          />
+          <div className="space-y-1">
+            <h2 className="text-base font-bold text-slate-100">
+              4K Promo Video &amp; Store Brand Emblem Assets
+            </h2>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Razor-sharp vector{' '}
+              <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+                .svg
+              </code>{' '}
+              and{' '}
+              <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
+                1024×1024
+              </code>{' '}
+              transparent PNG rendered directly from the Cadence icon generator for title cards,
+              overlays, and Chrome Web Store promotional graphics.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start sm:self-center">
+          <a
+            href="/assets/cadence-emblem.svg"
+            download="cadence-emblem.svg"
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-200 border border-slate-700 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download .SVG
+          </a>
+          <a
+            href="/assets/cadence-emblem-1024.png"
+            download="cadence-emblem-1024.png"
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download 1024×1024 .PNG
+          </a>
+        </div>
+      </div>
+
+      {/* Static 4K Intro / Outro Promo Frames & Transparent Scene Overlays */}
+      <PromoFrameStudio />
 
       {/* 4-Step Installation Sequence */}
       <div className="bg-[#111827] border border-slate-800/90 rounded-xl divide-y divide-slate-800">

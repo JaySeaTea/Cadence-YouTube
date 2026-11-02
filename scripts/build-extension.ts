@@ -8,6 +8,11 @@ import {
   EXTENSION_VERSION,
 } from '../src/data/sampleDefaults';
 import { buildExtensionFiles } from '../src/extension/generateExtensionZip';
+import {
+  PROMO_PRESETS,
+  renderIntroFrameSvg,
+  renderOutroFrameSvg,
+} from '../src/utils/promoFrameRenderer';
 
 const EXTENSION_OUT_DIR = path.join(process.cwd(), 'extension');
 const ICONS_OUT_DIR = path.join(EXTENSION_OUT_DIR, 'icons');
@@ -165,8 +170,33 @@ function renderCadenceIconPng(size: number): Buffer {
   ]);
 }
 
+const PUBLIC_ASSETS_OUT_DIR = path.join(process.cwd(), 'public', 'assets');
+
+function renderCadenceEmblemSvg(): string {
+  const size = 1024;
+  const radius = +(size * 0.22).toFixed(2); // 225.28
+  const left = +(size * 0.24).toFixed(2); // 245.76
+  const top = +(size * 0.25).toFixed(2); // 256
+  const bottom = +(size * 0.75).toFixed(2); // 768
+  const midX = +(size * 0.6).toFixed(2); // 614.4
+  const midY = +(size * 0.5).toFixed(2); // 512
+  const barX = +(size * 0.67).toFixed(2); // 686.08
+  const barWidth = Math.max(2, Math.round(size * 0.11)); // 113
+  const barHeight = +(bottom - top).toFixed(2); // 512
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none">`,
+    `  <rect x="0" y="0" width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#0F172A" />`,
+    `  <polygon points="${left},${top} ${midX},${midY} ${left},${bottom}" fill="#DC2626" />`,
+    `  <rect x="${barX}" y="${top}" width="${barWidth}" height="${barHeight}" fill="#F8FAFC" />`,
+    `</svg>`,
+    '',
+  ].join('\n');
+}
+
 async function main() {
   await fs.mkdir(ICONS_OUT_DIR, { recursive: true });
+  await fs.mkdir(PUBLIC_ASSETS_OUT_DIR, { recursive: true });
 
   // Chrome Web Store & standalone unpacked builds start with 0 pre-seeded channel rules
   const files = buildExtensionFiles(DEFAULT_SETTINGS, DEFAULT_PRESETS, []);
@@ -185,6 +215,17 @@ async function main() {
     zip.file(`icons/icon${size}.png`, pngBuffer);
   }
 
+  // High-resolution 4K-ready brand emblem & promo bookend assets (kept outside CWS.zip to preserve lean package size)
+  const emblemSvg = renderCadenceEmblemSvg();
+  const emblem1024Png = renderCadenceIconPng(1024);
+  const intro4kSvg = renderIntroFrameSvg(PROMO_PRESETS.polished.intro);
+  const outro4kSvg = renderOutroFrameSvg(PROMO_PRESETS.polished.outro);
+
+  await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-emblem.svg'), emblemSvg, 'utf-8');
+  await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-emblem-1024.png'), emblem1024Png);
+  await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-intro-4k.svg'), intro4kSvg, 'utf-8');
+  await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-outro-4k.svg'), outro4kSvg, 'utf-8');
+
   const cwsZipBuffer = await zip.generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
@@ -193,7 +234,7 @@ async function main() {
   await fs.writeFile(CWS_ZIP_OUT_PATH, cwsZipBuffer);
 
   console.log(
-    `Generated standalone Chrome extension v${EXTENSION_VERSION} in /extension and root-level CWS.zip (${(cwsZipBuffer.byteLength / 1024).toFixed(1)} KB, 0 sample rules).`
+    `Generated standalone Chrome extension v${EXTENSION_VERSION} in /extension, CWS.zip (${(cwsZipBuffer.byteLength / 1024).toFixed(1)} KB), and 4K promo assets in /public/assets/ (cadence-emblem.svg, cadence-emblem-1024.png, cadence-intro-4k.svg, cadence-outro-4k.svg).`
   );
 }
 

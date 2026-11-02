@@ -5,5 +5,8 @@ coverage/
 /data/
 .DS_Store
 *.log
+*.mp4
+*.mov
+*.webm
 .env*
 !.env.example

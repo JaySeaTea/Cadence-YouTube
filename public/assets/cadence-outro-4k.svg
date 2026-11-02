@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160" fill="none">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&amp;family=Public+Sans:wght@500;600&amp;display=swap');
+      .title { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 800; font-size: 184px; letter-spacing: -0.032em; }
+      .subtitle { font-family: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 500; font-size: 56px; letter-spacing: -0.01em; }
+      .cta { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 700; font-size: 45px; letter-spacing: -0.01em; }
+      .trust { font-family: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 500; font-size: 36px; letter-spacing: 0.005em; }
+    </style>
+    <radialGradient id="slateAtmosphere" cx="50%" cy="42%" r="64%">
+      <stop offset="0%" stop-color="#131C31" stop-opacity="0.72" />
+      <stop offset="55%" stop-color="#090D18" stop-opacity="0.94" />
+      <stop offset="100%" stop-color="#050811" stop-opacity="1" />
+    </radialGradient>
+    <radialGradient id="crimsonHalo" cx="50%" cy="35.5%" r="44%">
+      <stop offset="0%" stop-color="#DC2626" stop-opacity="0.319" />
+      <stop offset="38%" stop-color="#B91C1C" stop-opacity="0.176" />
+      <stop offset="75%" stop-color="#7F1D1D" stop-opacity="0.035" />
+      <stop offset="100%" stop-color="#050811" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="crimsonCore" cx="50%" cy="35%" r="13.5%">
+      <stop offset="0%" stop-color="#EF4444" stop-opacity="0.462" />
+      <stop offset="55%" stop-color="#DC2626" stop-opacity="0.166" />
+      <stop offset="100%" stop-color="#DC2626" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="playRedGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444" />
+      <stop offset="100%" stop-color="#DC2626" />
+    </linearGradient>
+    <linearGradient id="ctaSurface" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#162033" stop-opacity="0.96" />
+      <stop offset="100%" stop-color="#0D1424" stop-opacity="0.98" />
+    </linearGradient>
+    <filter id="emblemGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="25" flood-color="#EF4444" flood-opacity="0.495" />
+    </filter>
+  </defs>
+  <rect width="3840" height="2160" fill="#050811" />
+  <rect width="3840" height="2160" fill="url(#slateAtmosphere)" />
+  <rect width="3840" height="2160" fill="url(#crimsonHalo)" />
+  <rect width="3840" height="2160" fill="url(#crimsonCore)" />
+  <g filter="url(#emblemGlow)">
+    <polygon points="1818,653 1956,755 1818,857" fill="url(#playRedGrad)" />
+    <rect x="1984" y="653" width="38" height="204" rx="4" fill="#F8FAFC" />
+  </g>
+  <text x="1920" y="1040" text-anchor="middle" fill="#F8FAFC" class="title">Cadence</text>
+  <text x="1920" y="1142" text-anchor="middle" fill="#94A3B8" class="subtitle">YouTube at your speed — set once per channel.</text>
+  <rect x="1384" y="1236" width="1073" height="118" rx="26" fill="url(#ctaSurface)" stroke="#334155" stroke-opacity="0.88" stroke-width="2.5" />
+  <circle cx="1448" cy="1295" r="10" fill="#EF4444" />
+  <text x="1938" y="1311" text-anchor="middle" fill="#F8FAFC" class="cta">Get Cadence on the Chrome Web Store</text>
+  <text x="1920" y="1442" text-anchor="middle" fill="#94A3B8" class="trust">Free for Chrome  ·  Automatic channel pacing  ·  100% local — zero tracking</text>
+</svg>

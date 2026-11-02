@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160" fill="none">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&amp;family=Plus+Jakarta+Sans:wght@700;800&amp;family=Public+Sans:wght@500;600&amp;display=swap');
+      .title { font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 800; font-size: 184px; letter-spacing: -0.032em; }
+      .subtitle { font-family: 'Public Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-weight: 500; font-size: 56px; letter-spacing: -0.01em; }
+      .mono-pill { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; font-size: 40px; font-variant-numeric: tabular-nums; }
+    </style>
+    <radialGradient id="slateAtmosphere" cx="50%" cy="44%" r="64%">
+      <stop offset="0%" stop-color="#131C31" stop-opacity="0.72" />
+      <stop offset="55%" stop-color="#090D18" stop-opacity="0.94" />
+      <stop offset="100%" stop-color="#050811" stop-opacity="1" />
+    </radialGradient>
+    <radialGradient id="crimsonHalo" cx="50%" cy="38%" r="42%">
+      <stop offset="0%" stop-color="#DC2626" stop-opacity="0.273" />
+      <stop offset="38%" stop-color="#B91C1C" stop-opacity="0.147" />
+      <stop offset="75%" stop-color="#7F1D1D" stop-opacity="0.03" />
+      <stop offset="100%" stop-color="#050811" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="crimsonCore" cx="50%" cy="37.2%" r="13%">
+      <stop offset="0%" stop-color="#EF4444" stop-opacity="0.399" />
+      <stop offset="55%" stop-color="#DC2626" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#DC2626" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="playRedGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444" />
+      <stop offset="100%" stop-color="#DC2626" />
+    </linearGradient>
+    <linearGradient id="pillSurface" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#131C2E" stop-opacity="0.92" />
+      <stop offset="100%" stop-color="#0B1120" stop-opacity="0.95" />
+    </linearGradient>
+    <filter id="emblemGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="0" stdDeviation="24" flood-color="#EF4444" flood-opacity="0.441" />
+    </filter>
+  </defs>
+  <rect width="3840" height="2160" fill="#050811" />
+  <rect width="3840" height="2160" fill="url(#slateAtmosphere)" />
+  <rect width="3840" height="2160" fill="url(#crimsonHalo)" />
+  <rect width="3840" height="2160" fill="url(#crimsonCore)" />
+  <g filter="url(#emblemGlow)">
+    <polygon points="1818,703 1956,805 1818,907" fill="url(#playRedGrad)" />
+    <rect x="1984" y="703" width="38" height="204" rx="4" fill="#F8FAFC" />
+  </g>
+  <text x="1920" y="1092" text-anchor="middle" fill="#F8FAFC" class="title">Cadence</text>
+  <text x="1920" y="1194" text-anchor="middle" fill="#94A3B8" class="subtitle">Every YouTube channel, automatically at your speed.</text>
+  <rect x="1277" y="1282" width="1287" height="104" rx="22" fill="url(#pillSurface)" stroke="#334155" stroke-opacity="0.72" stroke-width="2.5" />
+  <text x="1920" y="1348" text-anchor="middle" class="mono-pill"><tspan fill="#F8FAFC">1.5× Channel Rule</tspan><tspan fill="#64748B">  ·  </tspan><tspan fill="#CBD5E1">+30s Skip</tspan><tspan fill="#64748B">  ·  </tspan><tspan fill="#34D399">Saves 3m 20s</tspan></text>
+</svg>
