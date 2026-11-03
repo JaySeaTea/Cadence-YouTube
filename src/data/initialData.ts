@@ -9,6 +9,7 @@ import {
   SimulatedVideo,
 } from '../types/extension';
 import {
+  CWS_STORE_SNAPSHOT_VERSION,
   DEFAULT_PRESETS,
   DEFAULT_SETTINGS,
   EXTENSION_VERSION,
@@ -16,6 +17,7 @@ import {
 } from './sampleDefaults';
 
 export {
+  CWS_STORE_SNAPSHOT_VERSION,
   DEFAULT_PRESETS,
   DEFAULT_SETTINGS,
   EXTENSION_VERSION,

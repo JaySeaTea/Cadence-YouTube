@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Eye, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { CWS_STORE_SNAPSHOT_VERSION } from '../data/initialData';
 import {
   ensurePromoFontsReady,
   IntroFrameConfig,
@@ -15,8 +16,16 @@ import {
   SCENE_CALLOUT_OVERLAYS,
   SceneOverlayCard,
 } from '../utils/promoFrameRenderer';
+import {
+  CWS_SLIDE_SPECS,
+  CwsSlideSpec,
+  encodeCanvasTo24BitPngBlob,
+  exportAllCwsStoreAssetsZip,
+  renderCwsSlideToCanvas,
+  renderCwsSmallPromoTileToCanvas,
+} from '../utils/cwsScreenshotRenderer';
 
-type StudioMode = 'bookends' | 'overlays';
+type StudioMode = 'cws' | 'bookends' | 'overlays';
 
 function triggerBlobDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -25,12 +34,13 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   link.download = filename;
   document.body.appendChild(link);
   link.click();
-  document.body.removeChild(link);
-  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 15000);
 }
 
 export const PromoFrameStudio: React.FC = () => {
-  const [studioMode, setStudioMode] = useState<StudioMode>('bookends');
+  const [studioMode, setStudioMode] = useState<StudioMode>('cws');
+  const [cwsAnnotations, setCwsAnnotations] = useState<boolean>(true);
   const [presetId, setPresetId] = useState<PromoPresetId>('polished');
   const [introConfig, setIntroConfig] = useState<IntroFrameConfig>(
     () => ({ ...PROMO_PRESETS.polished.intro })
@@ -45,6 +55,8 @@ export const PromoFrameStudio: React.FC = () => {
   const introCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const outroCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
+  const cwsCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
+  const promoTileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const applyPreset = (nextPreset: PromoPresetId) => {
     setPresetId(nextPreset);
@@ -99,6 +111,94 @@ export const PromoFrameStudio: React.FC = () => {
       cancelled = true;
     };
   }, [studioMode]);
+
+  // Render live 1280x800 CWS Store Screenshots + 440x280 Small Promo Tile
+  useEffect(() => {
+    if (studioMode !== 'cws') return;
+    let cancelled = false;
+    (async () => {
+      for (const spec of CWS_SLIDE_SPECS) {
+        if (cancelled) return;
+        const canvas = cwsCanvasRefs.current[spec.id];
+        if (canvas) {
+          try {
+            await renderCwsSlideToCanvas(canvas, spec, cwsAnnotations);
+          } catch {
+            // Ignore transient image load cancellation
+          }
+        }
+      }
+      if (!cancelled && promoTileCanvasRef.current) {
+        await renderCwsSmallPromoTileToCanvas(promoTileCanvasRef.current);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studioMode, cwsAnnotations]);
+
+  const downloadCwsSlide = async (spec: CwsSlideSpec, format: 'png24' | 'jpeg') => {
+    const key = `${spec.id}-${format}`;
+    setExportingKey(key);
+    try {
+      const offscreen = document.createElement('canvas');
+      await renderCwsSlideToCanvas(offscreen, spec, cwsAnnotations);
+      if (format === 'png24') {
+        const blob = await encodeCanvasTo24BitPngBlob(offscreen);
+        triggerBlobDownload(blob, spec.filename);
+      } else {
+        const jpgName = spec.filename.replace(/\.png$/, '.jpg');
+        await new Promise<void>((resolve) => {
+          offscreen.toBlob(
+            (blob) => {
+              if (blob) triggerBlobDownload(blob, jpgName);
+              resolve();
+            },
+            'image/jpeg',
+            0.96
+          );
+        });
+      }
+    } finally {
+      setExportingKey(null);
+    }
+  };
+
+  const downloadPromoTile = async (format: 'png24' | 'jpeg') => {
+    const key = `tile-${format}`;
+    setExportingKey(key);
+    try {
+      const offscreen = document.createElement('canvas');
+      await renderCwsSmallPromoTileToCanvas(offscreen);
+      if (format === 'png24') {
+        const blob = await encodeCanvasTo24BitPngBlob(offscreen);
+        triggerBlobDownload(blob, '06-cadence-small-promo-tile-440x280.png');
+      } else {
+        await new Promise<void>((resolve) => {
+          offscreen.toBlob(
+            (blob) => {
+              if (blob) triggerBlobDownload(blob, '06-cadence-small-promo-tile-440x280.jpg');
+              resolve();
+            },
+            'image/jpeg',
+            0.96
+          );
+        });
+      }
+    } finally {
+      setExportingKey(null);
+    }
+  };
+
+  const downloadAllCwsZip = async () => {
+    setExportingKey('cws-all-zip');
+    try {
+      const zipBlob = await exportAllCwsStoreAssetsZip(cwsAnnotations);
+      triggerBlobDownload(zipBlob, 'Cadence-CWS-Store-Screenshots.zip');
+    } finally {
+      setExportingKey(null);
+    }
+  };
 
   const downloadBookendPng = async (
     kind: 'intro' | 'outro',
@@ -161,29 +261,41 @@ export const PromoFrameStudio: React.FC = () => {
       {/* Studio Header & Mode Switcher */}
       <div className="p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="space-y-1 max-w-2xl">
-          <h2 className="text-base font-bold text-slate-100">
-            Static 4K Promo Video Frames &amp; Transparent Scene Overlays
-          </h2>
+          <div className="flex flex-wrap items-baseline gap-2">
+            <h2 className="text-base font-bold text-slate-100">
+              Chrome Web Store Screenshots, Promo Tile &amp; 4K Video Assets
+            </h2>
+            <span className="text-xs font-mono tabular-nums text-slate-400">
+              · Locked at v{CWS_STORE_SNAPSHOT_VERSION} for initial CWS listing
+            </span>
+          </div>
           <p className="text-sm text-slate-400 leading-relaxed">
-            Drop-in static{' '}
+            Export CWS-compliant{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded tabular-nums">
-              3840×2160
+              1280×800
             </code>{' '}
-            4K PNGs,{' '}
+            store screenshots +{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded tabular-nums">
-              1920×1080
+              440×280
             </code>{' '}
-            PNGs, and lossless{' '}
-            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
-              .svg
-            </code>{' '}
-            files with the Outro’s crimson glow unified across both bookends, anti-banded 8-bit
-            gradients, and properly fitted telemetry containers.
+            promo tile encoded as true <strong className="text-slate-200">24-bit RGB PNGs (no alpha)</strong>,
+            alongside static 4K video bookends and transparent scene overlays.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <div className="inline-flex rounded-lg bg-[#0B0F19] p-1 border border-slate-800">
+          <div className="inline-flex flex-wrap rounded-lg bg-[#0B0F19] p-1 border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setStudioMode('cws')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
+                studioMode === 'cws'
+                  ? 'bg-slate-800 text-slate-100'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              CWS Screenshots (5 + Tile)
+            </button>
             <button
               type="button"
               onClick={() => setStudioMode('bookends')}
@@ -210,7 +322,148 @@ export const PromoFrameStudio: React.FC = () => {
         </div>
       </div>
 
-      {studioMode === 'bookends' ? (
+      {studioMode === 'cws' ? (
+        <>
+          {/* CWS Controls & Bulk 24-bit PNG ZIP Export */}
+          <div className="px-6 py-4 bg-[#0D1322] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setCwsAnnotations(true)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  cwsAnnotations
+                    ? 'bg-red-600/15 border-red-500/50 text-slate-100'
+                    : 'border-slate-700/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                Highlight Callouts ON (Recommended)
+              </button>
+              <button
+                type="button"
+                onClick={() => setCwsAnnotations(false)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  !cwsAnnotations
+                    ? 'bg-red-600/15 border-red-500/50 text-slate-100'
+                    : 'border-slate-700/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                Clean Framed Crops Only
+              </button>
+              <span className="text-xs text-slate-400 hidden xl:inline">
+                True 24-bit RGB PNG (IHDR color_type=2, zero alpha) — passes CWS upload validation directly
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={downloadAllCwsZip}
+              disabled={exportingKey === 'cws-all-zip'}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer tabular-nums"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {exportingKey === 'cws-all-zip'
+                ? 'Bundling 6 CWS PNGs...'
+                : 'Download All 6 CWS Images (.zip)'}
+            </button>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {CWS_SLIDE_SPECS.map((spec) => (
+              <div
+                key={spec.id}
+                className="p-4 rounded-xl bg-[#0B0F19] border border-slate-800/90 space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">
+                      Slide {spec.slideNumber} · {spec.eyebrow}
+                    </h3>
+                    <p className="text-xs text-slate-400">{spec.filename}</p>
+                  </div>
+                  <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
+                    1280×800 · 16:10
+                  </span>
+                </div>
+
+                <div className="aspect-[16/10] w-full rounded-lg overflow-hidden border border-slate-800 bg-[#050811]">
+                  <canvas
+                    ref={(el) => {
+                      cwsCanvasRefs.current[spec.id] = el;
+                    }}
+                    className="w-full h-full block object-contain"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => downloadCwsSlide(spec, 'png24')}
+                    disabled={exportingKey === `${spec.id}-png24`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    24-bit .PNG (No Alpha)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadCwsSlide(spec, 'jpeg')}
+                    disabled={exportingKey === `${spec.id}-jpeg`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    .JPG (96%)
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* 6th Card: Small Promo Tile (440x280) */}
+            <div className="p-4 rounded-xl bg-[#0B0F19] border border-slate-800/90 flex flex-col justify-between space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">
+                    Bonus · Small Promo Tile (Search &amp; Featured Card)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    06-cadence-small-promo-tile-440x280.png
+                  </p>
+                </div>
+                <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
+                  440×280 · RGB
+                </span>
+              </div>
+
+              <div className="aspect-[16/10] w-full rounded-lg border border-slate-800 bg-[#050811] flex items-center justify-center p-4">
+                <canvas
+                  ref={promoTileCanvasRef}
+                  className="max-h-full max-w-full rounded-md border border-slate-800 shadow-lg block object-contain"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadPromoTile('png24')}
+                  disabled={exportingKey === 'tile-png24'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  24-bit .PNG (440×280)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadPromoTile('jpeg')}
+                  disabled={exportingKey === 'tile-jpeg'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  .JPG (440×280)
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : studioMode === 'bookends' ? (
         <>
           {/* Preset, Glow & Wording Controls Bar */}
           <div className="px-6 py-4 bg-[#0D1322] flex flex-col xl:flex-row xl:items-center justify-between gap-4">

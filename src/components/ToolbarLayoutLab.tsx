@@ -421,10 +421,15 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
 
   const durationBadge = (() => {
     if (isAd) {
-      return { mode: 'hidden' as const, text: '', clickable: false };
+      return { mode: 'hidden' as const, text: '', title: '', clickable: false };
     }
     if (isLiveHead) {
-      return { mode: 'live-head' as const, text: 'Live', clickable: false };
+      return {
+        mode: 'live-head' as const,
+        text: 'Live',
+        title: 'Live broadcast · Synced at live edge',
+        clickable: false,
+      };
     }
     if (isLiveDvr) {
       const lagTxt = formatCompactDuration(dvrLagSec);
@@ -436,12 +441,14 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
         return {
           mode: 'live-catchup' as const,
           text: `−${lagTxt} · Live in ${formatCompactDuration(catchupSec)} @ ${formatSpeed(effectiveSpeed)}×`,
+          title: `Catching up at ${formatSpeed(effectiveSpeed)}× · Click to jump to live edge`,
           clickable: true,
         };
       }
       return {
         mode: 'live-behind' as const,
         text: `${lagTxt} behind Live`,
+        title: 'Behind live · Increase speed above 1× to catch up, or click to jump to live edge',
         clickable: true,
       };
     }
@@ -452,6 +459,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
     return {
       mode: 'vod' as const,
       text: `${formatCompactDuration(remSec)} left @ ${formatSpeed(effectiveSpeed)}×`,
+      title: 'Real wall-clock time remaining at active playback speed',
       clickable: false,
     };
   })();
@@ -479,7 +487,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
         onClick={() => {
           if (durationBadge.clickable) handleJumpToLive();
         }}
-        title={durationBadge.clickable ? 'Click to jump to live edge' : undefined}
+        title={durationBadge.title || undefined}
         className={`inline-flex items-center gap-1.5 rounded text-[11px] font-mono tabular-nums whitespace-nowrap shrink-0 transition-colors ${
           durationBadge.clickable
             ? 'px-1.5 py-0.5 border border-slate-400/35 text-slate-100 hover:bg-white/15 hover:border-red-500/70 cursor-pointer'

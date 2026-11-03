@@ -551,17 +551,14 @@
       const lagSec = Math.max(1, Number(remainingState.dvrLagSec) || 0);
       const lagLabel = formatCompactDuration(lagSec);
 
-      if (liveRate > 1.02) {
+      if (!remainingState.isPaused && liveRate > 1.02) {
         const catchUpSec = Math.max(1, Math.round(lagSec / (liveRate - 1.0)));
         const catchUpLabel = formatCompactDuration(catchUpSec);
-        const titlePrefix = remainingState.isPaused
-          ? `Paused ${lagLabel} behind live · Resuming at ${formatDisplaySpeed(liveRate)}× catches up in ${catchUpLabel}`
-          : `${lagLabel} behind live · Catching up at ${formatDisplaySpeed(liveRate)}×`;
         return {
           visible: true,
           mode: 'live-catchup',
           text: `−${lagLabel} · Live in ${catchUpLabel} @ ${formatDisplaySpeed(liveRate)}×`,
-          title: `${titlePrefix} · Click to jump to live edge`,
+          title: `Catching up at ${formatDisplaySpeed(liveRate)}× · Click to jump to live edge`,
           clickable: true,
         };
       }
@@ -570,7 +567,7 @@
         visible: true,
         mode: 'live-behind',
         text: `${lagLabel} behind Live`,
-        title: `${remainingState.isPaused ? 'Paused · ' : ''}Increase speed above 1× to catch up, or click to jump to live edge`,
+        title: 'Behind live · Increase speed above 1× to catch up, or click to jump to live edge',
         clickable: true,
       };
     }
@@ -723,9 +720,22 @@
     if (timeEl.textContent !== model.text) {
       timeEl.textContent = model.text;
     }
+    const prevSlotMode = slotBtn.getAttribute('data-slot-mode') || '';
+    slotBtn.setAttribute('data-slot-mode', model.mode || '');
     const nextTitle = model.title || '';
     if (slotBtn.title !== nextTitle) {
-      slotBtn.title = nextTitle;
+      const isHoveredSameMode =
+        prevSlotMode === model.mode &&
+        typeof slotBtn.matches === 'function' &&
+        slotBtn.matches(':hover');
+      if (isHoveredSameMode) {
+        slotBtn.setAttribute('data-pending-title', nextTitle);
+      } else {
+        slotBtn.removeAttribute('data-pending-title');
+        slotBtn.title = nextTitle;
+      }
+    } else {
+      slotBtn.removeAttribute('data-pending-title');
     }
     const shouldDisable = !model.clickable;
     if (slotBtn.disabled !== shouldDisable) {
@@ -1695,6 +1705,19 @@
     const remainingSlotBtn = bar.querySelector('.cadence-remaining-slot');
     if (remainingSlotBtn) {
       remainingSlotBtn.addEventListener(
+        'mouseleave',
+        () => {
+          const pendingTitle = remainingSlotBtn.getAttribute('data-pending-title');
+          if (pendingTitle !== null) {
+            remainingSlotBtn.removeAttribute('data-pending-title');
+            if (remainingSlotBtn.title !== pendingTitle) {
+              remainingSlotBtn.title = pendingTitle;
+            }
+          }
+        },
+        { signal: lifecycleSignal }
+      );
+      remainingSlotBtn.addEventListener(
         'click',
         () => {
           if (remainingSlotBtn.disabled) return;
@@ -1997,6 +2020,16 @@
             isPaused: Boolean(payload.isPaused),
             hidden: Boolean(payload.hidden),
           };
+          if (
+            !remainingState.isLive &&
+            typeof remainingState.rawRemainingSec === 'number' &&
+            remainingState.rawRemainingSec > 2.5
+          ) {
+            const existingBanner = document.querySelector('.cadence-stopped-banner');
+            if (existingBanner) {
+              existingBanner.classList.remove('cadence-visible');
+            }
+          }
           const nowLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
           const hasAboveOneOverride = Boolean(
             currentChannel &&

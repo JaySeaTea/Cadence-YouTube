@@ -1201,12 +1201,38 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
       currentVideo.durationSec,
       Math.max(0, currentTimeRef.current + deltaSec)
     );
+    const label = deltaSec < 0 ? `Replay ${Math.abs(deltaSec)}s` : `Skip +${deltaSec}s`;
+
+    if (deltaSec > 0 && target >= currentVideo.durationSec - 0.65) {
+      syncTime(currentVideo.durationSec);
+      setIsPlaying(false);
+      triggerToast(`${label} · ${formatTime(currentVideo.durationSec)}`);
+      if (settings.enabled && settings.stopAfterVideoEnds) {
+        setAutoAdvancingCountdown(false);
+        setStoppedByCadence(true);
+        const contextLabel =
+          playlistMode === 'watch_later'
+            ? 'Watch Later playlist'
+            : playlistMode === 'creator_playlist'
+              ? 'Saved creator playlist'
+              : 'Up Next autoplay';
+        onAddLog(
+          `${label} stopped at video end`,
+          `Blocked ${contextLabel} from advancing after "${currentVideo.title}"`
+        );
+      } else {
+        setStoppedByCadence(false);
+        setAutoAdvancingCountdown(true);
+        onAddLog(label, `Reached end of "${currentVideo.title}" — auto-advance active`);
+      }
+      return;
+    }
+
     syncTime(target);
-    if (target < currentVideo.durationSec - 0.25) {
+    if (target < currentVideo.durationSec - 0.65) {
       setStoppedByCadence(false);
       setAutoAdvancingCountdown(false);
     }
-    const label = deltaSec < 0 ? `Replay ${Math.abs(deltaSec)}s` : `Skip +${deltaSec}s`;
     triggerToast(`${label} · ${formatTime(target)}`);
     onAddLog(label, `Seeked "${currentVideo.title}" to ${formatTime(target)}`);
   };
@@ -1297,23 +1323,20 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
         };
       }
       const lagLabel = formatCompactDuration(Math.max(1, dvrLagSec));
-      if (playbackSpeed > 1.02) {
+      if (isPlaying && playbackSpeed > 1.02) {
         const catchUpSec = Math.max(1, Math.round(dvrLagSec / (playbackSpeed - 1.0)));
         const catchUpLabel = formatCompactDuration(catchUpSec);
-        const titlePrefix = !isPlaying
-          ? `Paused ${lagLabel} behind live · Resuming at ${formatSpeed(playbackSpeed)}× catches up in ${catchUpLabel}`
-          : `${lagLabel} behind live · Catching up at ${formatSpeed(playbackSpeed)}×`;
         return {
           mode: 'live-catchup' as const,
           text: `−${lagLabel} · Live in ${catchUpLabel} @ ${formatSpeed(playbackSpeed)}×`,
-          title: `${titlePrefix} · Click to jump to live edge`,
+          title: `Catching up at ${formatSpeed(playbackSpeed)}× · Click to jump to live edge`,
           clickable: true,
         };
       }
       return {
         mode: 'live-behind' as const,
         text: `${lagLabel} behind Live`,
-        title: `${!isPlaying ? 'Paused · ' : ''}Increase speed above 1× to catch up, or click to jump to live edge`,
+        title: 'Behind live · Increase speed above 1× to catch up, or click to jump to live edge',
         clickable: true,
       };
     }
@@ -1904,9 +1927,32 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           syncTime(targetTime);
                         }
                       } else {
+                        if (targetTime >= currentVideo.durationSec - 0.65) {
+                          syncTime(currentVideo.durationSec);
+                          setIsPlaying(false);
+                          if (settings.enabled && settings.stopAfterVideoEnds) {
+                            setAutoAdvancingCountdown(false);
+                            setStoppedByCadence(true);
+                            const contextLabel =
+                              playlistMode === 'watch_later'
+                                ? 'Watch Later playlist'
+                                : playlistMode === 'creator_playlist'
+                                  ? 'Saved creator playlist'
+                                  : 'Up Next autoplay';
+                            onAddLog(
+                              'Timeline scrub stopped at video end',
+                              `Blocked ${contextLabel} from advancing after "${currentVideo.title}"`
+                            );
+                          } else {
+                            setStoppedByCadence(false);
+                            setAutoAdvancingCountdown(true);
+                          }
+                          return;
+                        }
                         syncTime(targetTime);
                       }
                       setStoppedByCadence(false);
+                      setAutoAdvancingCountdown(false);
                     }}
                   >
                     <svg

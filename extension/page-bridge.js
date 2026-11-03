@@ -71,6 +71,7 @@
   let observedPlayerEl = null;
   let playerClassObserver = null;
   let postSpeedVerifyTimer = null;
+  let playlistSuppressedByCadence = false;
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -83,8 +84,34 @@
     );
   }
 
+  function setPlaylistAutoAdvanceFlag(playlistManager, allow) {
+    if (!playlistManager) return;
+    const targets = [
+      playlistManager,
+      playlistManager.polymerController,
+      playlistManager.inst,
+    ];
+    for (const target of targets) {
+      if (target && typeof target === 'object') {
+        try {
+          if ('canAutoAdvance_' in target || target === playlistManager) {
+            target.canAutoAdvance_ = allow;
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  function restorePlaylistAutoAdvanceIfNeeded() {
+    if (!playlistSuppressedByCadence) return;
+    playlistSuppressedByCadence = false;
+    const playlistManager = document.querySelector('yt-playlist-manager');
+    setPlaylistAutoAdvanceFlag(playlistManager, true);
+  }
+
   function markUserNavigationIntent() {
     userInitiatedNavUntil = Date.now() + 4000;
+    restorePlaylistAutoAdvanceIfNeeded();
   }
 
   function parseVideoIdFromHref(rawHref) {
@@ -253,6 +280,36 @@
         liveHeadHysteresisBehind = false;
       }
 
+      if (
+        e.button === 0 &&
+        config.enabled &&
+        config.stopAfterVideoEnds &&
+        isSupportedWatchPage() &&
+        Date.now() > userInitiatedNavUntil &&
+        target.closest('.ytp-progress-bar, .ytp-progress-bar-container')
+      ) {
+        const player = getMoviePlayer();
+        const video = getMainVideo();
+        if (video && !isAdPlaying(player) && !video.loop && !isLiveBroadcast(player, video)) {
+          const barEl =
+            target.closest('.ytp-progress-bar') ||
+            (player && player.querySelector('.ytp-progress-bar'));
+          const effectiveDur = resolveEffectiveVodDurationSec(player, video);
+          if (barEl && effectiveDur !== null && effectiveDur > 2.5) {
+            const rect = barEl.getBoundingClientRect();
+            if (rect.width > 40) {
+              const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+              if (ratio * effectiveDur >= effectiveDur - 0.65) {
+                e.preventDefault();
+                e.stopPropagation();
+                triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
+                return;
+              }
+            }
+          }
+        }
+      }
+
       if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
         const hint = extractCardPreviewHint(target);
         if (hint) {
@@ -262,6 +319,44 @@
             startFastDetectionBurst();
           }
         }
+      }
+    },
+    { capture: true, signal: bridgeSignal }
+  );
+
+  document.addEventListener(
+    'pointerup',
+    (e) => {
+      if (
+        e.button !== 0 ||
+        !config.enabled ||
+        !config.stopAfterVideoEnds ||
+        !isSupportedWatchPage() ||
+        Date.now() <= userInitiatedNavUntil
+      ) {
+        return;
+      }
+      const player = getMoviePlayer();
+      const video = getMainVideo();
+      if (!player || !video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) {
+        return;
+      }
+      if (!player.classList.contains('ytp-progress-bar-drag')) {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target || !target.closest('.ytp-progress-bar, .ytp-progress-bar-container')) {
+          return;
+        }
+      }
+      const barEl = player.querySelector('.ytp-progress-bar');
+      const effectiveDur = resolveEffectiveVodDurationSec(player, video);
+      if (!barEl || effectiveDur === null || effectiveDur <= 2.5) return;
+      const rect = barEl.getBoundingClientRect();
+      if (rect.width <= 40) return;
+      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      if (ratio * effectiveDur >= effectiveDur - 0.65) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
       }
     },
     { capture: true, signal: bridgeSignal }
@@ -364,16 +459,51 @@
       if (e.shiftKey && (e.key === 'N' || e.key === 'n' || e.key === 'P' || e.key === 'p')) {
         markUserNavigationIntent();
       }
+      const activeEl = e.target;
+      const isTyping =
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        Boolean(activeEl && activeEl.isContentEditable);
+
+      if (
+        !isTyping &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        (e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L' || e.key === 'End') &&
+        config.enabled &&
+        config.stopAfterVideoEnds &&
+        isSupportedWatchPage() &&
+        Date.now() > userInitiatedNavUntil
+      ) {
+        const player = getMoviePlayer();
+        const video = getMainVideo();
+        if (video && !isAdPlaying(player) && !video.loop && !isLiveBroadcast(player, video)) {
+          const effectiveDur = resolveEffectiveVodDurationSec(player, video);
+          if (effectiveDur !== null && effectiveDur > 2.5) {
+            let cur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+            const streamCur = readPlayerStreamTimeSec(player);
+            if (streamCur !== null && streamCur > cur) {
+              cur = streamCur;
+            }
+            const keyDelta =
+              e.key === 'End' ? effectiveDur : e.key === 'l' || e.key === 'L' ? 10 : 5;
+            if (cur + keyDelta >= effectiveDur - 0.65) {
+              e.preventDefault();
+              e.stopPropagation();
+              triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
+              return;
+            }
+          }
+        }
+      }
+
       if (e.shiftKey && (e.key === '>' || e.key === '<' || e.key === '.' || e.key === ',')) {
         recentNativeSpeedGestureUntil = Date.now() + 2500;
         if (e.key === '<' || e.key === ',') {
           nonDvrSubOneRuleClamped = false;
         }
-        const activeEl = e.target;
-        const isTyping =
-          activeEl instanceof HTMLInputElement ||
-          activeEl instanceof HTMLTextAreaElement ||
-          Boolean(activeEl && activeEl.isContentEditable);
         if (!isTyping && config.enabled) {
           const player = getMoviePlayer();
           const video = getMainVideo();
@@ -1727,8 +1857,44 @@
     }, 40);
   }
 
+  function resolveEffectiveVodDurationSec(player, video) {
+    const candidates = [];
+    if (video && Number.isFinite(video.duration) && video.duration > 0) {
+      candidates.push(video.duration);
+    }
+    try {
+      if (player && typeof player.getDuration === 'function') {
+        const pDur = Number(player.getDuration());
+        if (Number.isFinite(pDur) && pDur > 0) {
+          candidates.push(pDur);
+        }
+      }
+    } catch (_) {}
+    try {
+      if (player && typeof player.getProgressState === 'function') {
+        const ps = player.getProgressState();
+        if (ps && Number.isFinite(ps.duration) && ps.duration > 0) {
+          candidates.push(ps.duration);
+        }
+      }
+    } catch (_) {}
+    if (candidates.length === 0) return null;
+    return Math.min(...candidates);
+  }
+
+  function hasActivePlaylistContext() {
+    if (new URLSearchParams(location.search).has('list')) return true;
+    const playlistPanel = document.querySelector(
+      'ytd-watch-flexy ytd-playlist-panel-renderer:not([hidden]), ytd-playlist-panel-renderer#playlist:not([hidden])'
+    );
+    return Boolean(playlistPanel && playlistPanel.offsetParent !== null);
+  }
+
   function suppressNativeAutoplayAndPlaylist() {
-    if (!config.enabled || !config.stopAfterVideoEnds) return;
+    if (!config.enabled || !config.stopAfterVideoEnds) {
+      restorePlaylistAutoAdvanceIfNeeded();
+      return;
+    }
     const player = getMoviePlayer();
     try {
       if (player && typeof player.setAutonavState === 'function') {
@@ -1748,22 +1914,99 @@
 
     const playlistManager = document.querySelector('yt-playlist-manager');
     if (playlistManager && Date.now() > userInitiatedNavUntil) {
-      try {
-        playlistManager.canAutoAdvance_ = false;
-      } catch (_) {}
+      setPlaylistAutoAdvanceFlag(playlistManager, false);
+      playlistSuppressedByCadence = true;
     }
   }
 
-  function checkNearVideoEnd() {
+  function triggerEndOfVideoStop(player, video, seekNearEndTarget = null, forceBanner = false) {
+    if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return false;
+    if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return false;
+    if (Date.now() <= userInitiatedNavUntil) return false;
+
+    const currentVideoId = getCurrentVideoId(player) || 'active';
+    const alreadyHeld = heldAtEndVideoId === currentVideoId;
+    heldAtEndVideoId = currentVideoId;
+    window.__CADENCE_HELD_VIDEO_ID__ = currentVideoId;
+
+    suppressNativeAutoplayAndPlaylist();
+
+    try {
+      if (player && typeof player.pauseVideo === 'function') {
+        player.pauseVideo();
+      }
+    } catch (_) {}
+    try {
+      video.pause();
+    } catch (_) {}
+
+    if (
+      typeof seekNearEndTarget === 'number' &&
+      Number.isFinite(seekNearEndTarget) &&
+      seekNearEndTarget >= 0
+    ) {
+      try {
+        if (player && typeof player.seekTo === 'function') {
+          player.seekTo(seekNearEndTarget, true);
+        } else {
+          video.currentTime = seekNearEndTarget;
+        }
+      } catch (_) {
+        try {
+          video.currentTime = seekNearEndTarget;
+        } catch (__) {}
+      }
+      try {
+        if (player && typeof player.pauseVideo === 'function') {
+          player.pauseVideo();
+        }
+      } catch (_) {}
+      try {
+        video.pause();
+      } catch (_) {}
+      setTimeout(() => {
+        if (heldAtEndVideoId === currentVideoId && Date.now() > userInitiatedNavUntil) {
+          suppressNativeAutoplayAndPlaylist();
+          const pLater = getMoviePlayer();
+          const vLater = getMainVideo();
+          try {
+            if (pLater && typeof pLater.pauseVideo === 'function') {
+              pLater.pauseVideo();
+            }
+          } catch (_) {}
+          if (vLater && !vLater.paused) {
+            try {
+              vLater.pause();
+            } catch (_) {}
+          }
+          emitTimeRemaining(true);
+        }
+      }, 60);
+    }
+
+    if (!alreadyHeld || forceBanner) {
+      postToContent('PLAYBACK_STOPPED', {
+        videoId: currentVideoId,
+        hasPlaylist: hasActivePlaylistContext(),
+      });
+    }
+    emitTimeRemaining(true);
+    return true;
+  }
+
+  function checkNearVideoEnd(fromSeekEvent = false) {
     if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return;
     const player = getMoviePlayer();
     const video = getMainVideo();
     if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return;
 
-    const duration = video.duration;
-    if (!Number.isFinite(duration) || duration <= 2.5) return;
+    const duration = resolveEffectiveVodDurationSec(player, video);
+    if (duration === null || !Number.isFinite(duration) || duration <= 2.5) return;
 
-    const remaining = duration - video.currentTime;
+    const mediaCur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const streamCur = readPlayerStreamTimeSec(player);
+    const activeCur = streamCur !== null && streamCur > mediaCur ? streamCur : mediaCur;
+    const remaining = duration - activeCur;
     const currentVideoId = getCurrentVideoId(player) || 'active';
 
     if (remaining > 2.5 && heldAtEndVideoId === currentVideoId) {
@@ -1771,28 +2014,14 @@
       window.__CADENCE_HELD_VIDEO_ID__ = null;
     }
 
-    const threshold = Math.max(0.28, 0.24 * (video.playbackRate || 1));
+    const threshold = Math.max(0.4, 0.32 * (video.playbackRate || 1));
     if (
-      !video.paused &&
-      remaining > 0 &&
-      remaining <= threshold &&
+      (fromSeekEvent ? remaining <= 0.55 : !video.paused && remaining > 0 && remaining <= threshold) &&
       heldAtEndVideoId !== currentVideoId &&
       Date.now() > userInitiatedNavUntil
     ) {
-      heldAtEndVideoId = currentVideoId;
-      window.__CADENCE_HELD_VIDEO_ID__ = currentVideoId;
-      suppressNativeAutoplayAndPlaylist();
-      try {
-        if (player && typeof player.pauseVideo === 'function') {
-          player.pauseVideo();
-        }
-      } catch (_) {}
-      video.pause();
-
-      postToContent('PLAYBACK_STOPPED', {
-        videoId: currentVideoId,
-        hasPlaylist: new URLSearchParams(location.search).has('list'),
-      });
+      const clampTarget = remaining <= 0.08 ? Math.max(0, duration - 0.55) : null;
+      triggerEndOfVideoStop(player, video, clampTarget, false);
     }
   }
 
@@ -1904,6 +2133,14 @@
     );
 
     video.addEventListener(
+      'seeking',
+      () => {
+        checkNearVideoEnd(true);
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
       'seeked',
       () => {
         const pNow = getMoviePlayer();
@@ -1917,9 +2154,22 @@
           pendingSeekUntil = 0;
         }
         dvrRestoreAttempts = 0;
+        checkNearVideoEnd(true);
         checkNonDvrSlowForcedCatchup(pNow, video);
         maybeRestoreDvrCatchupSpeed();
         emitTimeRemaining(true);
+      },
+      { signal: bridgeSignal }
+    );
+
+    video.addEventListener(
+      'ended',
+      () => {
+        const pNow = getMoviePlayer();
+        const effectiveDur = resolveEffectiveVodDurationSec(pNow, video);
+        if (effectiveDur !== null && effectiveDur > 2.5) {
+          triggerEndOfVideoStop(pNow, video, Math.max(0, effectiveDur - 0.55), false);
+        }
       },
       { signal: bridgeSignal }
     );
@@ -2347,18 +2597,25 @@
           if (vodStreamCur !== null && player && typeof player.seekTo === 'function') {
             cur = vodStreamCur;
           }
-          const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
+          const dur = resolveEffectiveVodDurationSec(player, video);
           if (deltaSec < 0) {
             heldAtEndVideoId = null;
             window.__CADENCE_HELD_VIDEO_ID__ = null;
           }
+          if (
+            deltaSec > 0 &&
+            config.enabled &&
+            config.stopAfterVideoEnds &&
+            dur !== null &&
+            dur > 1.5 &&
+            cur + deltaSec >= dur - 0.65
+          ) {
+            triggerEndOfVideoStop(player, video, Math.max(0, dur - 0.55), true);
+            return;
+          }
           let targetTime = Math.max(0, cur + deltaSec);
           if (dur !== null) {
-            const upperCap =
-              deltaSec > 0 && config.enabled && config.stopAfterVideoEnds && dur > 1
-                ? Math.max(0, dur - 0.35)
-                : dur;
-            targetTime = Math.min(upperCap, targetTime);
+            targetTime = Math.min(dur, targetTime);
           }
           try {
             if (player && typeof player.seekTo === 'function') {
