@@ -70,6 +70,7 @@
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
   let barResizeObserver = null;
+  let bannerProtectedUntil = 0;
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -1065,6 +1066,7 @@
     textEl.textContent = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
+    bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
 
@@ -2023,7 +2025,8 @@
           if (
             !remainingState.isLive &&
             typeof remainingState.rawRemainingSec === 'number' &&
-            remainingState.rawRemainingSec > 2.5
+            remainingState.rawRemainingSec > 2.5 &&
+            Date.now() > bannerProtectedUntil
           ) {
             const existingBanner = document.querySelector('.cadence-stopped-banner');
             if (existingBanner) {

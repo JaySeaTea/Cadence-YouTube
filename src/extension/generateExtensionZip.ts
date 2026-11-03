@@ -302,6 +302,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let playerClassObserver = null;
   let postSpeedVerifyTimer = null;
   let playlistSuppressedByCadence = false;
+  let progressBarDragActive = false;
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -521,6 +522,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const player = getMoviePlayer();
         const video = getMainVideo();
         if (video && !isAdPlaying(player) && !video.loop && !isLiveBroadcast(player, video)) {
+          progressBarDragActive = true;
           const barEl =
             target.closest('.ytp-progress-bar') ||
             (player && player.querySelector('.ytp-progress-bar'));
@@ -530,6 +532,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (rect.width > 40) {
               const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
               if (ratio * effectiveDur >= effectiveDur - 0.65) {
+                progressBarDragActive = false;
                 e.preventDefault();
                 e.stopPropagation();
                 triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
@@ -554,40 +557,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     { capture: true, signal: bridgeSignal }
   );
 
-  document.addEventListener(
-    'pointerup',
-    (e) => {
-      if (
-        e.button !== 0 ||
-        !config.enabled ||
-        !config.stopAfterVideoEnds ||
-        !isSupportedWatchPage() ||
-        Date.now() <= userInitiatedNavUntil
-      ) {
-        return;
-      }
-      const player = getMoviePlayer();
-      const video = getMainVideo();
-      if (!player || !video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) {
-        return;
-      }
-      if (!player.classList.contains('ytp-progress-bar-drag')) {
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target || !target.closest('.ytp-progress-bar, .ytp-progress-bar-container')) {
-          return;
+  function handleProgressBarReleaseAtEnd(e) {
+    const wasDraggingBar = progressBarDragActive;
+    progressBarDragActive = false;
+    if (
+      e.button !== 0 ||
+      !config.enabled ||
+      !config.stopAfterVideoEnds ||
+      !isSupportedWatchPage() ||
+      Date.now() <= userInitiatedNavUntil
+    ) {
+      return;
+    }
+    const player = getMoviePlayer();
+    const video = getMainVideo();
+    if (!player || !video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) {
+      return;
+    }
+    const target = e.target instanceof Element ? e.target : null;
+    const isPlayerScrubbing =
+      wasDraggingBar ||
+      player.classList.contains('ytp-progress-bar-drag') ||
+      player.classList.contains('ytp-scrubbing-mode') ||
+      Boolean(target && target.closest('.ytp-progress-bar, .ytp-progress-bar-container'));
+    if (!isPlayerScrubbing) {
+      return;
+    }
+    const barEl = player.querySelector('.ytp-progress-bar');
+    const effectiveDur = resolveEffectiveVodDurationSec(player, video);
+    if (!barEl || effectiveDur === null || effectiveDur <= 2.5) return;
+    const rect = barEl.getBoundingClientRect();
+    if (rect.width <= 40) return;
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    if (ratio * effectiveDur >= effectiveDur - 0.85) {
+      triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
+      setTimeout(() => {
+        const pNow = getMoviePlayer();
+        const vNow = getMainVideo();
+        const durNow = resolveEffectiveVodDurationSec(pNow, vNow);
+        if (vNow && durNow !== null && durNow > 2.5) {
+          triggerEndOfVideoStop(pNow, vNow, Math.max(0, durNow - 0.55), true);
         }
-      }
-      const barEl = player.querySelector('.ytp-progress-bar');
-      const effectiveDur = resolveEffectiveVodDurationSec(player, video);
-      if (!barEl || effectiveDur === null || effectiveDur <= 2.5) return;
-      const rect = barEl.getBoundingClientRect();
-      if (rect.width <= 40) return;
-      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-      if (ratio * effectiveDur >= effectiveDur - 0.65) {
-        e.preventDefault();
-        e.stopPropagation();
-        triggerEndOfVideoStop(player, video, Math.max(0, effectiveDur - 0.55), true);
-      }
+      }, 45);
+    }
+  }
+
+  document.addEventListener('pointerup', handleProgressBarReleaseAtEnd, {
+    capture: true,
+    signal: bridgeSignal,
+  });
+
+  document.addEventListener('mouseup', handleProgressBarReleaseAtEnd, {
+    capture: true,
+    signal: bridgeSignal,
+  });
+
+  document.addEventListener(
+    'pointercancel',
+    () => {
+      progressBarDragActive = false;
     },
     { capture: true, signal: bridgeSignal }
   );
@@ -1790,11 +1818,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     wasAtLiveHead = false;
     const rate = mediaRate;
-    const invalidDuration = !Number.isFinite(video.duration) || video.duration <= 0;
-    const rawDurationSec = invalidDuration ? null : video.duration;
+    const effectiveVodDur = resolveEffectiveVodDurationSec(player, video);
+    const invalidDuration = effectiveVodDur === null || !Number.isFinite(effectiveVodDur) || effectiveVodDur <= 0;
+    const rawDurationSec = invalidDuration ? null : effectiveVodDur;
+    let vodCurSec = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const vodStreamCurSec = readPlayerStreamTimeSec(player);
+    if (vodStreamCurSec !== null && vodStreamCurSec > vodCurSec) {
+      vodCurSec = vodStreamCurSec;
+    }
+    const isHeldCurrentVideo = Boolean(videoId && heldAtEndVideoId === videoId);
     const rawRemainingSec = invalidDuration
       ? null
-      : Math.max(0, video.duration - video.currentTime);
+      : isHeldCurrentVideo
+        ? 0
+        : Math.max(0, rawDurationSec - vodCurSec);
     const realRemSec = rawRemainingSec === null ? null : Math.max(0, Math.round(rawRemainingSec / rate));
     const realBucket =
       realRemSec === null
@@ -1803,7 +1840,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ? 's' + realRemSec
           : 'm' + Math.round(realRemSec / 60);
     const durBucket = rawDurationSec === null ? 'na' : String(Math.round(rawDurationSec));
-    const sig = [videoId, 'vod', realBucket, durBucket, rate.toFixed(2)].join('|');
+    const sig = [
+      videoId,
+      'vod',
+      isHeldCurrentVideo ? 'held' : 'open',
+      realBucket,
+      durBucket,
+      rate.toFixed(2),
+    ].join('|');
 
     if (!force && sig === lastRemainingSignature) return;
     lastRemainingEmitAt = now;
@@ -2235,7 +2279,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const mediaCur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const streamCur = readPlayerStreamTimeSec(player);
-    const activeCur = streamCur !== null && streamCur > mediaCur ? streamCur : mediaCur;
+    let scrubBarCur = null;
+    if (fromSeekEvent && player) {
+      const barEl = player.querySelector('.ytp-progress-bar');
+      if (barEl) {
+        const ariaNow = Number(barEl.getAttribute('aria-valuenow'));
+        const ariaMax = Number(barEl.getAttribute('aria-valuemax'));
+        if (
+          Number.isFinite(ariaNow) &&
+          Number.isFinite(ariaMax) &&
+          ariaMax > 2.5 &&
+          Math.abs(ariaMax - duration) <= 5
+        ) {
+          scrubBarCur = ariaNow;
+        }
+      }
+    }
+    const activeCur = Math.max(
+      mediaCur,
+      streamCur !== null ? streamCur : 0,
+      scrubBarCur !== null ? scrubBarCur : 0
+    );
     const remaining = duration - activeCur;
     const currentVideoId = getCurrentVideoId(player) || 'active';
 
@@ -2246,12 +2310,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const threshold = Math.max(0.4, 0.32 * (video.playbackRate || 1));
     if (
-      (fromSeekEvent ? remaining <= 0.55 : !video.paused && remaining > 0 && remaining <= threshold) &&
+      (fromSeekEvent
+        ? remaining <= 0.85
+        : !video.paused && remaining <= threshold) &&
       heldAtEndVideoId !== currentVideoId &&
       Date.now() > userInitiatedNavUntil
     ) {
-      const clampTarget = remaining <= 0.08 ? Math.max(0, duration - 0.55) : null;
-      triggerEndOfVideoStop(player, video, clampTarget, false);
+      const clampTarget = remaining <= 0.12 ? Math.max(0, duration - 0.55) : null;
+      triggerEndOfVideoStop(player, video, clampTarget, Boolean(fromSeekEvent));
     }
   }
 
@@ -2398,7 +2464,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const pNow = getMoviePlayer();
         const effectiveDur = resolveEffectiveVodDurationSec(pNow, video);
         if (effectiveDur !== null && effectiveDur > 2.5) {
-          triggerEndOfVideoStop(pNow, video, Math.max(0, effectiveDur - 0.55), false);
+          triggerEndOfVideoStop(pNow, video, Math.max(0, effectiveDur - 0.55), true);
         }
       },
       { signal: bridgeSignal }
@@ -2407,6 +2473,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'pause',
       () => {
+        checkNearVideoEnd(true);
         emitTimeRemaining(true);
       },
       { signal: bridgeSignal }
@@ -3142,6 +3209,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let barMountRetryTimer = null;
   let barMountAttempts = 0;
   let barResizeObserver = null;
+  let bannerProtectedUntil = 0;
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -4137,6 +4205,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     textEl.textContent = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
+    bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
 
@@ -5095,7 +5164,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (
             !remainingState.isLive &&
             typeof remainingState.rawRemainingSec === 'number' &&
-            remainingState.rawRemainingSec > 2.5
+            remainingState.rawRemainingSec > 2.5 &&
+            Date.now() > bannerProtectedUntil
           ) {
             const existingBanner = document.querySelector('.cadence-stopped-banner');
             if (existingBanner) {
@@ -6247,7 +6317,7 @@ html[dark] .cadence-rule-plus {
   left: 20px;
   right: 20px;
   bottom: 68px;
-  z-index: 70;
+  z-index: 1200;
   display: flex;
   align-items: center;
   justify-content: space-between;

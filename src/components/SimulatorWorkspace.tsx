@@ -1895,64 +1895,102 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 {/* Bottom Player Scrub Bar & Controls */}
                 <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-3 pt-6">
                   <div
-                    className={`group relative h-1.5 bg-white/25 rounded-full mb-3 ${
+                    className={`group relative h-1.5 bg-white/25 rounded-full mb-3 touch-none ${
                       isAdPlaying || (isLiveStream && !liveDvrEnabled)
                         ? 'cursor-default'
                         : 'cursor-pointer'
                     }`}
-                    onClick={(e) => {
-                      if (isAdPlaying) return;
+                    onPointerDown={(e) => {
+                      if (e.button !== 0 || isAdPlaying) return;
                       if (isLiveStream && !liveDvrEnabled) {
                         triggerBarToast('Rewind unavailable on this live stream', 'live');
                         triggerToast('Rewind unavailable on this live stream', true, true);
                         return;
                       }
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-                      const targetTime = ratio * timelineHorizon;
-                      if (isLiveStream) {
-                        if (timelineHorizon - targetTime <= 2) {
-                          wasBehindLiveRef.current = false;
-                          syncTime(liveEdgeRef.current);
-                          if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
-                            setSessionOverrideSpeed(null);
-                            setPlaybackSpeed(baselineSpeed);
+                      const barEl = e.currentTarget;
+                      try {
+                        barEl.setPointerCapture(e.pointerId);
+                      } catch {
+                        // Ignore pointer capture errors on synthetic events
+                      }
+                      const applyScrubAtClientX = (clientX: number, isRelease: boolean) => {
+                        const rect = barEl.getBoundingClientRect();
+                        if (rect.width <= 0) return;
+                        const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+                        const targetTime = ratio * timelineHorizon;
+                        if (isLiveStream) {
+                          if (timelineHorizon - targetTime <= 2) {
+                            wasBehindLiveRef.current = false;
+                            syncTime(liveEdgeRef.current);
+                            if (sessionOverrideSpeed !== null && sessionOverrideSpeed > 1.01) {
+                              setSessionOverrideSpeed(null);
+                              setPlaybackSpeed(baselineSpeed);
+                            }
+                            if (isRelease) {
+                              onAddLog(
+                                'Scrubbed to Live broadcast head (1.0×)',
+                                `Reset active speed to 1.0× on "${currentVideo.title}"`
+                              );
+                            }
+                          } else {
+                            wasBehindLiveRef.current = true;
+                            syncTime(targetTime);
                           }
-                          onAddLog(
-                            'Scrubbed to Live broadcast head (1.0×)',
-                            `Reset active speed to 1.0× on "${currentVideo.title}"`
-                          );
-                        } else {
-                          wasBehindLiveRef.current = true;
-                          syncTime(targetTime);
+                          setStoppedByCadence(false);
+                          setAutoAdvancingCountdown(false);
+                          return;
                         }
-                      } else {
-                        if (targetTime >= currentVideo.durationSec - 0.65) {
+
+                        if (targetTime >= currentVideo.durationSec - 0.85) {
                           syncTime(currentVideo.durationSec);
                           setIsPlaying(false);
                           if (settings.enabled && settings.stopAfterVideoEnds) {
                             setAutoAdvancingCountdown(false);
                             setStoppedByCadence(true);
-                            const contextLabel =
-                              playlistMode === 'watch_later'
-                                ? 'Watch Later playlist'
-                                : playlistMode === 'creator_playlist'
-                                  ? 'Saved creator playlist'
-                                  : 'Up Next autoplay';
-                            onAddLog(
-                              'Timeline scrub stopped at video end',
-                              `Blocked ${contextLabel} from advancing after "${currentVideo.title}"`
-                            );
-                          } else {
+                            if (isRelease) {
+                              const contextLabel =
+                                playlistMode === 'watch_later'
+                                  ? 'Watch Later playlist'
+                                  : playlistMode === 'creator_playlist'
+                                    ? 'Saved creator playlist'
+                                    : 'Up Next autoplay';
+                              onAddLog(
+                                'Timeline scrub stopped at video end',
+                                `Blocked ${contextLabel} from advancing after "${currentVideo.title}"`
+                              );
+                            }
+                          } else if (isRelease) {
                             setStoppedByCadence(false);
                             setAutoAdvancingCountdown(true);
                           }
                           return;
                         }
+
                         syncTime(targetTime);
-                      }
-                      setStoppedByCadence(false);
-                      setAutoAdvancingCountdown(false);
+                        setStoppedByCadence(false);
+                        setAutoAdvancingCountdown(false);
+                      };
+
+                      applyScrubAtClientX(e.clientX, false);
+
+                      const onMove = (moveEvt: PointerEvent) => {
+                        applyScrubAtClientX(moveEvt.clientX, false);
+                      };
+                      const onUp = (upEvt: PointerEvent) => {
+                        applyScrubAtClientX(upEvt.clientX, true);
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                        window.removeEventListener('pointercancel', onCancel);
+                      };
+                      const onCancel = () => {
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                        window.removeEventListener('pointercancel', onCancel);
+                      };
+
+                      window.addEventListener('pointermove', onMove);
+                      window.addEventListener('pointerup', onUp);
+                      window.addEventListener('pointercancel', onCancel);
                     }}
                   >
                     <svg
