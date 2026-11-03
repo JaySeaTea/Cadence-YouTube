@@ -31,6 +31,7 @@
   let pendingCardHint = null;
   let heldAtEndVideoId = window.__CADENCE_HELD_VIDEO_ID__ || null;
   let userInitiatedNavUntil = 0;
+  let replayGraceUntil = 0;
   let recentNativeSpeedGestureUntil = 0;
   let lastRemainingEmitAt = 0;
   let lastRemainingSignature = '';
@@ -1966,7 +1967,7 @@
   function triggerEndOfVideoStop(player, video, seekNearEndTarget = null, forceBanner = false) {
     if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return false;
     if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return false;
-    if (Date.now() <= userInitiatedNavUntil) return false;
+    if (Date.now() <= userInitiatedNavUntil || Date.now() <= replayGraceUntil) return false;
 
     const currentVideoId = getCurrentVideoId(player) || 'active';
     const alreadyHeld = heldAtEndVideoId === currentVideoId;
@@ -2009,7 +2010,11 @@
         video.pause();
       } catch (_) {}
       setTimeout(() => {
-        if (heldAtEndVideoId === currentVideoId && Date.now() > userInitiatedNavUntil) {
+        if (
+          heldAtEndVideoId === currentVideoId &&
+          Date.now() > userInitiatedNavUntil &&
+          Date.now() > replayGraceUntil
+        ) {
           suppressNativeAutoplayAndPlaylist();
           const pLater = getMoviePlayer();
           const vLater = getMainVideo();
@@ -2040,6 +2045,7 @@
 
   function checkNearVideoEnd(fromSeekEvent = false) {
     if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return;
+    if (Date.now() <= replayGraceUntil) return;
     const player = getMoviePlayer();
     const video = getMainVideo();
     if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return;
@@ -2049,8 +2055,18 @@
 
     const mediaCur = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const streamCur = readPlayerStreamTimeSec(player);
+    // Only trust #movie_player stream time over video.currentTime when they agree within 2.5s
+    // (avoids stale player.getCurrentTime() at EOF overriding a fresh backward seek or replay to 0:00)
+    const alignedStreamCur =
+      streamCur !== null && Math.abs(streamCur - mediaCur) <= 2.5 ? streamCur : null;
     let scrubBarCur = null;
-    if (fromSeekEvent && player) {
+    if (
+      fromSeekEvent &&
+      player &&
+      (progressBarDragActive ||
+        player.classList.contains('ytp-progress-bar-drag') ||
+        player.classList.contains('ytp-scrubbing-mode'))
+    ) {
       const barEl = player.querySelector('.ytp-progress-bar');
       if (barEl) {
         const ariaNow = Number(barEl.getAttribute('aria-valuenow'));
@@ -2067,7 +2083,7 @@
     }
     const activeCur = Math.max(
       mediaCur,
-      streamCur !== null ? streamCur : 0,
+      alignedStreamCur !== null ? alignedStreamCur : 0,
       scrubBarCur !== null ? scrubBarCur : 0
     );
     const remaining = duration - activeCur;
@@ -2698,16 +2714,52 @@
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
+          replayGraceUntil = Date.now() + 1400;
           heldAtEndVideoId = null;
           window.__CADENCE_HELD_VIDEO_ID__ = null;
+          lastRemainingSignature = '';
+          try {
+            if (player && typeof player.seekTo === 'function') {
+              player.seekTo(0, true);
+            }
+          } catch (_) {}
           if (video) {
-            video.currentTime = 0;
+            try {
+              video.currentTime = 0;
+            } catch (_) {}
             video.play().catch(() => {});
           }
-          if (player && typeof player.playVideo === 'function') {
-            player.playVideo();
-          }
+          try {
+            if (player && typeof player.playVideo === 'function') {
+              player.playVideo();
+            }
+          } catch (_) {}
+          enforceConfiguredSpeedNow();
           emitTimeRemaining(true);
+          setTimeout(() => {
+            const pLater = getMoviePlayer();
+            const vLater = getMainVideo();
+            if (vLater && vLater.currentTime > 3) {
+              try {
+                if (pLater && typeof pLater.seekTo === 'function') {
+                  pLater.seekTo(0, true);
+                }
+              } catch (_) {}
+              try {
+                vLater.currentTime = 0;
+              } catch (_) {}
+            }
+            if (vLater && vLater.paused) {
+              vLater.play().catch(() => {});
+              try {
+                if (pLater && typeof pLater.playVideo === 'function') {
+                  pLater.playVideo();
+                }
+              } catch (_) {}
+            }
+            enforceConfiguredSpeedNow();
+            emitTimeRemaining(true);
+          }, 90);
         } else if (payload.action === 'PLAY_NEXT_MANUAL') {
           markUserNavigationIntent();
           const player = getMoviePlayer();

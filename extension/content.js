@@ -1038,7 +1038,10 @@
       `;
       banner.querySelector('.cadence-replay-btn').addEventListener(
         'click',
-        () => {
+        (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          bannerProtectedUntil = 0;
           banner.classList.remove('cadence-visible');
           postToBridge('COMMAND', { action: 'REPLAY_VIDEO' });
         },
@@ -1046,7 +1049,10 @@
       );
       banner.querySelector('.cadence-play-next-btn').addEventListener(
         'click',
-        () => {
+        (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          bannerProtectedUntil = 0;
           banner.classList.remove('cadence-visible');
           postToBridge('COMMAND', { action: 'PLAY_NEXT_MANUAL' });
         },
@@ -1054,7 +1060,10 @@
       );
       banner.querySelector('.cadence-dismiss-btn').addEventListener(
         'click',
-        () => {
+        (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          bannerProtectedUntil = 0;
           banner.classList.remove('cadence-visible');
         },
         { signal: lifecycleSignal }
