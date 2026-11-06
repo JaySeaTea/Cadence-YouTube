@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for Cadence v1.5.2 patch release addressing GitHub Issues #21 (Live DVR countdown tooltip flicker) and #22 (playlist skip-ahead bypassing end-of-video stop), while keeping Chrome Web Store promotional graphics locked to v1.5.1.",
-  "updatedAt": "2026-11-03T04:38:58.165316224Z",
+  "summary": "Comprehensive implementation plan for Cadence v1.6.0 introducing:\n1. Feature #23: Disable Embedded Video Previews (disableVideoPreviews: true by default, 5th popup toggle, Playback & Feed Controls card on options page, blocking thumbnail previews on Home/Search/Sidebar while preserving /@channel trailers).\n2. Feature #24: Real-Time Per-Video & Global Lifetime Time Saved tracking (banked + projected saved time, continuous atomic persistence, End-of-Video banner savings readout, popup footer badge, and options page stat card with inline 'Forget Time Saved' reset flow and JSON backup/restore).\n3. Feature #26: Paginate, Sort, and Filter Saved Channel Rules on the Options page (10/25/50/All pagination, instant search by channel name/handle, preset category filter controls, and multi-mode sorting).\n4. Full runtime settingsSchemaVersion migration from 4 to 5 across background service worker, storage helpers, and companion web workspace while keeping CWS Studio assets locked at v1.5.1.",
+  "updatedAt": "2026-11-05T15:13:56.294876368Z",
   "requestFeedback": true,
   "userFacing": true
 }

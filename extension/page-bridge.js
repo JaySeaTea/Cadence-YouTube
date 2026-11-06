@@ -16,6 +16,7 @@
     hasSessionOverride: false,
     stopAfterVideoEnds: true,
     convertShortsToWatch: true,
+    disableVideoPreviews: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
@@ -74,6 +75,74 @@
   let postSpeedVerifyTimer = null;
   let playlistSuppressedByCadence = false;
   let progressBarDragActive = false;
+
+  let currentVideoTimeSavedSec = 0;
+  let unflushedTimeSavedDeltaSec = 0;
+  let lastSavedTickWallMs = 0;
+  let lastSavedTickVideoSec = null;
+  let lastTimeSavedFlushAt = 0;
+
+  function trackTimeSavedTick() {
+    const player = getMoviePlayer();
+    const video = getMainVideo();
+    if (!video || video.paused || isAdPlaying(player) || isLiveBroadcast(player, video)) {
+      lastSavedTickWallMs = Date.now();
+      lastSavedTickVideoSec = video ? video.currentTime : null;
+      return;
+    }
+    const now = Date.now();
+    if (lastSavedTickWallMs > 0) {
+      const dtWall = (now - lastSavedTickWallMs) / 1000;
+      const cur = video.currentTime;
+      const dtVideo = lastSavedTickVideoSec !== null ? Math.max(0, cur - lastSavedTickVideoSec) : 0;
+      if (dtWall > 0.05 && dtWall <= 1.5 && dtVideo > 0.02 && dtVideo <= 3.0) {
+        const rate = Number(video.playbackRate) || 1.0;
+        if (rate > 1.005) {
+          const delta = dtWall * (rate - 1.0);
+          if (delta > 0) {
+            currentVideoTimeSavedSec += delta;
+            unflushedTimeSavedDeltaSec += delta;
+          }
+        }
+      }
+    }
+    lastSavedTickWallMs = now;
+    lastSavedTickVideoSec = video.currentTime;
+
+    if (now - lastTimeSavedFlushAt > 5000) {
+      flushTimeSavedDelta();
+    }
+  }
+
+  function flushTimeSavedDelta() {
+    lastTimeSavedFlushAt = Date.now();
+    if (unflushedTimeSavedDeltaSec >= 0.5) {
+      const toSend = Math.round(unflushedTimeSavedDeltaSec);
+      if (toSend >= 1) {
+        postToContent('TIME_SAVED_DELTA', { deltaSec: toSend });
+        unflushedTimeSavedDeltaSec -= toSend;
+      }
+    }
+  }
+
+  function resetCurrentVideoTimeSaved() {
+    flushTimeSavedDelta();
+    currentVideoTimeSavedSec = 0;
+    unflushedTimeSavedDeltaSec = 0;
+    lastSavedTickWallMs = 0;
+    lastSavedTickVideoSec = null;
+  }
+
+  function suppressInlinePreviewPlayerIfNeeded() {
+    if (!config.enabled || config.disableVideoPreviews === false) return;
+    if (document.body && document.body.getAttribute('page-subtype') === 'channels') return;
+    const inlinePlayer = document.querySelector('ytd-video-preview #inline-preview-player, #inline-preview-player');
+    if (inlinePlayer && typeof inlinePlayer.pauseVideo === 'function') {
+      try {
+        inlinePlayer.pauseVideo();
+      } catch (_) {}
+    }
+  }
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -1628,6 +1697,7 @@
       videoId,
       rawRemainingSec,
       rawDurationSec,
+      bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
       playbackRate: Math.round(rate * 100) / 100,
       isAd: false,
       isLive: false,
@@ -2033,10 +2103,12 @@
       }, 60);
     }
 
+    flushTimeSavedDelta();
     if (!alreadyHeld || forceBanner) {
       postToContent('PLAYBACK_STOPPED', {
         videoId: currentVideoId,
         hasPlaylist: hasActivePlaylistContext(),
+        bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
       });
     }
     emitTimeRemaining(true);
@@ -2206,6 +2278,7 @@
     video.addEventListener(
       'timeupdate',
       () => {
+        trackTimeSavedTick();
         checkAdTransition();
         checkNearVideoEnd();
         checkNonDvrSlowForcedCatchup(getMoviePlayer(), video);
@@ -2259,6 +2332,7 @@
     video.addEventListener(
       'pause',
       () => {
+        flushTimeSavedDelta();
         checkNearVideoEnd(true);
         emitTimeRemaining(true);
       },
@@ -2288,6 +2362,7 @@
           resetLiveTrackingState(urlVid);
         }
         if (urlVid && urlVid !== lockedVideoId) {
+          resetCurrentVideoTimeSaved();
           const hasMatchingHint =
             pendingCardHint &&
             pendingCardHint.videoId === urlVid &&
@@ -2714,6 +2789,7 @@
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
+          resetCurrentVideoTimeSaved();
           replayGraceUntil = Date.now() + 1400;
           heldAtEndVideoId = null;
           window.__CADENCE_HELD_VIDEO_ID__ = null;
@@ -2924,6 +3000,8 @@
   heartbeatInterval = setInterval(() => {
     if (maybeRedirectCurrentShortsRoute()) return;
     syncShortsLinksInDom(false);
+    suppressInlinePreviewPlayerIfNeeded();
+    trackTimeSavedTick();
     checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
@@ -2932,7 +3010,28 @@
     emitTimeRemaining(false);
   }, 250);
 
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.visibilityState === 'hidden') {
+        flushTimeSavedDelta();
+      }
+    },
+    { signal: bridgeSignal }
+  );
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      flushTimeSavedDelta();
+    },
+    { signal: bridgeSignal }
+  );
+
   window.__CADENCE_PAGE_BRIDGE_CLEANUP__ = () => {
+    try {
+      flushTimeSavedDelta();
+    } catch (_) {}
     try {
       bridgeController.abort();
     } catch (_) {}

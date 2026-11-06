@@ -37,7 +37,7 @@
   let isDestroyed = false;
 
   let state = {
-    settings: {"enabled":true,"perChannelSpeedEnabled":true,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"settingsSchemaVersion":4},
+    settings: {"enabled":true,"perChannelSpeedEnabled":true,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"disableVideoPreviews":true,"settingsSchemaVersion":5},
     presets: [{"id":"music","label":"Music & Performance","description":"Preserves natural pitch, rhythm, and studio mix timing.","speed":1},{"id":"educational","label":"Educational & Explainer","description":"Brisk comprehension pace for tutorials, science, and essays.","speed":1.5},{"id":"podcast","label":"Podcast & Lecture","description":"High-efficiency cadence for long-form conversations and seminars.","speed":2}],
     rules: [],
   };
@@ -52,6 +52,7 @@
     videoId: null,
     rawRemainingSec: null,
     rawDurationSec: null,
+    bankedSavedSec: 0,
     playbackRate: null,
     isAd: false,
     isLive: false,
@@ -71,6 +72,34 @@
   let barMountAttempts = 0;
   let barResizeObserver = null;
   let bannerProtectedUntil = 0;
+
+  function syncPreviewBlockerStyle() {
+    const block = Boolean(state.settings && state.settings.enabled && state.settings.disableVideoPreviews !== false);
+    let style = document.getElementById('cadence-preview-blocker-style');
+    if (block) {
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'cadence-preview-blocker-style';
+        style.textContent =
+          'body:not([page-subtype="channels"]) ytd-video-preview, ' +
+          'body:not([page-subtype="channels"]) #inline-preview-player, ' +
+          'body:not([page-subtype="channels"]) ytd-moving-thumbnail-renderer, ' +
+          'body:not([page-subtype="channels"]) #mouseover-overlay, ' +
+          '#secondary ytd-video-preview, ' +
+          '#secondary #inline-preview-player, ' +
+          '#secondary ytd-moving-thumbnail-renderer, ' +
+          '#secondary #mouseover-overlay { ' +
+          'display: none !important; ' +
+          'pointer-events: none !important; ' +
+          'opacity: 0 !important; ' +
+          'visibility: hidden !important; ' +
+          '}';
+        (document.head || document.documentElement).appendChild(style);
+      }
+    } else if (style) {
+      style.remove();
+    }
+  }
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -632,10 +661,29 @@
     }
 
     const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
-    const realTotalSec = Math.round(durationSec / effectiveSpeed);
-    const deltaSec = Math.round(durationSec - realTotalSec);
+    if (effectiveSpeed < 0.99) {
+      const realTotalSec = Math.round(durationSec / effectiveSpeed);
+      const diffSec = realTotalSec - durationSec;
+      return {
+        visible: true,
+        tone: 'slower',
+        text: `+${formatExactMinutesSeconds(diffSec)}`,
+        title: `Adds ${formatExactMinutesSeconds(diffSec)} to total video duration at ${formatDisplaySpeed(effectiveSpeed)}×`,
+      };
+    }
 
-    if (Math.abs(deltaSec) < 3) {
+    const banked = Math.max(0, Number(remainingState.bankedSavedSec) || 0);
+    const watchVideo = getWatchVideoElement();
+    const rawRem =
+      typeof remainingState.rawRemainingSec === 'number' &&
+      Number.isFinite(remainingState.rawRemainingSec)
+        ? remainingState.rawRemainingSec
+        : Math.max(0, durationSec - ((watchVideo && watchVideo.currentTime) || 0));
+    const remainingProjected =
+      effectiveSpeed > 1.0 ? Math.round((rawRem * (effectiveSpeed - 1.0)) / effectiveSpeed) : 0;
+    const totalSaved = Math.round(banked + remainingProjected);
+
+    if (totalSaved < 3) {
       return {
         visible: true,
         tone: 'neutral',
@@ -644,20 +692,11 @@
       };
     }
 
-    if (deltaSec > 0) {
-      return {
-        visible: true,
-        tone: 'saved',
-        text: `Saves ${formatExactMinutesSeconds(deltaSec)}`,
-        title: `Total wall-clock time saved on this video at ${formatDisplaySpeed(effectiveSpeed)}×`,
-      };
-    }
-
     return {
       visible: true,
-      tone: 'slower',
-      text: `+${formatExactMinutesSeconds(Math.abs(deltaSec))}`,
-      title: `Adds ${formatExactMinutesSeconds(Math.abs(deltaSec))} to total video duration at ${formatDisplaySpeed(effectiveSpeed)}×`,
+      tone: 'saved',
+      text: `Saves ${formatExactMinutesSeconds(totalSaved)}`,
+      title: `Total wall-clock time saved on this video at ${formatDisplaySpeed(effectiveSpeed)}×`,
     };
   }
 
@@ -1072,9 +1111,13 @@
     }
 
     const textEl = banner.querySelector('.cadence-stopped-text');
-    textEl.textContent = hasPlaylist
+    let stoppedMsg = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
+    if (typeof remainingState.bankedSavedSec === 'number' && remainingState.bankedSavedSec >= 1) {
+      stoppedMsg += ' · You saved ' + formatExactMinutesSeconds(remainingState.bankedSavedSec) + ' with Cadence!';
+    }
+    textEl.textContent = stoppedMsg;
     bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
@@ -2021,6 +2064,10 @@
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
             rawDurationSec:
               typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
+            bankedSavedSec:
+              typeof payload.bankedSavedSec === 'number'
+                ? payload.bankedSavedSec
+                : remainingState.bankedSavedSec || 0,
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
             isAd: Boolean(payload.isAd),
@@ -2274,7 +2321,15 @@
               `Session ${formatDisplaySpeed(sessionOverride.speed)}× · ${suffix}`
             );
           }
+        } else if (type === 'TIME_SAVED_DELTA' && payload && payload.deltaSec) {
+          safeSendMessage({
+            type: 'CADENCE_ADD_TIME_SAVED',
+            deltaSec: payload.deltaSec,
+          });
         } else if (type === 'PLAYBACK_STOPPED') {
+          if (payload && typeof payload.bankedSavedSec === 'number') {
+            remainingState.bankedSavedSec = payload.bankedSavedSec;
+          }
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
         }
       } catch (_) {
@@ -2431,7 +2486,10 @@
         return;
       }
       if (area !== 'local') return;
-      if (changes.settings) state.settings = changes.settings.newValue;
+      if (changes.settings) {
+        state.settings = changes.settings.newValue;
+        syncPreviewBlockerStyle();
+      }
       if (changes.presets) state.presets = changes.presets.newValue;
       if (changes.rules) state.rules = changes.rules.newValue;
 
@@ -2441,6 +2499,7 @@
         enabled: state.settings.enabled,
         perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
         convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+        disableVideoPreviews: state.settings.disableVideoPreviews !== false,
         hasSessionOverride: Boolean(
           currentChannel && hasActiveSessionOverride(currentChannel.videoId)
         ),
@@ -2461,12 +2520,15 @@
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
 
+    syncPreviewBlockerStyle();
+
     if (maybeRedirectShortsInContent()) return;
 
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
       convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+      disableVideoPreviews: state.settings.disableVideoPreviews !== false,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,

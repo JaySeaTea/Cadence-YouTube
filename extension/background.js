@@ -7,7 +7,8 @@ const INITIAL_STATE = {
     "showInPageControlBar": true,
     "showSpeedToast": true,
     "convertShortsToWatch": true,
-    "settingsSchemaVersion": 4
+    "disableVideoPreviews": true,
+    "settingsSchemaVersion": 5
   },
   "presets": [
     {
@@ -84,7 +85,7 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
 ]);
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules']);
+  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -97,9 +98,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.convertShortsToWatch === 'boolean'
           ? cleanInitialSettings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 4,
+      disableVideoPreviews:
+        typeof cleanInitialSettings.disableVideoPreviews === 'boolean'
+          ? cleanInitialSettings.disableVideoPreviews
+          : true,
+      settingsSchemaVersion: 5,
     };
-  } else if (prevSchemaVersion < 4) {
+  } else if (prevSchemaVersion < 5) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -107,10 +112,18 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.convertShortsToWatch === 'boolean'
           ? existing.settings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 4,
+      disableVideoPreviews:
+        typeof existing.settings.disableVideoPreviews === 'boolean'
+          ? existing.settings.disableVideoPreviews
+          : true,
+      settingsSchemaVersion: 5,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;
+  }
+
+  if (typeof existing.totalTimeSavedSec !== 'number') {
+    nextPayload.totalTimeSavedSec = 0;
   }
 
   if (!existing.presets) {
@@ -158,6 +171,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.runtime.openOptionsPage();
     sendResponse({ ok: true });
     return false;
+  }
+  if (message && message.type === 'CADENCE_ADD_TIME_SAVED') {
+    const delta = Math.max(0, Math.floor(Number(message.deltaSec) || 0));
+    if (delta > 0) {
+      chrome.storage.local.get(['totalTimeSavedSec']).then((data) => {
+        const current = Math.max(0, Number(data.totalTimeSavedSec) || 0);
+        chrome.storage.local.set({ totalTimeSavedSec: current + delta }).catch(() => {});
+      }).catch(() => {});
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message && message.type === 'CADENCE_RESET_TIME_SAVED') {
+    chrome.storage.local.set({ totalTimeSavedSec: 0 }).then(() => {
+      sendResponse({ ok: true, totalTimeSavedSec: 0 });
+    }).catch(() => {
+      sendResponse({ ok: false });
+    });
+    return true; // async
   }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;

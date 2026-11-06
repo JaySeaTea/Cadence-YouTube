@@ -136,7 +136,7 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
 ]);
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules']);
+  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -149,9 +149,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.convertShortsToWatch === 'boolean'
           ? cleanInitialSettings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 4,
+      disableVideoPreviews:
+        typeof cleanInitialSettings.disableVideoPreviews === 'boolean'
+          ? cleanInitialSettings.disableVideoPreviews
+          : true,
+      settingsSchemaVersion: 5,
     };
-  } else if (prevSchemaVersion < 4) {
+  } else if (prevSchemaVersion < 5) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -159,10 +163,18 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.convertShortsToWatch === 'boolean'
           ? existing.settings.convertShortsToWatch
           : true,
-      settingsSchemaVersion: 4,
+      disableVideoPreviews:
+        typeof existing.settings.disableVideoPreviews === 'boolean'
+          ? existing.settings.disableVideoPreviews
+          : true,
+      settingsSchemaVersion: 5,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;
+  }
+
+  if (typeof existing.totalTimeSavedSec !== 'number') {
+    nextPayload.totalTimeSavedSec = 0;
   }
 
   if (!existing.presets) {
@@ -211,6 +223,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (message && message.type === 'CADENCE_ADD_TIME_SAVED') {
+    const delta = Math.max(0, Math.floor(Number(message.deltaSec) || 0));
+    if (delta > 0) {
+      chrome.storage.local.get(['totalTimeSavedSec']).then((data) => {
+        const current = Math.max(0, Number(data.totalTimeSavedSec) || 0);
+        chrome.storage.local.set({ totalTimeSavedSec: current + delta }).catch(() => {});
+      }).catch(() => {});
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (message && message.type === 'CADENCE_RESET_TIME_SAVED') {
+    chrome.storage.local.set({ totalTimeSavedSec: 0 }).then(() => {
+      sendResponse({ ok: true, totalTimeSavedSec: 0 });
+    }).catch(() => {
+      sendResponse({ ok: false });
+    });
+    return true; // async
+  }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {
     const tabId = (sender.tab && sender.tab.id) || message.tabId;
     if (tabId) {
@@ -246,6 +277,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hasSessionOverride: false,
     stopAfterVideoEnds: true,
     convertShortsToWatch: true,
+    disableVideoPreviews: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
@@ -304,6 +336,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let postSpeedVerifyTimer = null;
   let playlistSuppressedByCadence = false;
   let progressBarDragActive = false;
+
+  let currentVideoTimeSavedSec = 0;
+  let unflushedTimeSavedDeltaSec = 0;
+  let lastSavedTickWallMs = 0;
+  let lastSavedTickVideoSec = null;
+  let lastTimeSavedFlushAt = 0;
+
+  function trackTimeSavedTick() {
+    const player = getMoviePlayer();
+    const video = getMainVideo();
+    if (!video || video.paused || isAdPlaying(player) || isLiveBroadcast(player, video)) {
+      lastSavedTickWallMs = Date.now();
+      lastSavedTickVideoSec = video ? video.currentTime : null;
+      return;
+    }
+    const now = Date.now();
+    if (lastSavedTickWallMs > 0) {
+      const dtWall = (now - lastSavedTickWallMs) / 1000;
+      const cur = video.currentTime;
+      const dtVideo = lastSavedTickVideoSec !== null ? Math.max(0, cur - lastSavedTickVideoSec) : 0;
+      if (dtWall > 0.05 && dtWall <= 1.5 && dtVideo > 0.02 && dtVideo <= 3.0) {
+        const rate = Number(video.playbackRate) || 1.0;
+        if (rate > 1.005) {
+          const delta = dtWall * (rate - 1.0);
+          if (delta > 0) {
+            currentVideoTimeSavedSec += delta;
+            unflushedTimeSavedDeltaSec += delta;
+          }
+        }
+      }
+    }
+    lastSavedTickWallMs = now;
+    lastSavedTickVideoSec = video.currentTime;
+
+    if (now - lastTimeSavedFlushAt > 5000) {
+      flushTimeSavedDelta();
+    }
+  }
+
+  function flushTimeSavedDelta() {
+    lastTimeSavedFlushAt = Date.now();
+    if (unflushedTimeSavedDeltaSec >= 0.5) {
+      const toSend = Math.round(unflushedTimeSavedDeltaSec);
+      if (toSend >= 1) {
+        postToContent('TIME_SAVED_DELTA', { deltaSec: toSend });
+        unflushedTimeSavedDeltaSec -= toSend;
+      }
+    }
+  }
+
+  function resetCurrentVideoTimeSaved() {
+    flushTimeSavedDelta();
+    currentVideoTimeSavedSec = 0;
+    unflushedTimeSavedDeltaSec = 0;
+    lastSavedTickWallMs = 0;
+    lastSavedTickVideoSec = null;
+  }
+
+  function suppressInlinePreviewPlayerIfNeeded() {
+    if (!config.enabled || config.disableVideoPreviews === false) return;
+    if (document.body && document.body.getAttribute('page-subtype') === 'channels') return;
+    const inlinePlayer = document.querySelector('ytd-video-preview #inline-preview-player, #inline-preview-player');
+    if (inlinePlayer && typeof inlinePlayer.pauseVideo === 'function') {
+      try {
+        inlinePlayer.pauseVideo();
+      } catch (_) {}
+    }
+  }
 
   function postToContent(type, payload) {
     window.postMessage(
@@ -1858,6 +1958,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       videoId,
       rawRemainingSec,
       rawDurationSec,
+      bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
       playbackRate: Math.round(rate * 100) / 100,
       isAd: false,
       isLive: false,
@@ -2263,10 +2364,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }, 60);
     }
 
+    flushTimeSavedDelta();
     if (!alreadyHeld || forceBanner) {
       postToContent('PLAYBACK_STOPPED', {
         videoId: currentVideoId,
         hasPlaylist: hasActivePlaylistContext(),
+        bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
       });
     }
     emitTimeRemaining(true);
@@ -2436,6 +2539,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'timeupdate',
       () => {
+        trackTimeSavedTick();
         checkAdTransition();
         checkNearVideoEnd();
         checkNonDvrSlowForcedCatchup(getMoviePlayer(), video);
@@ -2489,6 +2593,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     video.addEventListener(
       'pause',
       () => {
+        flushTimeSavedDelta();
         checkNearVideoEnd(true);
         emitTimeRemaining(true);
       },
@@ -2518,6 +2623,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           resetLiveTrackingState(urlVid);
         }
         if (urlVid && urlVid !== lockedVideoId) {
+          resetCurrentVideoTimeSaved();
           const hasMatchingHint =
             pendingCardHint &&
             pendingCardHint.videoId === urlVid &&
@@ -2944,6 +3050,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
+          resetCurrentVideoTimeSaved();
           replayGraceUntil = Date.now() + 1400;
           heldAtEndVideoId = null;
           window.__CADENCE_HELD_VIDEO_ID__ = null;
@@ -3154,6 +3261,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   heartbeatInterval = setInterval(() => {
     if (maybeRedirectCurrentShortsRoute()) return;
     syncShortsLinksInDom(false);
+    suppressInlinePreviewPlayerIfNeeded();
+    trackTimeSavedTick();
     checkAdTransition();
     broadcastChannelMetadata(false);
     checkNearVideoEnd();
@@ -3162,7 +3271,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     emitTimeRemaining(false);
   }, 250);
 
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.visibilityState === 'hidden') {
+        flushTimeSavedDelta();
+      }
+    },
+    { signal: bridgeSignal }
+  );
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      flushTimeSavedDelta();
+    },
+    { signal: bridgeSignal }
+  );
+
   window.__CADENCE_PAGE_BRIDGE_CLEANUP__ = () => {
+    try {
+      flushTimeSavedDelta();
+    } catch (_) {}
     try {
       bridgeController.abort();
     } catch (_) {}
@@ -3243,6 +3373,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     videoId: null,
     rawRemainingSec: null,
     rawDurationSec: null,
+    bankedSavedSec: 0,
     playbackRate: null,
     isAd: false,
     isLive: false,
@@ -3262,6 +3393,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let barMountAttempts = 0;
   let barResizeObserver = null;
   let bannerProtectedUntil = 0;
+
+  function syncPreviewBlockerStyle() {
+    const block = Boolean(state.settings && state.settings.enabled && state.settings.disableVideoPreviews !== false);
+    let style = document.getElementById('cadence-preview-blocker-style');
+    if (block) {
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'cadence-preview-blocker-style';
+        style.textContent =
+          'body:not([page-subtype="channels"]) ytd-video-preview, ' +
+          'body:not([page-subtype="channels"]) #inline-preview-player, ' +
+          'body:not([page-subtype="channels"]) ytd-moving-thumbnail-renderer, ' +
+          'body:not([page-subtype="channels"]) #mouseover-overlay, ' +
+          '#secondary ytd-video-preview, ' +
+          '#secondary #inline-preview-player, ' +
+          '#secondary ytd-moving-thumbnail-renderer, ' +
+          '#secondary #mouseover-overlay { ' +
+          'display: none !important; ' +
+          'pointer-events: none !important; ' +
+          'opacity: 0 !important; ' +
+          'visibility: hidden !important; ' +
+          '}';
+        (document.head || document.documentElement).appendChild(style);
+      }
+    } else if (style) {
+      style.remove();
+    }
+  }
 
   const WARNING_ICON_SVG =
     '<svg class="cadence-toast-warn-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
@@ -3823,10 +3982,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
-    const realTotalSec = Math.round(durationSec / effectiveSpeed);
-    const deltaSec = Math.round(durationSec - realTotalSec);
+    if (effectiveSpeed < 0.99) {
+      const realTotalSec = Math.round(durationSec / effectiveSpeed);
+      const diffSec = realTotalSec - durationSec;
+      return {
+        visible: true,
+        tone: 'slower',
+        text: \`+\${formatExactMinutesSeconds(diffSec)}\`,
+        title: \`Adds \${formatExactMinutesSeconds(diffSec)} to total video duration at \${formatDisplaySpeed(effectiveSpeed)}×\`,
+      };
+    }
 
-    if (Math.abs(deltaSec) < 3) {
+    const banked = Math.max(0, Number(remainingState.bankedSavedSec) || 0);
+    const watchVideo = getWatchVideoElement();
+    const rawRem =
+      typeof remainingState.rawRemainingSec === 'number' &&
+      Number.isFinite(remainingState.rawRemainingSec)
+        ? remainingState.rawRemainingSec
+        : Math.max(0, durationSec - ((watchVideo && watchVideo.currentTime) || 0));
+    const remainingProjected =
+      effectiveSpeed > 1.0 ? Math.round((rawRem * (effectiveSpeed - 1.0)) / effectiveSpeed) : 0;
+    const totalSaved = Math.round(banked + remainingProjected);
+
+    if (totalSaved < 3) {
       return {
         visible: true,
         tone: 'neutral',
@@ -3835,20 +4013,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
     }
 
-    if (deltaSec > 0) {
-      return {
-        visible: true,
-        tone: 'saved',
-        text: \`Saves \${formatExactMinutesSeconds(deltaSec)}\`,
-        title: \`Total wall-clock time saved on this video at \${formatDisplaySpeed(effectiveSpeed)}×\`,
-      };
-    }
-
     return {
       visible: true,
-      tone: 'slower',
-      text: \`+\${formatExactMinutesSeconds(Math.abs(deltaSec))}\`,
-      title: \`Adds \${formatExactMinutesSeconds(Math.abs(deltaSec))} to total video duration at \${formatDisplaySpeed(effectiveSpeed)}×\`,
+      tone: 'saved',
+      text: \`Saves \${formatExactMinutesSeconds(totalSaved)}\`,
+      title: \`Total wall-clock time saved on this video at \${formatDisplaySpeed(effectiveSpeed)}×\`,
     };
   }
 
@@ -4263,9 +4432,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const textEl = banner.querySelector('.cadence-stopped-text');
-    textEl.textContent = hasPlaylist
+    let stoppedMsg = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
+    if (typeof remainingState.bankedSavedSec === 'number' && remainingState.bankedSavedSec >= 1) {
+      stoppedMsg += ' · You saved ' + formatExactMinutesSeconds(remainingState.bankedSavedSec) + ' with Cadence!';
+    }
+    textEl.textContent = stoppedMsg;
     bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
@@ -5212,6 +5385,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
             rawDurationSec:
               typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
+            bankedSavedSec:
+              typeof payload.bankedSavedSec === 'number'
+                ? payload.bankedSavedSec
+                : remainingState.bankedSavedSec || 0,
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
             isAd: Boolean(payload.isAd),
@@ -5465,7 +5642,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               \`Session \${formatDisplaySpeed(sessionOverride.speed)}× · \${suffix}\`
             );
           }
+        } else if (type === 'TIME_SAVED_DELTA' && payload && payload.deltaSec) {
+          safeSendMessage({
+            type: 'CADENCE_ADD_TIME_SAVED',
+            deltaSec: payload.deltaSec,
+          });
         } else if (type === 'PLAYBACK_STOPPED') {
+          if (payload && typeof payload.bankedSavedSec === 'number') {
+            remainingState.bankedSavedSec = payload.bankedSavedSec;
+          }
           showStoppedBanner(Boolean(payload && payload.hasPlaylist));
         }
       } catch (_) {
@@ -5622,7 +5807,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       if (area !== 'local') return;
-      if (changes.settings) state.settings = changes.settings.newValue;
+      if (changes.settings) {
+        state.settings = changes.settings.newValue;
+        syncPreviewBlockerStyle();
+      }
       if (changes.presets) state.presets = changes.presets.newValue;
       if (changes.rules) state.rules = changes.rules.newValue;
 
@@ -5632,6 +5820,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         enabled: state.settings.enabled,
         perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
         convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+        disableVideoPreviews: state.settings.disableVideoPreviews !== false,
         hasSessionOverride: Boolean(
           currentChannel && hasActiveSessionOverride(currentChannel.videoId)
         ),
@@ -5652,12 +5841,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
 
+    syncPreviewBlockerStyle();
+
     if (maybeRedirectShortsInContent()) return;
 
     postToBridge('CONFIG_UPDATE', {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
       convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+      disableVideoPreviews: state.settings.disableVideoPreviews !== false,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,
@@ -6699,6 +6891,13 @@ html[dark] .cadence-rule-plus {
         </div>
         <input type="checkbox" id="toggle-shorts" />
       </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Disable Video Previews</div>
+          <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
+        </div>
+        <input type="checkbox" id="toggle-previews" />
+      </div>
     </div>
 
     <div class="section footer-row">
@@ -6714,6 +6913,16 @@ html[dark] .cadence-rule-plus {
   const popupJs = `(async () => {
   function formatSpeed(val) {
     return Number(val).toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1');
+  }
+
+  function formatCompactDuration(rawSec) {
+    const safeSec = Math.max(0, Math.round(rawSec || 0));
+    if (safeSec < 60) return safeSec + 's';
+    const totalMins = Math.max(1, Math.round(safeSec / 60));
+    if (totalMins < 60) return totalMins + 'm';
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? hrs + 'h ' + mins + 'm' : hrs + 'h';
   }
 
   function normalizeText(str) {
@@ -6733,18 +6942,20 @@ html[dark] .cadence-rule-plus {
     footerVersionEl.textContent = \`v\${manifestVersion}\`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
+  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets', 'totalTimeSavedSec']);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
     convertShortsToWatch: true,
+    disableVideoPreviews: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 4,
+    settingsSchemaVersion: 5,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -6757,6 +6968,7 @@ html[dark] .cadence-rule-plus {
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
+  const togglePreviews = document.getElementById('toggle-previews');
   const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
@@ -6787,9 +6999,12 @@ html[dark] .cadence-rule-plus {
   if (toggleShorts) {
     toggleShorts.checked = settings.convertShortsToWatch !== false;
   }
+  if (togglePreviews) {
+    togglePreviews.checked = settings.disableVideoPreviews !== false;
+  }
 
   function renderRuleCount() {
-    summaryEl.textContent = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'}\`;
+    summaryEl.textContent = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'} · \${formatCompactDuration(totalTimeSavedSec)} saved\`;
   }
   renderRuleCount();
 
@@ -6804,6 +7019,11 @@ html[dark] .cadence-rule-plus {
   if (toggleShorts) {
     toggleShorts.addEventListener('change', () =>
       updateSetting({ convertShortsToWatch: toggleShorts.checked })
+    );
+  }
+  if (togglePreviews) {
+    togglePreviews.addEventListener('change', () =>
+      updateSetting({ disableVideoPreviews: togglePreviews.checked })
     );
   }
 
@@ -7383,7 +7603,7 @@ html[dark] .cadence-rule-plus {
         color: #94a3b8;
         font-variant-numeric: tabular-nums;
       }
-      .sub { color: #94a3b8; font-size: 14px; max-width: 560px; line-height: 1.5; }
+      .sub { color: #94a3b8; font-size: 14px; max-width: 580px; line-height: 1.5; }
       .toolbar-actions {
         display: flex;
         align-items: center;
@@ -7417,6 +7637,65 @@ html[dark] .cadence-rule-plus {
       }
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
       .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+      /* Toggle switch styles */
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+        border-top: 1px solid #1e293b;
+      }
+      .toggle-row:first-of-type { border-top: none; }
+      .toggle-info h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+      .toggle-info p { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+      }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #334155; transition: .2s; border-radius: 24px;
+      }
+      .slider:before {
+        position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+        background-color: white; transition: .2s; border-radius: 50%;
+      }
+      input:checked + .slider { background-color: #dc2626; }
+      input:checked + .slider:before { transform: translateX(18px); }
+
+      /* Lifetime stats & reset */
+      .stat-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 16px 20px;
+      }
+      .stat-val { font-size: 26px; font-weight: 700; color: #38bdf8; font-variant-numeric: tabular-nums; }
+      .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+      .inline-confirm-box {
+        margin-top: 14px;
+        padding: 14px;
+        background: #181216;
+        border: 1px solid #ef4444;
+        border-radius: 8px;
+        display: none;
+      }
+      .inline-confirm-box.visible { display: block; }
+      .confirm-prompt { font-size: 12px; color: #fca5a5; font-weight: 600; margin-bottom: 8px; }
+      .confirm-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+      /* Rows & inputs */
       .preset-row, .rule-row {
         display: flex;
         align-items: center;
@@ -7437,6 +7716,96 @@ html[dark] .cadence-rule-plus {
       }
       .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
       .add-form input[type="text"] { flex: 1; min-width: 180px; }
+
+      /* Filter & Pagination Controls (#26) */
+      .filter-toolbar {
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .filter-row-top {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .filter-search-input {
+        flex: 1;
+        min-width: 220px;
+      }
+      .pill-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .pill-btn {
+        background: #111827;
+        color: #94a3b8;
+        border: 1px solid #334155;
+        padding: 5px 11px;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .pill-btn:hover { color: #f8fafc; border-color: #475569; }
+      .pill-btn.active {
+        background: #38bdf8;
+        color: #0b0f19;
+        border-color: #38bdf8;
+      }
+      .filter-row-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding-top: 8px;
+        border-top: 1px solid #1e293b;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .sort-controls { display: flex; align-items: center; gap: 8px; }
+      .pagination-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid #1e293b;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .page-btn-group { display: flex; gap: 4px; align-items: center; }
+      .page-btn {
+        background: #0b0f19;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .page-btn:hover:not(:disabled) { background: #1e293b; color: #fff; }
+      .page-btn.active {
+        background: #dc2626;
+        color: #fff;
+        border-color: #dc2626;
+        font-weight: 600;
+      }
+      .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+      /* Buttons */
       button.primary {
         background: #dc2626;
         color: #ffffff;
@@ -7471,6 +7840,18 @@ html[dark] .cadence-rule-plus {
         cursor: pointer;
       }
       button.row-remove:hover { color: #f87171; border-color: #ef4444; }
+      button.danger-btn {
+        background: #dc2626;
+        color: #ffffff;
+        border: 1px solid #ef4444;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.danger-btn:hover:not(:disabled) { background: #b91c1c; }
+      button.danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     </style>
   </head>
   <body>
@@ -7493,17 +7874,100 @@ html[dark] .cadence-rule-plus {
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
+      <!-- Panel 01: Playback & Feed Controls (#23) -->
       <div class="panel">
         <div class="panel-head">
-          <h2>01. Category Speed Profiles</h2>
+          <h2>01. Playback &amp; Feed Controls</h2>
+          <span class="count-label">Global player defaults</span>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Per-Channel Playback Speed</h3>
+            <p>Remember and restore custom playback speeds for individual creators.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-speed" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Stop Playback After Video Ends</h3>
+            <p>Pause when current video completes and prevent autoplay queues or playlist leaps.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-stop" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Show Speed Bar</h3>
+            <p>Mount the Cadence 3-row transport deck directly above the YouTube player title.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-bar" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Convert Shorts to Regular Videos</h3>
+            <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-shorts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Disable Video Previews</h3>
+            <p>Block autoplay hover previews on Home, Search, and Sidebar while keeping channel trailers intact.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-previews" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Panel 02: Lifetime Time Saved (#24) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>02. Lifetime Time Saved</h2>
+          <span class="count-label">Accelerated playback tracking</span>
+        </div>
+        <div class="stat-card">
+          <div>
+            <div id="stat-saved-value" class="stat-val">0s saved</div>
+            <div class="stat-sub">Accrues in real time whenever watching videos faster than 1.0×.</div>
+          </div>
+          <button type="button" id="btn-open-reset" class="row-remove">Reset Counter</button>
+        </div>
+        <div id="reset-confirm-box" class="inline-confirm-box">
+          <div class="confirm-prompt">Type "Forget Time Saved" to confirm resetting your lifetime stats:</div>
+          <div class="confirm-row">
+            <input type="text" id="input-confirm-forget" placeholder="Forget Time Saved" style="flex:1;min-width:200px;" autocomplete="off" />
+            <button type="button" id="btn-confirm-forget" class="danger-btn" disabled>Confirm Reset</button>
+            <button type="button" id="btn-cancel-forget" class="ghost">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 03: Category Speed Profiles -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>03. Category Speed Profiles</h2>
           <span class="count-label">Applies to linked channels</span>
         </div>
         <div id="presets-list"></div>
       </div>
 
+      <!-- Panel 04: Saved Channel Speed Rules (#26) -->
       <div class="panel">
         <div class="panel-head">
-          <h2>02. Saved Channel Speed Rules</h2>
+          <h2>04. Saved Channel Speed Rules</h2>
           <span id="rules-count" class="count-label">0 saved</span>
         </div>
         <form id="add-rule-form" class="add-form">
@@ -7518,7 +7982,46 @@ html[dark] .cadence-rule-plus {
           <input type="number" id="input-speed" step="0.05" min="0.25" max="4" value="1.5" style="width: 88px;" />
           <button type="submit" class="primary">Save Channel</button>
         </form>
+
+        <!-- Search, Category Filters, Sort, and Page Size (#26) -->
+        <div class="filter-toolbar">
+          <div class="filter-row-top">
+            <input type="text" id="input-rule-search" class="filter-search-input" placeholder="Search channel name or @handle..." />
+            <div class="pill-group" id="category-pills">
+              <button type="button" class="pill-btn active" data-category="all">All</button>
+              <button type="button" class="pill-btn" data-category="educational">Educational</button>
+              <button type="button" class="pill-btn" data-category="podcast">Podcast</button>
+              <button type="button" class="pill-btn" data-category="music">Music</button>
+              <button type="button" class="pill-btn" data-category="custom">Custom</button>
+            </div>
+          </div>
+          <div class="filter-row-bottom">
+            <div class="sort-controls">
+              <label for="select-sort">Sort by:</label>
+              <select id="select-sort">
+                <option value="recent">Recently updated</option>
+                <option value="name">Channel Name A–Z</option>
+                <option value="speed">Speed (Highest to Lowest)</option>
+              </select>
+            </div>
+            <div class="sort-controls">
+              <label for="select-page-size">Show:</label>
+              <select id="select-page-size">
+                <option value="10" selected>10 per page</option>
+                <option value="25">25 per page</option>
+                <option value="50">50 per page</option>
+                <option value="all">All rules</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div id="rules-list"></div>
+
+        <div id="pagination-bar" class="pagination-bar">
+          <span id="rules-range">Showing 0–0 of 0 rules</span>
+          <div class="page-btn-group" id="page-buttons"></div>
+        </div>
       </div>
     </div>
     <script src="options.js"></script>
@@ -7529,6 +8032,15 @@ html[dark] .cadence-rule-plus {
   const optionsJs = `(async () => {
   const DEFAULT_PRESETS = ${defaultPresetsJson};
 
+  const DEFAULT_SETTINGS = {
+    perChannelSpeed: true,
+    stopAfterVideo: true,
+    showSpeedBar: true,
+    convertShorts: true,
+    disableVideoPreviews: true,
+    settingsSchemaVersion: 5
+  };
+
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
@@ -7538,15 +8050,32 @@ html[dark] .cadence-rule-plus {
     versionEl.textContent = \`· v\${manifestVersion}\`;
   }
 
-  let stored = await chrome.storage.local.get(['presets', 'rules']);
+  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
+  let settings = Object.assign({}, DEFAULT_SETTINGS, stored.settings || {});
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : DEFAULT_PRESETS.map((p) => ({ ...p }));
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
 
+  // Filter & Pagination State (#26)
+  let searchQuery = '';
+  let filterCategory = 'all';
+  let sortBy = 'recent';
+  let pageSize = 10;
+  let currentPage = 1;
+
+  // DOM elements
   const presetsEl = document.getElementById('presets-list');
   const rulesEl = document.getElementById('rules-list');
   const rulesCountEl = document.getElementById('rules-count');
+  const rulesRangeEl = document.getElementById('rules-range');
+  const pageButtonsEl = document.getElementById('page-buttons');
+  const searchInputEl = document.getElementById('input-rule-search');
+  const categoryPillsEl = document.getElementById('category-pills');
+  const sortSelectEl = document.getElementById('select-sort');
+  const pageSizeSelectEl = document.getElementById('select-page-size');
+
   const form = document.getElementById('add-rule-form');
   const presetSelectEl = document.getElementById('input-preset');
   const speedInputEl = document.getElementById('input-speed');
@@ -7555,10 +8084,36 @@ html[dark] .cadence-rule-plus {
   const exportBtnEl = document.getElementById('btn-export-json');
   const resetBtnEl = document.getElementById('btn-reset-presets');
   const statusBannerEl = document.getElementById('status-banner');
+
+  // Toggles DOM
+  const toggleSpeedEl = document.getElementById('toggle-speed');
+  const toggleStopEl = document.getElementById('toggle-stop');
+  const toggleBarEl = document.getElementById('toggle-bar');
+  const toggleShortsEl = document.getElementById('toggle-shorts');
+  const togglePreviewsEl = document.getElementById('toggle-previews');
+
+  // Lifetime stats DOM
+  const statSavedValueEl = document.getElementById('stat-saved-value');
+  const btnOpenResetEl = document.getElementById('btn-open-reset');
+  const resetConfirmBoxEl = document.getElementById('reset-confirm-box');
+  const inputConfirmForgetEl = document.getElementById('input-confirm-forget');
+  const btnConfirmForgetEl = document.getElementById('btn-confirm-forget');
+  const btnCancelForgetEl = document.getElementById('btn-cancel-forget');
+
   let statusTimer = null;
 
   function formatSpeed(val) {
     return Number(val).toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1');
+  }
+
+  function formatFullSavedTime(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    if (s < 60) return \`\${s}s\`;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const remS = s % 60;
+    if (h > 0) return \`\${h}h \${m}m \${remS}s\`;
+    return \`\${m}m \${remS}s\`;
   }
 
   function normalizeHandle(raw, fallbackName = '') {
@@ -7580,6 +8135,64 @@ html[dark] .cadence-rule-plus {
       statusBannerEl.classList.remove('visible');
     }, 3600);
   }
+
+  function renderToggles() {
+    if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
+    if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
+    if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
+    if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
+  }
+
+  async function updateSetting(key, val) {
+    settings[key] = val;
+    settings.settingsSchemaVersion = 5;
+    await chrome.storage.local.set({ settings });
+    showStatus(\`Updated \${key}: \${val ? 'Enabled' : 'Disabled'}\`);
+  }
+
+  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
+  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
+  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
+  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
+  if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
+
+  function renderTimeSaved() {
+    if (statSavedValueEl) {
+      statSavedValueEl.textContent = \`\${formatFullSavedTime(totalTimeSavedSec)} saved\`;
+    }
+  }
+
+  btnOpenResetEl.addEventListener('click', () => {
+    resetConfirmBoxEl.classList.add('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+    inputConfirmForgetEl.focus();
+  });
+
+  btnCancelForgetEl.addEventListener('click', () => {
+    resetConfirmBoxEl.classList.remove('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+  });
+
+  inputConfirmForgetEl.addEventListener('input', () => {
+    btnConfirmForgetEl.disabled = inputConfirmForgetEl.value.trim() !== 'Forget Time Saved';
+  });
+
+  btnConfirmForgetEl.addEventListener('click', async () => {
+    if (inputConfirmForgetEl.value.trim() !== 'Forget Time Saved') return;
+    totalTimeSavedSec = 0;
+    await chrome.storage.local.set({ totalTimeSavedSec: 0 });
+    if (chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED' }, () => {});
+    }
+    renderTimeSaved();
+    resetConfirmBoxEl.classList.remove('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+    showStatus('Lifetime time saved counter reset to 0s.');
+  });
 
   function syncPresetSelectLabels() {
     if (!presetSelectEl) return;
@@ -7633,40 +8246,169 @@ html[dark] .cadence-rule-plus {
     return found ? found.speed : rule.customSpeed;
   }
 
+  function getFilteredAndSortedRules() {
+    let list = [...rules];
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (r) =>
+          (r.channelName && r.channelName.toLowerCase().includes(q)) ||
+          (r.handle && r.handle.toLowerCase().includes(q))
+      );
+    }
+    if (filterCategory !== 'all') {
+      list = list.filter((r) => r.presetId === filterCategory);
+    }
+    if (sortBy === 'name') {
+      list.sort((a, b) => a.channelName.localeCompare(b.channelName));
+    } else if (sortBy === 'speed') {
+      list.sort((a, b) => resolveSpeed(b) - resolveSpeed(a));
+    } else {
+      list.sort((a, b) => {
+        const da = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const db = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        return db - da;
+      });
+    }
+    return list;
+  }
+
   function renderRules() {
     if (rulesCountEl) {
       rulesCountEl.textContent = manifestVersion
         ? \`\${rules.length} saved · v\${manifestVersion}\`
         : \`\${rules.length} saved\`;
     }
-    if (rules.length === 0) {
-      rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:8px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';
-      return;
-    }
-    rulesEl.innerHTML = rules
-      .map(
-        (r) => \`
-      <div class="rule-row">
-        <div>
-          <strong>\${r.channelName}</strong>
-          <span style="font-size:12px;color:#94a3b8;margin-left:6px;">\${r.handle || ''} · \${r.presetId}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <strong style="font-variant-numeric:tabular-nums;">\${formatSpeed(resolveSpeed(r))}×</strong>
-          <button type="button" class="row-remove" data-del-id="\${r.id}">Remove</button>
-        </div>
-      </div>
-    \`
-      )
-      .join('');
 
-    rulesEl.querySelectorAll('button[data-del-id]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-del-id');
-        rules = rules.filter((r) => r.id !== id);
-        await chrome.storage.local.set({ rules });
+    const filtered = getFilteredAndSortedRules();
+    const totalCount = filtered.length;
+
+    const limit = pageSize === -1 ? totalCount : pageSize;
+    const totalPages = limit > 0 ? Math.max(1, Math.ceil(totalCount / limit)) : 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIdx = limit > 0 ? (currentPage - 1) * limit : 0;
+    const endIdx = limit > 0 ? Math.min(startIdx + limit, totalCount) : totalCount;
+    const visibleRules = filtered.slice(startIdx, endIdx);
+
+    if (rulesRangeEl) {
+      if (totalCount === 0) {
+        rulesRangeEl.textContent = 'Showing 0–0 of 0 rules';
+      } else {
+        rulesRangeEl.textContent = \`Showing \${startIdx + 1}–\${endIdx} of \${totalCount} \${totalCount === 1 ? 'rule' : 'rules'}\${rules.length !== totalCount ? \` (\${rules.length} total)\` : ''}\`;
+      }
+    }
+
+    if (visibleRules.length === 0) {
+      if (rules.length === 0) {
+        rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:12px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';
+      } else {
+        rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:12px 0;">No channel rules match your search or filter.</p>';
+      }
+    } else {
+      rulesEl.innerHTML = visibleRules
+        .map(
+          (r) => \`
+        <div class="rule-row">
+          <div>
+            <strong>\${r.channelName}</strong>
+            <span style="font-size:12px;color:#94a3b8;margin-left:6px;">\${r.handle || ''} · \${r.presetId}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <strong style="font-variant-numeric:tabular-nums;">\${formatSpeed(resolveSpeed(r))}×</strong>
+            <button type="button" class="row-remove" data-del-id="\${r.id}">Remove</button>
+          </div>
+        </div>
+      \`
+        )
+        .join('');
+
+      rulesEl.querySelectorAll('button[data-del-id]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-del-id');
+          rules = rules.filter((r) => r.id !== id);
+          await chrome.storage.local.set({ rules });
+          renderRules();
+        });
+      });
+    }
+
+    // Render pagination buttons
+    if (pageButtonsEl) {
+      if (totalPages <= 1 || pageSize === -1) {
+        pageButtonsEl.innerHTML = '';
+      } else {
+        let btns = '';
+        btns += \`<button type="button" class="page-btn" id="btn-prev-page" \${currentPage === 1 ? 'disabled' : ''}>Prev</button>\`;
+        for (let p = 1; p <= totalPages; p++) {
+          btns += \`<button type="button" class="page-btn \${p === currentPage ? 'active' : ''}" data-page="\${p}">\${p}</button>\`;
+        }
+        btns += \`<button type="button" class="page-btn" id="btn-next-page" \${currentPage === totalPages ? 'disabled' : ''}>Next</button>\`;
+        pageButtonsEl.innerHTML = btns;
+
+        const prevBtn = pageButtonsEl.querySelector('#btn-prev-page');
+        if (prevBtn) {
+          prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+              currentPage--;
+              renderRules();
+            }
+          });
+        }
+        const nextBtn = pageButtonsEl.querySelector('#btn-next-page');
+        if (nextBtn) {
+          nextBtn.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+              currentPage++;
+              renderRules();
+            }
+          });
+        }
+        pageButtonsEl.querySelectorAll('button[data-page]').forEach((b) => {
+          b.addEventListener('click', () => {
+            currentPage = Number(b.getAttribute('data-page')) || 1;
+            renderRules();
+          });
+        });
+      }
+    }
+  }
+
+  // Filter & Search events
+  if (searchInputEl) {
+    searchInputEl.addEventListener('input', () => {
+      searchQuery = searchInputEl.value;
+      currentPage = 1;
+      renderRules();
+    });
+  }
+
+  if (categoryPillsEl) {
+    categoryPillsEl.querySelectorAll('button[data-category]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        categoryPillsEl.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        filterCategory = btn.getAttribute('data-category') || 'all';
+        currentPage = 1;
         renderRules();
       });
+    });
+  }
+
+  if (sortSelectEl) {
+    sortSelectEl.addEventListener('change', () => {
+      sortBy = sortSelectEl.value;
+      renderRules();
+    });
+  }
+
+  if (pageSizeSelectEl) {
+    pageSizeSelectEl.addEventListener('change', () => {
+      const val = pageSizeSelectEl.value;
+      pageSize = val === 'all' ? -1 : Number(val) || 10;
+      currentPage = 1;
+      renderRules();
     });
   }
 
@@ -7687,17 +8429,28 @@ html[dark] .cadence-rule-plus {
   }
 
   exportBtnEl.addEventListener('click', () => {
-    const payload = JSON.stringify({ presets, rules }, null, 2);
+    const payload = JSON.stringify(
+      {
+        version: manifestVersion || '1.6.0',
+        exportedAt: new Date().toISOString(),
+        totalTimeSavedSec,
+        settings,
+        presets,
+        rules
+      },
+      null,
+      2
+    );
     const blob = new Blob([payload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'cadence-channel-rules.json';
+    a.download = \`cadence-backup-v\${manifestVersion || '1.6.0'}.json\`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    showStatus(\`Exported \${rules.length} channel \${rules.length === 1 ? 'rule' : 'rules'} to cadence-channel-rules.json\`);
+    showStatus(\`Exported \${rules.length} channel \${rules.length === 1 ? 'rule' : 'rules'} to backup JSON\`);
   });
 
   importBtnEl.addEventListener('click', () => {
@@ -7710,6 +8463,17 @@ html[dark] .cadence-rule-plus {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
+
+      if (parsed && typeof parsed.settings === 'object') {
+        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 5 });
+        renderToggles();
+      }
+
+      if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
+        totalTimeSavedSec = Math.floor(parsed.totalTimeSavedSec);
+        renderTimeSaved();
+      }
+
       const rawRules = Array.isArray(parsed)
         ? parsed
         : Array.isArray(parsed && parsed.rules)
@@ -7751,13 +8515,14 @@ html[dark] .cadence-rule-plus {
 
       if (sanitizedRules.length > 0) {
         rules = mergeRuleLists(sanitizedRules, rules);
-        await chrome.storage.local.set({ presets, rules });
-        renderPresets();
-        renderRules();
-        showStatus(\`Imported \${sanitizedRules.length} channel \${sanitizedRules.length === 1 ? 'rule' : 'rules'} (\${rules.length} total saved)\`);
-      } else {
-        showStatus('No valid channel rules found in selected JSON file.');
       }
+
+      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec });
+      renderToggles();
+      renderTimeSaved();
+      renderPresets();
+      renderRules();
+      showStatus(\`Imported backup (\${rules.length} total channel rules, \${formatFullSavedTime(totalTimeSavedSec)} time saved)\`);
     } catch (_) {
       showStatus('Could not parse JSON file. Please select a valid Cadence JSON backup.');
     } finally {
@@ -7816,6 +8581,14 @@ html[dark] .cadence-rule-plus {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.settings && typeof changes.settings.newValue === 'object') {
+      settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue);
+      renderToggles();
+    }
+    if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+      totalTimeSavedSec = changes.totalTimeSavedSec.newValue;
+      renderTimeSaved();
+    }
     if (changes.presets && Array.isArray(changes.presets.newValue)) {
       presets = changes.presets.newValue;
       renderPresets();
@@ -7826,6 +8599,8 @@ html[dark] .cadence-rule-plus {
     }
   });
 
+  renderToggles();
+  renderTimeSaved();
   renderPresets();
   renderRules();
 })();

@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_PRESETS,
   DEFAULT_SETTINGS,
+  DEFAULT_TOTAL_TIME_SAVED_SEC,
   EXTENSION_VERSION,
   INITIAL_CHANNEL_RULES,
 } from './data/initialData';
@@ -35,6 +36,7 @@ const STORAGE_KEYS = {
   settings: 'cadence_ext_settings_v2',
   presets: 'cadence_ext_presets_v2',
   rules: 'cadence_ext_rules_v2',
+  timeSaved: 'cadence_ext_time_saved_v2',
   updatedAt: 'cadence_ext_updated_at_v2',
 };
 
@@ -80,8 +82,10 @@ function normalizeSettingsSchema(
     merged.convertShortsToWatch =
       typeof raw?.convertShortsToWatch === 'boolean' ? raw.convertShortsToWatch : true;
   }
-  if (rawVersion < 4) {
-    merged.settingsSchemaVersion = 4;
+  if (rawVersion < 5) {
+    merged.disableVideoPreviews =
+      typeof raw?.disableVideoPreviews === 'boolean' ? raw.disableVideoPreviews : true;
+    merged.settingsSchemaVersion = 5;
   }
   return merged;
 }
@@ -121,6 +125,15 @@ export default function App() {
     }
   });
 
+  const [totalTimeSavedSec, setTotalTimeSavedSec] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.timeSaved);
+      return saved !== null ? Math.max(0, parseInt(saved, 10) || 0) : DEFAULT_TOTAL_TIME_SAVED_SEC;
+    } catch {
+      return DEFAULT_TOTAL_TIME_SAVED_SEC;
+    }
+  });
+
   const [logs, setLogs] = useState<ExtensionEventLog[]>(() => [
     {
       id: 'init-1',
@@ -139,7 +152,8 @@ export default function App() {
   const pushStateToServer = async (
     nextSettings: ExtensionSettings,
     nextPresets: CategoryPreset[],
-    nextRules: ChannelRule[]
+    nextRules: ChannelRule[],
+    nextTimeSaved: number
   ) => {
     try {
       await fetch('/api/state', {
@@ -149,6 +163,7 @@ export default function App() {
           settings: nextSettings,
           presets: nextPresets,
           rules: nextRules,
+          totalTimeSavedSec: nextTimeSaved,
         }),
       });
     } catch {
@@ -185,6 +200,7 @@ export default function App() {
           if (srv.settings) setSettings(normalizeSettingsSchema(srv.settings));
           if (Array.isArray(srv.presets)) setPresets(srv.presets);
           if (Array.isArray(srv.rules)) setRules(srv.rules);
+          if (typeof srv.totalTimeSavedSec === 'number') setTotalTimeSavedSec(srv.totalTimeSavedSec);
           if (srv.updatedAt) {
             localStorage.setItem(STORAGE_KEYS.updatedAt, srv.updatedAt);
           }
@@ -192,6 +208,7 @@ export default function App() {
           if (srv.settings) setSettings(normalizeSettingsSchema(srv.settings));
           if (Array.isArray(srv.presets)) setPresets(srv.presets);
           if (Array.isArray(srv.rules)) setRules(srv.rules);
+          if (typeof srv.totalTimeSavedSec === 'number') setTotalTimeSavedSec(srv.totalTimeSavedSec);
           localStorage.setItem(STORAGE_KEYS.updatedAt, srv.updatedAt);
         }
       } catch {
@@ -210,14 +227,28 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
       localStorage.setItem(STORAGE_KEYS.presets, JSON.stringify(presets));
       localStorage.setItem(STORAGE_KEYS.rules, JSON.stringify(rules));
+      localStorage.setItem(STORAGE_KEYS.timeSaved, String(totalTimeSavedSec));
     } catch {
       // Ignore storage quota errors
     }
 
     if (userMutatedRef.current) {
-      pushStateToServer(settings, presets, rules);
+      pushStateToServer(settings, presets, rules, totalTimeSavedSec);
     }
-  }, [settings, presets, rules]);
+  }, [settings, presets, rules, totalTimeSavedSec]);
+
+  const handleAddTimeSaved = (deltaSec: number) => {
+    const delta = Math.max(0, Math.floor(deltaSec));
+    if (delta <= 0) return;
+    markUserMutation();
+    setTotalTimeSavedSec((prev) => prev + delta);
+  };
+
+  const handleResetTimeSaved = () => {
+    markUserMutation();
+    setTotalTimeSavedSec(0);
+    addLog('Reset lifetime time saved', 'Time saved counter reset to 0s');
+  };
 
   const addLog = (action: string, detail: string) => {
     setLogs((prev) => [
@@ -480,6 +511,8 @@ export default function App() {
             presets={presets}
             rules={rules}
             logs={logs}
+            totalTimeSavedSec={totalTimeSavedSec}
+            onAddTimeSaved={handleAddTimeSaved}
             onUpdateSettings={handleUpdateSettings}
             onSaveChannelRule={handleSaveChannelFromSimulator}
             onClearChannelRule={handleClearChannelFromSimulator}
@@ -498,6 +531,8 @@ export default function App() {
             settings={settings}
             presets={presets}
             rules={rules}
+            totalTimeSavedSec={totalTimeSavedSec}
+            onResetTimeSaved={handleResetTimeSaved}
             onUpdatePresetSpeed={handleUpdatePresetSpeed}
             onUpdateSettings={handleUpdateSettings}
             onAddRule={handleAddRule}

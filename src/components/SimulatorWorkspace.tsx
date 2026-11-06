@@ -32,6 +32,8 @@ interface SimulatorWorkspaceProps {
   presets: CategoryPreset[];
   rules: ChannelRule[];
   logs: ExtensionEventLog[];
+  totalTimeSavedSec?: number;
+  onAddTimeSaved?: (delta: number) => void;
   onUpdateSettings: (patch: Partial<ExtensionSettings>) => void;
   onSaveChannelRule: (
     video: Pick<SimulatedVideo, 'channelName' | 'handle' | 'channelId'>,
@@ -150,28 +152,21 @@ function formatRemainingReadout(rawRemainingSec: number, speed: number): string 
 
 function formatTimeSavedDetail(
   rawDurationSec: number,
+  remainingSec: number,
+  bankedSavedSec: number,
   speed: number
 ): { text: string; tone: 'positive' | 'neutral' | 'slower' } {
   const safeRate = Math.max(0.25, speed || 1.0);
-  const adjustedSec = Math.round(rawDurationSec / safeRate);
-  const diffSec = rawDurationSec - adjustedSec;
-  if (Math.abs(diffSec) < 3) {
+  if (safeRate < 0.99) {
+    const diffSec = Math.round(rawDurationSec / safeRate - rawDurationSec);
+    return { text: `+${formatCompactDuration(diffSec)}`, tone: 'slower' };
+  }
+  const remainingProjected = safeRate > 1.0 ? Math.round((remainingSec * (safeRate - 1.0)) / safeRate) : 0;
+  const totalSaved = Math.round(bankedSavedSec + remainingProjected);
+  if (totalSaved < 3) {
     return { text: '0s saved', tone: 'neutral' };
   }
-  const absSec = Math.abs(diffSec);
-  const hrs = Math.floor(absSec / 3600);
-  const mins = Math.floor((absSec % 3600) / 60);
-  const secs = absSec % 60;
-  const formatted =
-    hrs > 0
-      ? `${hrs}h ${String(mins).padStart(2, '0')}m`
-      : mins > 0
-        ? `${mins}m ${String(secs).padStart(2, '0')}s`
-        : `${secs}s`;
-  if (diffSec > 0) {
-    return { text: `Saves ${formatted}`, tone: 'positive' };
-  }
-  return { text: `+${formatted}`, tone: 'slower' };
+  return { text: `Saves ${formatCompactDuration(totalSaved)}`, tone: 'positive' };
 }
 
 export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
@@ -179,6 +174,8 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   presets,
   rules,
   logs,
+  totalTimeSavedSec,
+  onAddTimeSaved,
   onUpdateSettings,
   onSaveChannelRule,
   onClearChannelRule,
@@ -193,6 +190,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [liveEdgeTime, setLiveEdgeTime] = useState<number>(3600);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.5);
   const [sessionOverrideSpeed, setSessionOverrideSpeed] = useState<number | null>(null);
+  const [bankedSavedSec, setBankedSavedSec] = useState<number>(0);
+  const bankedSavedSecRef = useRef<number>(0);
+  const unflushedSavedDeltaRef = useRef<number>(0);
   const [stoppedByCadence, setStoppedByCadence] = useState<boolean>(false);
   const [autoAdvancingCountdown, setAutoAdvancingCountdown] = useState<boolean>(false);
   const [playerToast, setPlayerToast] = useState<string | null>(null);
@@ -397,6 +397,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     }
     setNonDvrRuleClamped(false);
     nonDvrRuleClampedRef.current = false;
+
+    if (unflushedSavedDeltaRef.current >= 0.5) {
+      const toFlush = Math.round(unflushedSavedDeltaRef.current);
+      if (toFlush >= 1) onAddTimeSaved?.(toFlush);
+      unflushedSavedDeltaRef.current = 0;
+    }
+    bankedSavedSecRef.current = 0;
+    setBankedSavedSec(0);
 
     setUnconvertedShortsActive(keepShortsUnconverted);
     setCurrentVideoIndex(index);
@@ -656,10 +664,30 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
       playSubtleCadenceTick(playbackSpeed);
 
+      if (playbackSpeed > 1.005) {
+        const delta = (tickMs / 1000) * (playbackSpeed - 1.0);
+        bankedSavedSecRef.current += delta;
+        setBankedSavedSec(bankedSavedSecRef.current);
+        unflushedSavedDeltaRef.current += delta;
+        if (unflushedSavedDeltaRef.current >= 1.0) {
+          const toFlush = Math.floor(unflushedSavedDeltaRef.current);
+          onAddTimeSaved?.(toFlush);
+          unflushedSavedDeltaRef.current -= toFlush;
+        }
+      }
+
       const nextTime = currentTimeRef.current + (tickMs / 1000) * playbackSpeed;
       if (nextTime >= currentVideo.durationSec) {
         syncTime(currentVideo.durationSec);
         setIsPlaying(false);
+
+        if (unflushedSavedDeltaRef.current >= 0.5) {
+          const toFlush = Math.round(unflushedSavedDeltaRef.current);
+          if (toFlush >= 1) {
+            onAddTimeSaved?.(toFlush);
+            unflushedSavedDeltaRef.current = 0;
+          }
+        }
 
         if (settings.enabled && settings.stopAfterVideoEnds) {
           setStoppedByCadence(true);
@@ -1119,6 +1147,9 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const handleReplay = () => {
     setStoppedByCadence(false);
     setAutoAdvancingCountdown(false);
+    bankedSavedSecRef.current = 0;
+    setBankedSavedSec(0);
+    unflushedSavedDeltaRef.current = 0;
     syncTime(0);
     setIsPlaying(true);
   };
@@ -1357,7 +1388,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   );
   const vodSavedTimeModel =
     !isAdPlaying && !isLiveStream
-      ? formatTimeSavedDetail(currentVideo.durationSec, effectiveSpeed)
+      ? formatTimeSavedDetail(currentVideo.durationSec, rawRemainingSec, bankedSavedSec, effectiveSpeed)
       : null;
 
   useEffect(() => {
@@ -1830,6 +1861,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                           : playlistMode === 'creator_playlist'
                             ? 'Cadence prevented this creator playlist from auto-playing the next video.'
                             : 'Cadence prevented Up Next from auto-playing another video.'}
+                        {bankedSavedSec >= 1 && (
+                          <span className="text-emerald-400 font-medium">
+                            {' · '}You saved {formatCompactDuration(bankedSavedSec)} with Cadence!
+                          </span>
+                        )}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -3062,11 +3098,30 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                   className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
                 />
               </label>
+
+              <label className="flex items-start justify-between gap-3 cursor-pointer">
+                <div>
+                  <div className="text-xs font-semibold text-slate-100">
+                    Disable Video Previews
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    Blocks hover previews on Home, Search &amp; Feeds
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.disableVideoPreviews !== false}
+                  onChange={(e) =>
+                    onUpdateSettings({ disableVideoPreviews: e.target.checked })
+                  }
+                  className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
+                />
+              </label>
             </div>
 
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-400 tabular-nums">
-                {rules.length} channel {rules.length === 1 ? 'rule' : 'rules'} · v{EXTENSION_VERSION}
+                {rules.length} {rules.length === 1 ? 'rule' : 'rules'} · {formatCompactDuration(totalTimeSavedSec || 0)} saved · v{EXTENSION_VERSION}
               </span>
               <button
                 type="button"

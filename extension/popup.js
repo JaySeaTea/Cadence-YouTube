@@ -3,6 +3,16 @@
     return Number(val).toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1');
   }
 
+  function formatCompactDuration(rawSec) {
+    const safeSec = Math.max(0, Math.round(rawSec || 0));
+    if (safeSec < 60) return safeSec + 's';
+    const totalMins = Math.max(1, Math.round(safeSec / 60));
+    if (totalMins < 60) return totalMins + 'm';
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? hrs + 'h ' + mins + 'm' : hrs + 'h';
+  }
+
   function normalizeText(str) {
     return (str || '').trim().toLowerCase();
   }
@@ -20,18 +30,20 @@
     footerVersionEl.textContent = `v${manifestVersion}`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
+  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets', 'totalTimeSavedSec']);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
     stopAfterVideoEnds: true,
     showInPageControlBar: true,
     convertShortsToWatch: true,
+    disableVideoPreviews: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 4,
+    settingsSchemaVersion: 5,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -44,6 +56,7 @@
   const toggleStop = document.getElementById('toggle-stop');
   const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
+  const togglePreviews = document.getElementById('toggle-previews');
   const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
@@ -74,9 +87,12 @@
   if (toggleShorts) {
     toggleShorts.checked = settings.convertShortsToWatch !== false;
   }
+  if (togglePreviews) {
+    togglePreviews.checked = settings.disableVideoPreviews !== false;
+  }
 
   function renderRuleCount() {
-    summaryEl.textContent = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'}`;
+    summaryEl.textContent = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'} · ${formatCompactDuration(totalTimeSavedSec)} saved`;
   }
   renderRuleCount();
 
@@ -91,6 +107,11 @@
   if (toggleShorts) {
     toggleShorts.addEventListener('change', () =>
       updateSetting({ convertShortsToWatch: toggleShorts.checked })
+    );
+  }
+  if (togglePreviews) {
+    togglePreviews.addEventListener('change', () =>
+      updateSetting({ disableVideoPreviews: togglePreviews.checked })
     );
   }
 

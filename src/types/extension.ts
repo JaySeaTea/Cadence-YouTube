@@ -25,6 +25,7 @@ export interface ExtensionSettings {
   showInPageControlBar: boolean;
   showSpeedToast: boolean;
   convertShortsToWatch: boolean;
+  disableVideoPreviews: boolean;
   settingsSchemaVersion?: number;
 }
 

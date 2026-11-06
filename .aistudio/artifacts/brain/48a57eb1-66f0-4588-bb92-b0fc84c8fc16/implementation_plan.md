@@ -1,132 +1,176 @@
-# Cadence v1.5.2 — Live DVR Tooltip Stability & Playlist Skip-Ahead Stop Guard
+# Cadence v1.6.0 — Playback & Feed Controls, Real-Time Time Saved & Channel Rules Pagination
 
-Cadence `v1.5.2` is a targeted patch release resolving two live-playback and playlist edge cases reported against `v1.5.1`: eliminating native tooltip flicker during sub-minute Live DVR countdowns (**Issue #21**) and preventing forward skips or timeline scrubs near the end of a video from bypassing Cadence's End-of-Video Stop in playlists (**Issue #22**).
+Cadence `v1.6.0` is a major feature update delivering three high-impact enhancements:
+1. **Disable Embedded YouTube Video Previews (#23)**: Turn off distracting hover auto-play and moving thumbnail previews across Home, Search, Feeds, and Sidebar while preserving focused `/@channel` page trailers (`settingsSchemaVersion: 4 → 5`, defaulting to ON).
+2. **Real-Time Per-Video & Global Time Saved (#24)**: Continuously bank genuine wall-clock time saved at `> 1.0×` playback, preserve savings across mid-video speed adjustments on Row 3, append `"You saved {time} with Cadence!"` to End-of-Video stop banners, show a lifetime time-saved badge in the Popup footer, and provide a dedicated Options stat card with an inline `"Forget Time Saved"` confirmation reset and JSON backup/restore.
+3. **Paginate, Sort & Filter Saved Channel Rules (#26)**: Keep the Options page clean and scalable with 10/25/50/All page size selection, instant channel name/handle search, preset category filter controls, and multi-criteria sorting (Recently updated, Channel Name A–Z, Speed highest–to–lowest).
+
+---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All product behaviors below incorporate your confirmed choices from our clarification step and earlier engineering review:
+> All product behaviors and UI configurations below incorporate your confirmed choices from Phase 1 interview questions and earlier design alignment:
 
-- **Confirmed Decision 1 — Paused Behind-Live Pill & Two Static Tooltips (#21)**: Whenever a viewer is behind the live broadcast edge and either playing at `≤ 1.0×` **or paused at any speed**, the Row 1 status pill displays the clean lag readout (`42s behind Live`) paired with a static `"Behind live · Increase speed above 1× to catch up, or click to jump to live edge"` tooltip. Only unpaused playback above `1.0×` displays the active catch-up countdown pill (`−42s · Live in 56s @ 1.75×`) paired with a static `"Catching up at 1.75× · Click to jump to live edge"` tooltip.
-- **Confirmed Decision 2 — Stop Guard Covers Both Cadence Skip Capsules & Native Seeks (#22)**: With *Stop Playback After Video Ends* enabled, skipping to or past the end of a video—whether via Cadence's `+10s / +30s / +60s` buttons, YouTube's `→` / `L` keyboard shortcuts, or dragging the timeline scrubber to the end—cleanly engages Cadence's End-of-Video Stop and blocks playlist auto-advance.
-- **Confirmed Decision 3 — Chrome Web Store Studio Locked at `v1.5.1`**: While the extension runtime, packaged archives, and interactive workspace advance to **`v1.5.2`**, the Promo Frame & Chrome Web Store Screenshot Studio remains explicitly pinned to **`v1.5.1`** so exported store visuals continue matching your pending initial store submission.
+- **Confirmed Decision 1 — #23 Default State & Scope**: `disableVideoPreviews: true` defaults to ON for both new installs and schema-upgraded installs (`settingsSchemaVersion: 4 → 5`). Thumbnail hover previews (video player `#inline-preview-player` / `ytd-video-preview` and animated overlays `#mouseover-overlay` / `ytd-moving-thumbnail-renderer`) are disabled on Home, Search, Feeds, and Sidebar. `/@channel` featured trailers (`ytd-channel-video-player-renderer`) remain completely unblocked.
+- **Confirmed Decision 2 — #23 UI Placement**: A 5th toggle is added to the Extension Popup toolbar (`Disable Video Previews`) and mirrored inside a new **Playback & Feed Controls** card on the Options page and web companion.
+- **Confirmed Decision 3 — #24 Time Saved Math & Invariants**:
+  - Accumulates real wall-clock savings only when `playbackRate > 1.0` (`!paused && !isAd && !isLive`).
+  - No negative deltas for `< 1.0×` slowed playback.
+  - Never inflates on skips (`+60s`) or timeline scrubs (`dtWall` clamped to $\le 1.5\text{s}$).
+  - Credits partial watches continuously (flushed periodically and on tab close/pause/navigation).
+  - Row 3 watch bar displays `bankedSaved + max(0, remainingProjectedSaved)` (`Saves Xm Ys`), preserving accrued savings across mid-video speed adjustments.
+  - End-of-video banner appends `"You saved {time} with Cadence!"` whenever `bankedSaved ≥ 1s`; omitted cleanly if no accelerated playback was used.
+  - Reset flow on the Options page requires exact inline input matching `"Forget Time Saved"` before clearing.
+- **Confirmed Decision 4 — #26 Rules Table Pagination, Sorting & Filtering**:
+  - **Page Size**: Defaults to 10 rules per page with a selector for 25, 50, or All.
+  - **Sorting**: Multi-mode selector with Recently updated (default), Channel Name A to Z, and Speed highest to lowest.
+  - **Search & Filter**: Real-time instant search input matching channel name or handle, paired with clean preset category filter buttons (All, Podcast, Lecture, Music, Tutorial, Custom).
+- **Confirmed Decision 5 — Chrome Web Store Studio Locked at `v1.5.1`**: All runtime code, manifests, and simulator features advance to **`v1.6.0`**, while the Promo Frame & CWS Screenshot Studio remains locked at **`v1.5.1`** to preserve initial store submission parity.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Stabilizes hover tooltips on rapidly ticking Live DVR status pills and closes a race window where forward seeks near the end of a playlist video allowed YouTube's internal playlist manager to advance to the next video before Cadence could pause playback.
-- **Target Audience / Persona**: Deliberate YouTube viewers who catch up on live streams at accelerated speeds (`1.25×–2.0×`) and watch structured creator courses, lecture series, or Watch Later queues without unwanted auto-advance.
-- **Key Value**: Reliable, predictable playback control—hovering to read live catch-up actions never blinks every second, and skipping through closing credits in a playlist stops cleanly on the current video instead of launching the next lecture.
+- **What It Does**:
+  - Silences auto-playing video teasers on browsing surfaces without breaking creator channel pages.
+  - Quantifies the viewer's productivity gains with live per-video and cumulative lifetime time-saved metrics.
+  - Transforms the All Channel Rules options view into an organized, searchable, and paginated directory.
+- **Target Audience / Persona**: High-volume YouTube learners, researchers, and podcast listeners who curate dozens of channel rules and want an intentional, quiet browsing experience with verifiable time savings.
+- **Key Value**: Focus and efficiency—no unprompted thumbnail noise, seamless management of large rule lists, and clear validation of hours saved with Cadence.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-- **Key User Flows**:
-  1. **Hovering Over Live DVR Status Under 1 Minute (#21)**:
-     - Viewer rewinds a live stream 45 seconds behind the broadcast head and plays at `1.75×`.
-     - Row 1's status pill ticks smoothly every second (`−45s · Live in 60s @ 1.75×` → `−44s · Live in 59s @ 1.75×`) using fixed-width tabular sizer geometry so neighboring controls never shift.
-     - Hovering the cursor over the pill displays `"Catching up at 1.75× · Click to jump to live edge"` with zero flicker while the visible pill text continues counting down underneath.
-     - Pressing Pause switches the pill to `44s behind Live` with the static tooltip `"Behind live · Increase speed above 1× to catch up, or click to jump to live edge"`.
-  2. **Skipping Ahead Near the End of a Playlist Video (#22)**:
-     - Viewer watches an episode in a Creator Playlist (`list=...`) with *Stop Playback After Video Ends* turned ON.
-     - With 35 seconds left, the viewer clicks `+60s` on the Cadence deck (or presses `L` / scrubs to the end of the timeline) to skip outro credits.
-     - Instead of rolling over into `index + 1`, playback immediately halts at the end frame, suppresses YouTube's playlist auto-advance, and surfaces the `"Cadence stopped playback · Playlist auto-advance prevented"` overlay with `Replay`, `Play Next`, and `Dismiss` actions.
-     - If *Stop Playback After Video Ends* is turned OFF in the toolbar popup, skipping past the end allows YouTube's normal playlist progression as expected.
-  3. **Exporting Store Graphics vs. Testing `v1.5.2`**:
-     - Header version readouts, manifest metadata, and live simulator testing reflect `v1.5.2`, while the Chrome Web Store Asset Studio explicitly notes and preserves `v1.5.1` store badge parity.
+### Key User Flows
 
-- **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Precision dark-slate broadcast utility console with flat, single-elevation surfaces and zero decorative clutter.
-  - *Color Palette & Mood*: 60% deep neutral slate canvas (`#0B0F19` / `#0F172A`), 30% elevated structural cards (`#111827`) with subtle `1px` slate hairline borders, and 10% high-intent crimson (`#DC2626`) for active speed states plus semantic amber (`#D97706`) for behind-live DVR indicators.
-  - *Typography & Hierarchy*: `Plus Jakarta Sans` for crisp structural headings and brand wordmark, `Public Sans` for compact UI labels, and `JetBrains Mono` (`tabular-nums`) for all speed multipliers, countdowns, and lag telemetry so digit updates never cause horizontal layout jitter.
-  - *Component Styling & Layout*: Full-width 1440px desktop workspace adhering to the strict single-row, three-zone top bar contract (Brand wordmark — concise single-line navigation tabs — primary download action), paired with collision-aware single-line watch-deck controls.
+1. **Browsing YouTube Feeds Without Hover Distractions (#23)**:
+   - When hovering over video thumbnails on Home (`/`), Search (`/results`), Subscriptions (`/feed/subscriptions`), or Watch Sidebar (`#secondary`), static thumbnails remain still and quiet.
+   - Visiting a creator's dedicated page (e.g. `youtube.com/@mkbhd`) allows the featured channel trailer to play normally.
+   - The user can toggle this behavior at any time via the 5th switch in the Toolbar Popup or under "Playback & Feed Controls" on the Options page.
+2. **Watching Videos & Accruing Time Saved (#24)**:
+   - Starting a 20-minute video at `1.5×`: Row 3 displays `Saves 6m 40s`.
+   - After watching 10 wall-clock minutes (consuming 15 minutes of video, banking 5 minutes saved), the viewer switches to `1.0×`:
+     - Row 3 continues to display `Saves 5m 00s` (the banked savings are preserved, rather than reverting to 0).
+   - When the video reaches the end and stops, the banner reads:
+     `Cadence stopped playback · Playlist auto-advance prevented · You saved 5m 00s with Cadence!`
+   - If watched entirely at `1.0×` or `0.75×`, no savings line is displayed on the banner.
+   - The Extension Popup footer displays `28 saved channel rules · 14h 32m saved`.
+   - The Options page displays a lifetime stat card with a `Reset Counter` button. Clicking `Reset Counter` reveals an inline input: `"Type 'Forget Time Saved' to confirm"`. Typing the exact phrase and confirming resets the counter to 0.
+3. **Managing Channel Rules with Pagination, Sorting & Search (#26)**:
+   - Users with 15–100+ rules see a clean 10-item table with total count (`Showing 1–10 of 42 rules`).
+   - Typing into the search bar instantly filters rows by channel title or `@handle`.
+   - Clicking category filter buttons (`All`, `Podcasts`, `Lectures`, `Music`, `Tutorials`, `Custom`) narrows the view without reloading.
+   - Changing sort order reorganizes rows instantly by recent activity, alphabetical name, or playback speed.
+   - Changing page size (`10`, `25`, `50`, `All`) adjusts the table height and paginator controls accordingly.
 
-- **Interactive Feedback & Motion**:
-  - Micro-interactions settle within `150ms` via opacity and color transitions only (no layout-geometry animation).
-  - Hovering over the Row 1 live status pill highlights its border subtly while keeping the native browser tooltip steady across 1-second text ticks.
-  - Triggering an end-of-video stop via `+60s` immediately displays the non-intrusive bottom player banner with clear manual `Replay` and `Play Next` escape hatches.
+### Visual Identity & Theme (Frontend Design Standards)
+
+- **Palette**: Deep slate canvas (`#0B0F19` / `#0F172A`), structural card panels (`#111827`) with subtle border hairlines (`#1E293B` / rgba(148,163,184,0.2)), semantic emerald (`#059669` / `#34D399`) for positive time-saved callouts, and cadence crimson (`#DC2626`) for active accents.
+- **Typography & Formatting**:
+  - `Public Sans` and `Plus Jakarta Sans` for labels and headers.
+  - `JetBrains Mono` with `tabular-nums` for all numeric counters, timers, and speed badges.
+  - Zero-pill compliance: informational metadata (rule dates, total rule counts, elapsed time) is rendered as clean unboxed text with subtle typographic separators (`·`).
+  - Category filters are rendered as segmented interactive button controls (`<button>`).
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1 — Decouple Live Tooltip Copy from Per-Second Countdown Text + Hover Mutation Guard**
-  - *Chosen Approach*: Remove ticking lag/catch-up timestamps from the `title` attribute (creating two time-invariant behind-live tooltip strings) AND add a `:hover` attribute guard on the Row 1 duration slot button that defers redundant `title` writes while hovered unless the underlying slot mode (`live-catchup`, `live-behind`, `live-head`) changes.
-  - *Why*: Chromium immediately destroys and recreates native OS tooltips whenever `element.title` mutates under a hovered pointer. Removing ticking numbers eliminates 99% of mutations, and the mode-aware `:hover` guard guarantees stability without touching any other button's tooltip behavior.
-  - *Alternatives Considered*: Replacing native `title` with a custom CSS floating tooltip only on Row 1—passed over because it would create inconsistent tooltip styling relative to the rest of the watch deck and risk clipping inside YouTube's theater/fullscreen containers.
-
-- **Decision 2 — Deterministic End-Stop on Forward Skip + Multi-Stage Native Seek Catch**
-  - *Chosen Approach*:
-    1. When `SEEK_BY_SECONDS` moves forward (`deltaSec > 0`) on a VOD with `stopAfterVideoEnds` enabled, compute the effective stream duration using the smaller of `HTMLVideoElement.duration` and YouTube's `#movie_player.getDuration()`. If `currentTime + deltaSec` lands within `0.6s` of (or beyond) that boundary, execute Cadence's end-of-video stop synchronously (seek to `effectiveDuration - 0.5s`, lock `heldAtEndVideoId`, suppress playlist auto-advance, pause player, and emit `PLAYBACK_STOPPED`).
-    2. For native keyboard skips (`→` / `L`) and timeline scrubbing, evaluate the near-end guard immediately inside `seeking` and `seeked` listeners and add a capture-phase `ended` / player-state-`0` safety net (when no manual Next-Video navigation was initiated) that pauses and blocks `yt-playlist-manager` before auto-advance can fire.
-  - *Why*: Previously, seeking to `duration - 0.35s` raced a `250ms` timer against `1.5×–2.0×` playback and DASH audio/video chunk boundaries where `#movie_player` reaches state `0` (`ENDED`) up to `0.4s` before `video.duration`. Handling forward skips deterministically eliminates the timer race completely.
-  - *Alternatives Considered*: Clamping `+60s` to `duration - 2.0s` and letting the last 2 seconds play out—passed over because users clicking `+60s` at the end of a video expect an immediate stop rather than watching 2 arbitrary seconds of outro silence.
-
-- **Decision 3 — Decoupled Store Asset Version Constant (`v1.5.1`) vs. Runtime Version (`v1.5.2`)**
-  - *Chosen Approach*: Advance the runtime extension version constant to `1.5.2` across the packaged extension and interactive workspace while keeping the Chrome Web Store Asset Studio explicitly pinned to `v1.5.1`.
-  - *Why*: Protects consistency across your already-recorded promo video and five store screenshots during your 7-day Google 2FA verification window while letting `main` move forward cleanly.
+- **Decision 1 — Real-Time Math & Wall-Clock Clamping (#24)**:
+  - *Chosen Approach*: Compute `dtWall = min(1.5, (now - lastTickMs) / 1000)` only when `!video.paused && !isAd && !isLive && video.playbackRate > 1.0`. Add `dtWall * (video.playbackRate - 1.0)` to `bankedSavedSec`.
+  - *Why*: Immune to clock drift, video skips (`+60s`), scrubbing jumps, and background tab throttling. Mathematically guarantees that time saved reflects genuine viewer time reclaimed.
+- **Decision 2 — Dual CSS Injection & Pointer/Media Blocking for Video Previews (#23)**:
+  - *Chosen Approach*: Inject targeted CSS rules suppressing `ytd-video-preview`, `#inline-preview-player`, and `ytd-moving-thumbnail-renderer` inside feed containers, scoped by `:not(ytd-channel-video-player-renderer)` and body route markers.
+  - *Why*: Instantaneous zero-overhead suppression that prevents network video buffer fetching on hover without breaking Polymer DOM bindings.
+- **Decision 3 — Inline Reset Confirmation Modal (#24)**:
+  - *Chosen Approach*: An inline confirmation card with text input requiring the exact string `"Forget Time Saved"` before enabling the reset button.
+  - *Why*: Adheres strictly to the environment constraint forbidding `window.prompt` / `window.alert` while preventing accidental deletion of lifetime stats.
+- **Decision 4 — Client-Side Rules Pagination & Instant Filtering (#26)**:
+  - *Chosen Approach*: React/TypeScript state-driven pagination, sorting, and search running directly over the `rules` array in memory.
+  - *Why*: Sub-millisecond filter latency with zero network calls, keeping the extension options page responsive regardless of rule count.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-- **Architecture & Component Diagram**:
+## 4. Technical Architecture & Data Strategy
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                     YouTube Watch Page (Browser Runtime)                     │
+│                    YouTube Browsing & Watch Surfaces                         │
 │                                                                              │
-│  ┌────────────────────────────────────┐    postMessage     ┌───────────────┐ │
-│  │   Main-World Player Bridge         │ ─────────────────► │ Isolated-World│ │
-│  │                                    │  TIME_REMAINING    │ Watch Deck UI │ │
-│  │ • VOD Effective Duration Resolver  │  PLAYBACK_STOPPED  │               │ │
-│  │   min(video.duration, getDuration) │ ◄───────────────── │ • Row 1 Slot  │ │
-│  │ • Deterministic Forward-Skip Stop  │  SEEK_BY_SECONDS   │   Mode Engine │ │
-│  │ • Native Seek / Ended Playlist     │  JUMP_TO_LIVE      │   (2 Static   │ │
-│  │   Auto-Advance Interceptor         │                    │    Tooltips + │ │
-│  └─────────────────┬──────────────────┘                    │   :hover Safe │ │
-│                    │                                       │    Guard)     │ │
-│                    ▼                                       └───────┬───────┘ │
-│  ┌────────────────────────────────────┐                            │         │
-│  │  #movie_player & yt-playlist-mgr   │                            ▼         │
-│  │  • pauseVideo() + canAutoAdvance_  │                  ┌──────────────────┐│
-│  └────────────────────────────────────┘                  │ End-Stop Overlay ││
-│                                                          │ Replay│Play Next ││
-│                                                          └──────────────────┘│
-└──────────────────────────────────────────────────────────────────────────────┘
-                                       ▲
-                                       │ Shared Behavior Parity
-                                       ▼
+│  Feed & Search Containers              Watch Page Player                     │
+│  ┌─────────────────────────────┐       ┌──────────────────────────────────┐  │
+│  │ Thumbnail Hover Previews    │       │ #movie_player & HTMLVideoElement │  │
+│  │ (Suppressed via #23 rules)  │       │ • Real-time dtWall integration   │  │
+│  └─────────────────────────────┘       │ • Banked + projected saved math  │  │
+│                                        └────────────────┬─────────────────┘  │
+│                                                         │ TIME_REMAINING_UPDATE
+│                                                         │ (bankedSavedSec)   │
+│                                                         ▼                    │
+│                                        ┌──────────────────────────────────┐  │
+│                                        │ Cadence Watch Deck & Stop Banner │  │
+│                                        │ • Row 3: Saves Xm Ys             │  │
+│                                        │ • End Banner: You saved X with…  │  │
+│                                        └────────────────┬─────────────────┘  │
+└─────────────────────────────────────────────────────────┼────────────────────┘
+                                                          │ Flush increments
+                                                          ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                  Cadence Web Companion & Packaging Studio                    │
+│                      Extension Service Worker & Storage                      │
 │                                                                              │
-│  ┌──────────────────────────┐  ┌─────────────────────┐  ┌──────────────────┐ │
-│  │ Interactive Watch        │  │ Extension Builder   │  │ Promo & CWS      │ │
-│  │ Simulator (v1.5.2)       │  │ & ZIP Exporter      │  │ Asset Studio     │ │
-│  │ • Live DVR Pause/Catchup │  │ • Builds v1.5.2     │  │ • Pinned v1.5.1  │ │
-│  │ • Playlist +60s & Scrub  │  │   Unpacked + CWS    │  │   Store Graphics │ │
-│  └──────────────────────────┘  └─────────────────────┘  └──────────────────┘ │
-└──────────────────────────────────────────────────────────────────────────────┘
+│   chrome.storage.local: {                                                    │
+│     settings: { ..., disableVideoPreviews: true, settingsSchemaVersion: 5 }, │
+│     totalTimeSavedSec: 52340,                                                │
+│     rules: [ ... ], presets: [ ... ]                                         │
+│   }                                                                          │
+└───────────────────────┬──────────────────────────────────┬───────────────────┘
+                        │                                  │
+                        ▼                                  ▼
+      ┌──────────────────────────────────┐  ┌──────────────────────────────────┐
+      │   Extension Popup (popup.html)   │  │   Options Page (options.html)    │
+      │   • 5th Toggle: Video Previews   │  │   • Playback & Feed Controls     │
+      │   • Footer: X rules · Yh Zm saved│  │   • Lifetime Time Saved Card     │
+      └──────────────────────────────────┘  │     (Forget Time Saved reset)    │
+                                            │   • Paginated Channel Rules      │
+                                            │     (Search, Sort, Category)     │
+                                            └──────────────────────────────────┘
 ```
 
-- **Data Model & State**:
-  - **Settings Schema**: Remains at `settingsSchemaVersion: 4` (pure bugfix patch; zero migration or permission changes).
-  - **Row 1 Live Slot State**:
-    - `live-head`: Synced at live edge (`"Live broadcast · Synced at live edge"`).
-    - `live-behind`: Triggered when behind live (`dvrLagSec > 0`) AND (`isPaused === true` OR `liveRate <= 1.02`). Displays `${lagLabel} behind Live` with static tooltip `"Behind live · Increase speed above 1× to catch up, or click to jump to live edge"`.
-    - `live-catchup`: Triggered only when behind live AND `!isPaused` AND `liveRate > 1.02`. Displays `−${lagLabel} · Live in ${catchUpLabel} @ ${speed}×` with static tooltip `"Catching up at ${speed}× · Click to jump to live edge"`.
-  - **End-of-Video Hold State**:
-    - `heldAtEndVideoId`: Tracks the video ID currently held by Cadence so repeated `timeupdate`/`seeked`/`ended` events do not emit duplicate banners, and resets cleanly on backward seeks (`deltaSec < 0`), timeline scrubs earlier than `duration - 2.5s`, `Replay`, or video navigation.
+### Schema & Data Migration (`settingsSchemaVersion: 4 → 5`)
+- `ExtensionSettings`: add `disableVideoPreviews: boolean` (default: `true`).
+- Storage top-level key: `totalTimeSavedSec: number` (default: `0`).
+- Background worker migration: upgrades existing version 4 settings to version 5 with `disableVideoPreviews: true` and initializes `totalTimeSavedSec: 0` if missing.
+- Backup / Import JSON: includes `totalTimeSavedSec` alongside `settings`, `presets`, and `rules`.
 
-- **Interactive Component & State Mapping**:
-  - **Row 1 Live Pill Hover & Pause Transitions**:
-    - *Unpaused at `1.75×` behind live*: Pill shows amber dot + ticking catch-up text; `slotBtn.title` stays constant across 1-second updates; `slotBtn` records `data-slot-mode="live-catchup"` and skips redundant `title` writes while `:hover` matches the same mode and speed.
-    - *Paused at `1.75×` behind live*: Mode transitions from `live-catchup` → `live-behind`, switching pill text to `${lagLabel} behind Live` and updating the tooltip once to the static Behind Live string.
-  - **Forward Skip (`+10s / +30s / +60s`) & Timeline Scrubbing in Playlists**:
-    - *Stop After Video Ends = ON*: Forward skip reaching `effectiveDuration - 0.6s` (or native keyboard/timeline scrub reaching the end boundary) invokes a unified `triggerEndOfVideoStop(player, video, currentVideoId)` helper that clamps playhead just inside the final frame (`effectiveDuration - 0.5s`), disables `yt-playlist-manager.canAutoAdvance_`, pauses playback, and renders the stop banner.
-    - *Stop After Video Ends = OFF*: Forward skip seeks normally to `duration`, allowing YouTube's playlist controller to advance unimpeded.
-    - *Manual "Play Next" Button*: Marks `userInitiatedNavUntil` for `3000ms` so deliberate user clicks on `Play Next` or YouTube's native Next button always advance cleanly without interference.
-  - **Interactive Simulator Parity**:
-    - Mirrors both the paused-behind-live pill transition/static tooltips and the playlist `+10s/+30s/+60s` + timeline scrub end-stop behavior inside the web simulator so every `v1.5.2` fix can be tested interactively in the preview alongside the built extension package.
+---
+
+## 5. Verification Plan
+
+1. **Compilation & Syntax**: Run `npm run build:extension`, `node --check` across all generated extension scripts, `lint_applet` (`tsc --noEmit`), and `compile_applet` (`vite build`).
+2. **Issue #23 Verification**:
+   - Verify thumbnail hover on Home, Search, and Watch Sidebar does not trigger auto-play video or animated frame cycling.
+   - Verify `/@channel` pages still allow featured trailers to play.
+   - Verify toggle state is preserved across Popup and Options page.
+3. **Issue #24 Verification**:
+   - Verify `bankedSavedSec` accrues during `> 1.0×` playback and remains stable when dropping to `1.0×`.
+   - Verify End-of-Video banner appends savings when $\ge 1\text{s}$ and omits when $< 1\text{s}$.
+   - Verify Popup footer reflects total rules and hours/minutes saved.
+   - Verify Options page reset flow requires typing `"Forget Time Saved"`.
+4. **Issue #26 Verification**:
+   - Verify rules table pagination displays 10 per page by default, switching correctly to 25, 50, and All.
+   - Verify search input matches channel names and `@handles`.
+   - Verify sorting toggles between Recent, Alphabetical, and Speed.
+   - Verify category filter buttons filter to matching preset categories.
+
+---
+
+## 6. Implementation & Verification Status
+
+- [x] **Schema v5 Migration**: `settingsSchemaVersion: 5` initialized with `disableVideoPreviews: true` and `totalTimeSavedSec`.
+- [x] **#23 Disable Video Previews**: Built 5th toggle into Extension Popup, Content Script CSS suppressor targeting hover previews across Home/Search/Sidebar while exempting `/@channel` trailers, and mirrored in Options Page Panel 01.
+- [x] **#24 Real-Time Time Saved**: Implemented continuous wall-clock bank tracking (`dtWall * (rate - 1.0)` for `rate > 1.0`), watch deck Row 3 accrued math (`bankedSaved + max(0, remainingProjected)`), End-of-Video stop banner (`" · You saved {time} with Cadence!"`), Popup footer (`{rules} rules · {timeSaved} saved`), and Options Panel 02 Lifetime Time Saved card with typed `"Forget Time Saved"` confirmation reset.
+- [x] **#26 Channel Rules Pagination & Filter Toolbar**: Built Options Panel 04 with 10/25/50/All page size selection, multi-criteria sorting (Recently updated, Channel Name A–Z, Speed highest to lowest), instant search by channel name or handle, and preset category filter pills.
+- [x] **CWS Snapshot Locked**: Preserved Promo Frame and CWS Screenshot Studio locked at `v1.5.1`.
+- [x] **Build & Lint Verification**: Successfully executed `npm run build:extension` (generating `CWS.zip` 59.6 KB), validated JS syntax on all 5 extension files, and passed `tsc --noEmit` + `vite build` with 0 errors.
+

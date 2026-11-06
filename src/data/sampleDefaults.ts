@@ -4,8 +4,9 @@ import {
   ExtensionSettings,
 } from '../types/extension';
 
-export const EXTENSION_VERSION = '1.5.2';
+export const EXTENSION_VERSION = '1.6.0';
 export const CWS_STORE_SNAPSHOT_VERSION = '1.5.1';
+export const DEFAULT_TOTAL_TIME_SAVED_SEC = 52340; // 14h 32m 20s
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,
@@ -15,7 +16,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   showInPageControlBar: true,
   showSpeedToast: true,
   convertShortsToWatch: true,
-  settingsSchemaVersion: 4,
+  disableVideoPreviews: true,
+  settingsSchemaVersion: 5,
 };
 
 export const DEFAULT_PRESETS: CategoryPreset[] = [

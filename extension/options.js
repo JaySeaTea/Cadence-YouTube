@@ -20,6 +20,15 @@
   }
 ];
 
+  const DEFAULT_SETTINGS = {
+    perChannelSpeed: true,
+    stopAfterVideo: true,
+    showSpeedBar: true,
+    convertShorts: true,
+    disableVideoPreviews: true,
+    settingsSchemaVersion: 5
+  };
+
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
@@ -29,15 +38,32 @@
     versionEl.textContent = `· v${manifestVersion}`;
   }
 
-  let stored = await chrome.storage.local.get(['presets', 'rules']);
+  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
+  let settings = Object.assign({}, DEFAULT_SETTINGS, stored.settings || {});
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : DEFAULT_PRESETS.map((p) => ({ ...p }));
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
 
+  // Filter & Pagination State (#26)
+  let searchQuery = '';
+  let filterCategory = 'all';
+  let sortBy = 'recent';
+  let pageSize = 10;
+  let currentPage = 1;
+
+  // DOM elements
   const presetsEl = document.getElementById('presets-list');
   const rulesEl = document.getElementById('rules-list');
   const rulesCountEl = document.getElementById('rules-count');
+  const rulesRangeEl = document.getElementById('rules-range');
+  const pageButtonsEl = document.getElementById('page-buttons');
+  const searchInputEl = document.getElementById('input-rule-search');
+  const categoryPillsEl = document.getElementById('category-pills');
+  const sortSelectEl = document.getElementById('select-sort');
+  const pageSizeSelectEl = document.getElementById('select-page-size');
+
   const form = document.getElementById('add-rule-form');
   const presetSelectEl = document.getElementById('input-preset');
   const speedInputEl = document.getElementById('input-speed');
@@ -46,10 +72,36 @@
   const exportBtnEl = document.getElementById('btn-export-json');
   const resetBtnEl = document.getElementById('btn-reset-presets');
   const statusBannerEl = document.getElementById('status-banner');
+
+  // Toggles DOM
+  const toggleSpeedEl = document.getElementById('toggle-speed');
+  const toggleStopEl = document.getElementById('toggle-stop');
+  const toggleBarEl = document.getElementById('toggle-bar');
+  const toggleShortsEl = document.getElementById('toggle-shorts');
+  const togglePreviewsEl = document.getElementById('toggle-previews');
+
+  // Lifetime stats DOM
+  const statSavedValueEl = document.getElementById('stat-saved-value');
+  const btnOpenResetEl = document.getElementById('btn-open-reset');
+  const resetConfirmBoxEl = document.getElementById('reset-confirm-box');
+  const inputConfirmForgetEl = document.getElementById('input-confirm-forget');
+  const btnConfirmForgetEl = document.getElementById('btn-confirm-forget');
+  const btnCancelForgetEl = document.getElementById('btn-cancel-forget');
+
   let statusTimer = null;
 
   function formatSpeed(val) {
     return Number(val).toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1');
+  }
+
+  function formatFullSavedTime(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    if (s < 60) return `${s}s`;
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const remS = s % 60;
+    if (h > 0) return `${h}h ${m}m ${remS}s`;
+    return `${m}m ${remS}s`;
   }
 
   function normalizeHandle(raw, fallbackName = '') {
@@ -71,6 +123,64 @@
       statusBannerEl.classList.remove('visible');
     }, 3600);
   }
+
+  function renderToggles() {
+    if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
+    if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
+    if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
+    if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
+  }
+
+  async function updateSetting(key, val) {
+    settings[key] = val;
+    settings.settingsSchemaVersion = 5;
+    await chrome.storage.local.set({ settings });
+    showStatus(`Updated ${key}: ${val ? 'Enabled' : 'Disabled'}`);
+  }
+
+  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
+  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
+  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
+  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
+  if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
+
+  function renderTimeSaved() {
+    if (statSavedValueEl) {
+      statSavedValueEl.textContent = `${formatFullSavedTime(totalTimeSavedSec)} saved`;
+    }
+  }
+
+  btnOpenResetEl.addEventListener('click', () => {
+    resetConfirmBoxEl.classList.add('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+    inputConfirmForgetEl.focus();
+  });
+
+  btnCancelForgetEl.addEventListener('click', () => {
+    resetConfirmBoxEl.classList.remove('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+  });
+
+  inputConfirmForgetEl.addEventListener('input', () => {
+    btnConfirmForgetEl.disabled = inputConfirmForgetEl.value.trim() !== 'Forget Time Saved';
+  });
+
+  btnConfirmForgetEl.addEventListener('click', async () => {
+    if (inputConfirmForgetEl.value.trim() !== 'Forget Time Saved') return;
+    totalTimeSavedSec = 0;
+    await chrome.storage.local.set({ totalTimeSavedSec: 0 });
+    if (chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED' }, () => {});
+    }
+    renderTimeSaved();
+    resetConfirmBoxEl.classList.remove('visible');
+    inputConfirmForgetEl.value = '';
+    btnConfirmForgetEl.disabled = true;
+    showStatus('Lifetime time saved counter reset to 0s.');
+  });
 
   function syncPresetSelectLabels() {
     if (!presetSelectEl) return;
@@ -124,40 +234,169 @@
     return found ? found.speed : rule.customSpeed;
   }
 
+  function getFilteredAndSortedRules() {
+    let list = [...rules];
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (r) =>
+          (r.channelName && r.channelName.toLowerCase().includes(q)) ||
+          (r.handle && r.handle.toLowerCase().includes(q))
+      );
+    }
+    if (filterCategory !== 'all') {
+      list = list.filter((r) => r.presetId === filterCategory);
+    }
+    if (sortBy === 'name') {
+      list.sort((a, b) => a.channelName.localeCompare(b.channelName));
+    } else if (sortBy === 'speed') {
+      list.sort((a, b) => resolveSpeed(b) - resolveSpeed(a));
+    } else {
+      list.sort((a, b) => {
+        const da = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+        const db = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        return db - da;
+      });
+    }
+    return list;
+  }
+
   function renderRules() {
     if (rulesCountEl) {
       rulesCountEl.textContent = manifestVersion
         ? `${rules.length} saved · v${manifestVersion}`
         : `${rules.length} saved`;
     }
-    if (rules.length === 0) {
-      rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:8px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';
-      return;
-    }
-    rulesEl.innerHTML = rules
-      .map(
-        (r) => `
-      <div class="rule-row">
-        <div>
-          <strong>${r.channelName}</strong>
-          <span style="font-size:12px;color:#94a3b8;margin-left:6px;">${r.handle || ''} · ${r.presetId}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <strong style="font-variant-numeric:tabular-nums;">${formatSpeed(resolveSpeed(r))}×</strong>
-          <button type="button" class="row-remove" data-del-id="${r.id}">Remove</button>
-        </div>
-      </div>
-    `
-      )
-      .join('');
 
-    rulesEl.querySelectorAll('button[data-del-id]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = btn.getAttribute('data-del-id');
-        rules = rules.filter((r) => r.id !== id);
-        await chrome.storage.local.set({ rules });
+    const filtered = getFilteredAndSortedRules();
+    const totalCount = filtered.length;
+
+    const limit = pageSize === -1 ? totalCount : pageSize;
+    const totalPages = limit > 0 ? Math.max(1, Math.ceil(totalCount / limit)) : 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage < 1) currentPage = 1;
+
+    const startIdx = limit > 0 ? (currentPage - 1) * limit : 0;
+    const endIdx = limit > 0 ? Math.min(startIdx + limit, totalCount) : totalCount;
+    const visibleRules = filtered.slice(startIdx, endIdx);
+
+    if (rulesRangeEl) {
+      if (totalCount === 0) {
+        rulesRangeEl.textContent = 'Showing 0–0 of 0 rules';
+      } else {
+        rulesRangeEl.textContent = `Showing ${startIdx + 1}–${endIdx} of ${totalCount} ${totalCount === 1 ? 'rule' : 'rules'}${rules.length !== totalCount ? ` (${rules.length} total)` : ''}`;
+      }
+    }
+
+    if (visibleRules.length === 0) {
+      if (rules.length === 0) {
+        rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:12px 0;">No channel rules saved yet. Add a channel above or import a JSON backup.</p>';
+      } else {
+        rulesEl.innerHTML = '<p style="font-size:13px;color:#94a3b8;padding:12px 0;">No channel rules match your search or filter.</p>';
+      }
+    } else {
+      rulesEl.innerHTML = visibleRules
+        .map(
+          (r) => `
+        <div class="rule-row">
+          <div>
+            <strong>${r.channelName}</strong>
+            <span style="font-size:12px;color:#94a3b8;margin-left:6px;">${r.handle || ''} · ${r.presetId}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <strong style="font-variant-numeric:tabular-nums;">${formatSpeed(resolveSpeed(r))}×</strong>
+            <button type="button" class="row-remove" data-del-id="${r.id}">Remove</button>
+          </div>
+        </div>
+      `
+        )
+        .join('');
+
+      rulesEl.querySelectorAll('button[data-del-id]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-del-id');
+          rules = rules.filter((r) => r.id !== id);
+          await chrome.storage.local.set({ rules });
+          renderRules();
+        });
+      });
+    }
+
+    // Render pagination buttons
+    if (pageButtonsEl) {
+      if (totalPages <= 1 || pageSize === -1) {
+        pageButtonsEl.innerHTML = '';
+      } else {
+        let btns = '';
+        btns += `<button type="button" class="page-btn" id="btn-prev-page" ${currentPage === 1 ? 'disabled' : ''}>Prev</button>`;
+        for (let p = 1; p <= totalPages; p++) {
+          btns += `<button type="button" class="page-btn ${p === currentPage ? 'active' : ''}" data-page="${p}">${p}</button>`;
+        }
+        btns += `<button type="button" class="page-btn" id="btn-next-page" ${currentPage === totalPages ? 'disabled' : ''}>Next</button>`;
+        pageButtonsEl.innerHTML = btns;
+
+        const prevBtn = pageButtonsEl.querySelector('#btn-prev-page');
+        if (prevBtn) {
+          prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+              currentPage--;
+              renderRules();
+            }
+          });
+        }
+        const nextBtn = pageButtonsEl.querySelector('#btn-next-page');
+        if (nextBtn) {
+          nextBtn.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+              currentPage++;
+              renderRules();
+            }
+          });
+        }
+        pageButtonsEl.querySelectorAll('button[data-page]').forEach((b) => {
+          b.addEventListener('click', () => {
+            currentPage = Number(b.getAttribute('data-page')) || 1;
+            renderRules();
+          });
+        });
+      }
+    }
+  }
+
+  // Filter & Search events
+  if (searchInputEl) {
+    searchInputEl.addEventListener('input', () => {
+      searchQuery = searchInputEl.value;
+      currentPage = 1;
+      renderRules();
+    });
+  }
+
+  if (categoryPillsEl) {
+    categoryPillsEl.querySelectorAll('button[data-category]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        categoryPillsEl.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        filterCategory = btn.getAttribute('data-category') || 'all';
+        currentPage = 1;
         renderRules();
       });
+    });
+  }
+
+  if (sortSelectEl) {
+    sortSelectEl.addEventListener('change', () => {
+      sortBy = sortSelectEl.value;
+      renderRules();
+    });
+  }
+
+  if (pageSizeSelectEl) {
+    pageSizeSelectEl.addEventListener('change', () => {
+      const val = pageSizeSelectEl.value;
+      pageSize = val === 'all' ? -1 : Number(val) || 10;
+      currentPage = 1;
+      renderRules();
     });
   }
 
@@ -178,17 +417,28 @@
   }
 
   exportBtnEl.addEventListener('click', () => {
-    const payload = JSON.stringify({ presets, rules }, null, 2);
+    const payload = JSON.stringify(
+      {
+        version: manifestVersion || '1.6.0',
+        exportedAt: new Date().toISOString(),
+        totalTimeSavedSec,
+        settings,
+        presets,
+        rules
+      },
+      null,
+      2
+    );
     const blob = new Blob([payload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'cadence-channel-rules.json';
+    a.download = `cadence-backup-v${manifestVersion || '1.6.0'}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    showStatus(`Exported ${rules.length} channel ${rules.length === 1 ? 'rule' : 'rules'} to cadence-channel-rules.json`);
+    showStatus(`Exported ${rules.length} channel ${rules.length === 1 ? 'rule' : 'rules'} to backup JSON`);
   });
 
   importBtnEl.addEventListener('click', () => {
@@ -201,6 +451,17 @@
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
+
+      if (parsed && typeof parsed.settings === 'object') {
+        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 5 });
+        renderToggles();
+      }
+
+      if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
+        totalTimeSavedSec = Math.floor(parsed.totalTimeSavedSec);
+        renderTimeSaved();
+      }
+
       const rawRules = Array.isArray(parsed)
         ? parsed
         : Array.isArray(parsed && parsed.rules)
@@ -242,13 +503,14 @@
 
       if (sanitizedRules.length > 0) {
         rules = mergeRuleLists(sanitizedRules, rules);
-        await chrome.storage.local.set({ presets, rules });
-        renderPresets();
-        renderRules();
-        showStatus(`Imported ${sanitizedRules.length} channel ${sanitizedRules.length === 1 ? 'rule' : 'rules'} (${rules.length} total saved)`);
-      } else {
-        showStatus('No valid channel rules found in selected JSON file.');
       }
+
+      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec });
+      renderToggles();
+      renderTimeSaved();
+      renderPresets();
+      renderRules();
+      showStatus(`Imported backup (${rules.length} total channel rules, ${formatFullSavedTime(totalTimeSavedSec)} time saved)`);
     } catch (_) {
       showStatus('Could not parse JSON file. Please select a valid Cadence JSON backup.');
     } finally {
@@ -307,6 +569,14 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.settings && typeof changes.settings.newValue === 'object') {
+      settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue);
+      renderToggles();
+    }
+    if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+      totalTimeSavedSec = changes.totalTimeSavedSec.newValue;
+      renderTimeSaved();
+    }
     if (changes.presets && Array.isArray(changes.presets.newValue)) {
       presets = changes.presets.newValue;
       renderPresets();
@@ -317,6 +587,8 @@
     }
   });
 
+  renderToggles();
+  renderTimeSaved();
   renderPresets();
   renderRules();
 })();

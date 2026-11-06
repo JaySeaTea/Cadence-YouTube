@@ -39,17 +39,20 @@ async function startServer() {
 
   app.post('/api/state', async (req, res) => {
     try {
-      const { settings, presets, rules } = req.body || {};
+      const { settings, presets, rules, totalTimeSavedSec } = req.body || {};
       if (!Array.isArray(rules) || !Array.isArray(presets) || typeof settings !== 'object') {
         res.status(400).json({ error: 'Invalid state payload' });
         return;
       }
-      const nextState = {
+      const nextState: Record<string, unknown> = {
         settings,
         presets,
         rules,
         updatedAt: new Date().toISOString(),
       };
+      if (typeof totalTimeSavedSec === 'number') {
+        nextState.totalTimeSavedSec = Math.max(0, Math.floor(totalTimeSavedSec));
+      }
       await writePersistedState(nextState);
       res.json({ ok: true, updatedAt: nextState.updatedAt });
     } catch (err) {
