@@ -942,10 +942,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function getLiveBadgeElement(player) {
-    const root = player || document;
+    const p = player || getMoviePlayer();
+    if (p && p.classList && !p.classList.contains('ytp-live')) {
+      return null;
+    }
+    const root = p || document;
     const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
     if (!(badge instanceof HTMLElement)) return null;
     if (badge.hasAttribute('hidden')) return null;
+    if (badge.offsetParent === null && !(p && p.classList && p.classList.contains('ytp-live'))) {
+      return null;
+    }
     try {
       const style = window.getComputedStyle(badge);
       if (style.display === 'none' || style.visibility === 'hidden') return null;
@@ -955,39 +962,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function isLiveBadgeAtHead(badge) {
     if (!badge) return false;
+    if (
+      badge.classList.contains('ytp-live-badge-is-livehead') ||
+      badge.classList.contains('ytp-livehead')
+    ) {
+      return true;
+    }
     return Boolean(
-      badge.disabled === true ||
+      (badge.disabled === true ||
         badge.hasAttribute('disabled') ||
-        badge.getAttribute('aria-disabled') === 'true' ||
-        badge.classList.contains('ytp-live-badge-is-livehead')
+        badge.getAttribute('aria-disabled') === 'true') &&
+        !badge.hasAttribute('hidden') &&
+        badge.offsetParent !== null
     );
   }
 
   function isLiveBroadcast(player, video) {
     if (isAdPlaying(player)) return false;
 
-    const root = player || document;
+    const p = player || getMoviePlayer();
+    const hasPlayerLiveClass = Boolean(p && p.classList && p.classList.contains('ytp-live'));
+
+    // Standard VOD or completed stream archive: duration is finite positive and player lacks .ytp-live class
+    if (video && Number.isFinite(video.duration) && video.duration > 0 && p && !hasPlayerLiveClass) {
+      return false;
+    }
+
+    const visibleBadge = getLiveBadgeElement(p);
+    const root = p || document;
     const liveTimeDisplay = root.querySelector(
       '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
     );
-    const visibleBadge = getLiveBadgeElement(player);
-    if (liveTimeDisplay && visibleBadge) {
+    if (hasPlayerLiveClass && (visibleBadge || liveTimeDisplay)) {
       return true;
     }
 
-    const currentVid = getCurrentVideoId(player);
+    const currentVid = getCurrentVideoId(p);
     try {
-      if (player && typeof player.getVideoData === 'function') {
-        const vd = player.getVideoData();
+      if (p && typeof p.getVideoData === 'function') {
+        const vd = p.getVideoData();
         if (vd && (!currentVid || !vd.video_id || vd.video_id === currentVid)) {
-          if (vd.isLive === true) return true;
+          // If vd.isLive is true, verify stream is actively live (hasPlayerLiveClass or non-finite duration)
+          if (
+            vd.isLive === true &&
+            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
+          ) {
+            return true;
+          }
         }
       }
-      if (player && typeof player.getPlayerResponse === 'function') {
-        const resp = player.getPlayerResponse();
+      if (p && typeof p.getPlayerResponse === 'function') {
+        const resp = p.getPlayerResponse();
         const details = resp && resp.videoDetails;
         if (details && (!currentVid || !details.videoId || details.videoId === currentVid)) {
-          if (details.isLive === true) return true;
+          if (
+            details.isLive === true &&
+            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
+          ) {
+            return true;
+          }
           const liveMicro =
             resp.microformat &&
             resp.microformat.playerMicroformatRenderer &&
@@ -997,7 +1030,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     } catch (_) {}
 
-    if (video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
+    // Only fallback to non-finite duration if player explicitly has the .ytp-live class
+    if (hasPlayerLiveClass && video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
       return true;
     }
 
@@ -3772,7 +3806,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function isDomLiveHeadFallback() {
     if (!isWatchLocation()) return false;
     const player = getWatchPlayerElement();
-    if (!player) return false;
+    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
+      return false;
+    }
     if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
       return false;
     }
@@ -3780,29 +3816,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       player.querySelector('video.html5-main-video') ||
       document.querySelector('ytd-watch-flexy video.html5-main-video');
     if (video && video.paused) return false;
-    const liveTime = player.querySelector(
-      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
-    );
-    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    if (!liveTime || !(badge instanceof HTMLElement) || badge.hasAttribute('hidden')) {
+    if (video && Number.isFinite(video.duration) && video.duration > 0 && !player.classList.contains('ytp-live')) {
       return false;
     }
-    const curTimeEl = liveTime.querySelector('.ytp-time-current');
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    const curTimeEl = player.querySelector('.ytp-time-display .ytp-time-current');
     if (curTimeEl) {
       const rawTxt = (curTimeEl.textContent || '').trim();
       if (/^[-−]\\s*\\d+:\\d{2}/.test(rawTxt)) {
         return false;
       }
     }
-    try {
-      const style = window.getComputedStyle(badge);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    } catch (_) {}
     return Boolean(
-      badge.disabled === true ||
+      badge.classList.contains('ytp-live-badge-is-livehead') ||
+        badge.classList.contains('ytp-livehead') ||
+        badge.disabled === true ||
         badge.hasAttribute('disabled') ||
-        badge.getAttribute('aria-disabled') === 'true' ||
-        badge.classList.contains('ytp-live-badge-is-livehead')
+        badge.getAttribute('aria-disabled') === 'true'
     );
   }
 
@@ -3823,12 +3862,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function isAnyLiveStreamActive() {
     if (remainingState.isLive) return true;
     const player = getWatchPlayerElement();
-    if (!player) return false;
-    const liveTime = player.querySelector(
-      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
-    );
+    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
+      return false;
+    }
     const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    return Boolean(liveTime && badge instanceof HTMLElement && !badge.hasAttribute('hidden'));
+    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    return true;
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -4722,7 +4769,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
 
-    // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
+    try {
+      // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
     const legacyOwnerBar = document.getElementById('cadence-owner-bar');
     if (legacyOwnerBar) {
       legacyOwnerBar.remove();
@@ -4760,26 +4808,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     clearBarMountRetry();
 
-    let bar = existing;
-    if (!bar || bar.parentElement !== mountPoint.container) {
-      if (bar) bar.remove();
-      bar = document.createElement('div');
-      bar.id = 'cadence-watch-bar';
-      bar.className = 'cadence-watch-bar';
-      bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
-      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
-        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
-      } else {
-        mountPoint.container.prepend(bar);
-      }
-    } else if (
-      mountPoint.beforeNode &&
-      mountPoint.beforeNode.parentElement === mountPoint.container &&
-      bar.nextElementSibling !== mountPoint.beforeNode &&
-      bar !== mountPoint.beforeNode
-    ) {
-      mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
-    }
+    const bar = document.createElement('div');
+    bar.id = 'cadence-watch-bar';
+    bar.className = 'cadence-watch-bar';
+    bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
     const adActive = isCurrentAdActive();
@@ -4970,8 +5002,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       applyDurationModelToBar(bar, durationModel);
     }
     applySavedTimeModelToBar(bar, savedTimeModel);
-    ensureBarResizeObserver(bar);
-    syncRow1BrandCollapse(bar);
 
     const brandBtn = bar.querySelector('.cadence-brand-btn');
     if (brandBtn) {
@@ -5122,10 +5152,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     }
 
+    // Atomic mount: only attach to the DOM once completely populated and verified
+    if (existing && existing.parentElement === mountPoint.container) {
+      existing.replaceWith(bar);
+    } else {
+      if (existing) existing.remove();
+      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
+        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
+      } else {
+        mountPoint.container.prepend(bar);
+      }
+    }
+
+    ensureBarResizeObserver(bar);
+    syncRow1BrandCollapse(bar);
+
     if (barToastVisible) {
       positionBarToast();
     }
+  } catch (err) {
+    const orphan = document.getElementById('cadence-watch-bar');
+    if (orphan && orphan.children.length === 0) {
+      orphan.remove();
+    }
   }
+}
 
   function handleLeftWatchPage() {
     currentChannel = null;
@@ -5776,16 +5827,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           hideBarToast();
           nonDvrClampedVideoId = null;
           sessionOverride = { videoId: null, speed: null };
+          remainingState.playbackRate = requestedSpeed;
+          pushConfigToBridge(requestedSpeed, true);
+          postToBridge('COMMAND', {
+            action: 'SET_SPEED',
+            speed: requestedSpeed,
+            fromUserGesture: true,
+          });
+          renderInPageBar();
           saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
               const appliedSpeed = getEffectiveSpeedForChannel(targetMeta);
               remainingState.playbackRate = appliedSpeed;
-              pushConfigToBridge(appliedSpeed, true);
-              postToBridge('COMMAND', {
-                action: 'SET_SPEED',
-                speed: appliedSpeed,
-                fromUserGesture: true,
-              });
               renderInPageBar();
               showPlayerToast(\`Saved \${formatDisplaySpeed(requestedSpeed)}× for \${targetMeta.channelName}\`);
             }
@@ -7105,16 +7158,22 @@ html[dark] .cadence-rule-plus {
                 if (!isAd && vd.isLive === true) isLive = true;
               }
             }
-            if (!isAd) {
+            const hasPlayerLiveClass = Boolean(
+              player && player.classList && player.classList.contains('ytp-live')
+            );
+            if (!hasPlayerLiveClass && video && Number.isFinite(video.duration) && video.duration > 0) {
+              isLive = false;
+            } else if (!isAd && hasPlayerLiveClass) {
               const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
               const liveTime = document.querySelector('.ytp-time-display.ytp-live');
-              if (badge && liveTime && !badge.hasAttribute('hidden')) {
+              if (badge && liveTime && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
                 isLive = true;
                 isAtLiveHead = Boolean(
-                  badge.disabled === true ||
+                  badge.classList.contains('ytp-live-badge-is-livehead') ||
+                    badge.classList.contains('ytp-livehead') ||
+                    badge.disabled === true ||
                     badge.hasAttribute('disabled') ||
-                    badge.getAttribute('aria-disabled') === 'true' ||
-                    badge.classList.contains('ytp-live-badge-is-livehead')
+                    badge.getAttribute('aria-disabled') === 'true'
                 );
               }
               if (isLive && player && typeof player.getProgressState === 'function') {

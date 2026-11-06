@@ -193,16 +193,22 @@
                 if (!isAd && vd.isLive === true) isLive = true;
               }
             }
-            if (!isAd) {
+            const hasPlayerLiveClass = Boolean(
+              player && player.classList && player.classList.contains('ytp-live')
+            );
+            if (!hasPlayerLiveClass && video && Number.isFinite(video.duration) && video.duration > 0) {
+              isLive = false;
+            } else if (!isAd && hasPlayerLiveClass) {
               const badge = document.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
               const liveTime = document.querySelector('.ytp-time-display.ytp-live');
-              if (badge && liveTime && !badge.hasAttribute('hidden')) {
+              if (badge && liveTime && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
                 isLive = true;
                 isAtLiveHead = Boolean(
-                  badge.disabled === true ||
+                  badge.classList.contains('ytp-live-badge-is-livehead') ||
+                    badge.classList.contains('ytp-livehead') ||
+                    badge.disabled === true ||
                     badge.hasAttribute('disabled') ||
-                    badge.getAttribute('aria-disabled') === 'true' ||
-                    badge.classList.contains('ytp-live-badge-is-livehead')
+                    badge.getAttribute('aria-disabled') === 'true'
                 );
               }
               if (isLive && player && typeof player.getProgressState === 'function') {

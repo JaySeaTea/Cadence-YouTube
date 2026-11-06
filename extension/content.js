@@ -451,7 +451,9 @@
   function isDomLiveHeadFallback() {
     if (!isWatchLocation()) return false;
     const player = getWatchPlayerElement();
-    if (!player) return false;
+    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
+      return false;
+    }
     if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
       return false;
     }
@@ -459,29 +461,32 @@
       player.querySelector('video.html5-main-video') ||
       document.querySelector('ytd-watch-flexy video.html5-main-video');
     if (video && video.paused) return false;
-    const liveTime = player.querySelector(
-      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
-    );
-    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    if (!liveTime || !(badge instanceof HTMLElement) || badge.hasAttribute('hidden')) {
+    if (video && Number.isFinite(video.duration) && video.duration > 0 && !player.classList.contains('ytp-live')) {
       return false;
     }
-    const curTimeEl = liveTime.querySelector('.ytp-time-current');
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    const curTimeEl = player.querySelector('.ytp-time-display .ytp-time-current');
     if (curTimeEl) {
       const rawTxt = (curTimeEl.textContent || '').trim();
       if (/^[-−]\s*\d+:\d{2}/.test(rawTxt)) {
         return false;
       }
     }
-    try {
-      const style = window.getComputedStyle(badge);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    } catch (_) {}
     return Boolean(
-      badge.disabled === true ||
+      badge.classList.contains('ytp-live-badge-is-livehead') ||
+        badge.classList.contains('ytp-livehead') ||
+        badge.disabled === true ||
         badge.hasAttribute('disabled') ||
-        badge.getAttribute('aria-disabled') === 'true' ||
-        badge.classList.contains('ytp-live-badge-is-livehead')
+        badge.getAttribute('aria-disabled') === 'true'
     );
   }
 
@@ -502,12 +507,20 @@
   function isAnyLiveStreamActive() {
     if (remainingState.isLive) return true;
     const player = getWatchPlayerElement();
-    if (!player) return false;
-    const liveTime = player.querySelector(
-      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
-    );
+    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
+      return false;
+    }
     const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    return Boolean(liveTime && badge instanceof HTMLElement && !badge.hasAttribute('hidden'));
+    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
+      return false;
+    }
+    try {
+      const style = window.getComputedStyle(badge);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    } catch (_) {
+      return false;
+    }
+    return true;
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -1401,7 +1414,8 @@
       return;
     }
 
-    // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
+    try {
+      // Clean up any legacy v1.3.5 #cadence-owner-bar element on hot-upgrade
     const legacyOwnerBar = document.getElementById('cadence-owner-bar');
     if (legacyOwnerBar) {
       legacyOwnerBar.remove();
@@ -1439,26 +1453,10 @@
     }
     clearBarMountRetry();
 
-    let bar = existing;
-    if (!bar || bar.parentElement !== mountPoint.container) {
-      if (bar) bar.remove();
-      bar = document.createElement('div');
-      bar.id = 'cadence-watch-bar';
-      bar.className = 'cadence-watch-bar';
-      bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
-      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
-        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
-      } else {
-        mountPoint.container.prepend(bar);
-      }
-    } else if (
-      mountPoint.beforeNode &&
-      mountPoint.beforeNode.parentElement === mountPoint.container &&
-      bar.nextElementSibling !== mountPoint.beforeNode &&
-      bar !== mountPoint.beforeNode
-    ) {
-      mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
-    }
+    const bar = document.createElement('div');
+    bar.id = 'cadence-watch-bar';
+    bar.className = 'cadence-watch-bar';
+    bar.setAttribute('data-cadence-instance', INSTANCE_TOKEN);
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
     const adActive = isCurrentAdActive();
@@ -1649,8 +1647,6 @@
       applyDurationModelToBar(bar, durationModel);
     }
     applySavedTimeModelToBar(bar, savedTimeModel);
-    ensureBarResizeObserver(bar);
-    syncRow1BrandCollapse(bar);
 
     const brandBtn = bar.querySelector('.cadence-brand-btn');
     if (brandBtn) {
@@ -1801,10 +1797,31 @@
       );
     }
 
+    // Atomic mount: only attach to the DOM once completely populated and verified
+    if (existing && existing.parentElement === mountPoint.container) {
+      existing.replaceWith(bar);
+    } else {
+      if (existing) existing.remove();
+      if (mountPoint.beforeNode && mountPoint.beforeNode.parentElement === mountPoint.container) {
+        mountPoint.container.insertBefore(bar, mountPoint.beforeNode);
+      } else {
+        mountPoint.container.prepend(bar);
+      }
+    }
+
+    ensureBarResizeObserver(bar);
+    syncRow1BrandCollapse(bar);
+
     if (barToastVisible) {
       positionBarToast();
     }
+  } catch (err) {
+    const orphan = document.getElementById('cadence-watch-bar');
+    if (orphan && orphan.children.length === 0) {
+      orphan.remove();
+    }
   }
+}
 
   function handleLeftWatchPage() {
     currentChannel = null;
@@ -2455,16 +2472,18 @@
           hideBarToast();
           nonDvrClampedVideoId = null;
           sessionOverride = { videoId: null, speed: null };
+          remainingState.playbackRate = requestedSpeed;
+          pushConfigToBridge(requestedSpeed, true);
+          postToBridge('COMMAND', {
+            action: 'SET_SPEED',
+            speed: requestedSpeed,
+            fromUserGesture: true,
+          });
+          renderInPageBar();
           saveChannelSpeed(targetMeta, requestedSpeed, msg.presetId || 'custom').then((ok) => {
             if (ok) {
               const appliedSpeed = getEffectiveSpeedForChannel(targetMeta);
               remainingState.playbackRate = appliedSpeed;
-              pushConfigToBridge(appliedSpeed, true);
-              postToBridge('COMMAND', {
-                action: 'SET_SPEED',
-                speed: appliedSpeed,
-                fromUserGesture: true,
-              });
               renderInPageBar();
               showPlayerToast(`Saved ${formatDisplaySpeed(requestedSpeed)}× for ${targetMeta.channelName}`);
             }

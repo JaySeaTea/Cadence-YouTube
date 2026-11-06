@@ -681,10 +681,17 @@
   }
 
   function getLiveBadgeElement(player) {
-    const root = player || document;
+    const p = player || getMoviePlayer();
+    if (p && p.classList && !p.classList.contains('ytp-live')) {
+      return null;
+    }
+    const root = p || document;
     const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
     if (!(badge instanceof HTMLElement)) return null;
     if (badge.hasAttribute('hidden')) return null;
+    if (badge.offsetParent === null && !(p && p.classList && p.classList.contains('ytp-live'))) {
+      return null;
+    }
     try {
       const style = window.getComputedStyle(badge);
       if (style.display === 'none' || style.visibility === 'hidden') return null;
@@ -694,39 +701,65 @@
 
   function isLiveBadgeAtHead(badge) {
     if (!badge) return false;
+    if (
+      badge.classList.contains('ytp-live-badge-is-livehead') ||
+      badge.classList.contains('ytp-livehead')
+    ) {
+      return true;
+    }
     return Boolean(
-      badge.disabled === true ||
+      (badge.disabled === true ||
         badge.hasAttribute('disabled') ||
-        badge.getAttribute('aria-disabled') === 'true' ||
-        badge.classList.contains('ytp-live-badge-is-livehead')
+        badge.getAttribute('aria-disabled') === 'true') &&
+        !badge.hasAttribute('hidden') &&
+        badge.offsetParent !== null
     );
   }
 
   function isLiveBroadcast(player, video) {
     if (isAdPlaying(player)) return false;
 
-    const root = player || document;
+    const p = player || getMoviePlayer();
+    const hasPlayerLiveClass = Boolean(p && p.classList && p.classList.contains('ytp-live'));
+
+    // Standard VOD or completed stream archive: duration is finite positive and player lacks .ytp-live class
+    if (video && Number.isFinite(video.duration) && video.duration > 0 && p && !hasPlayerLiveClass) {
+      return false;
+    }
+
+    const visibleBadge = getLiveBadgeElement(p);
+    const root = p || document;
     const liveTimeDisplay = root.querySelector(
       '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
     );
-    const visibleBadge = getLiveBadgeElement(player);
-    if (liveTimeDisplay && visibleBadge) {
+    if (hasPlayerLiveClass && (visibleBadge || liveTimeDisplay)) {
       return true;
     }
 
-    const currentVid = getCurrentVideoId(player);
+    const currentVid = getCurrentVideoId(p);
     try {
-      if (player && typeof player.getVideoData === 'function') {
-        const vd = player.getVideoData();
+      if (p && typeof p.getVideoData === 'function') {
+        const vd = p.getVideoData();
         if (vd && (!currentVid || !vd.video_id || vd.video_id === currentVid)) {
-          if (vd.isLive === true) return true;
+          // If vd.isLive is true, verify stream is actively live (hasPlayerLiveClass or non-finite duration)
+          if (
+            vd.isLive === true &&
+            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
+          ) {
+            return true;
+          }
         }
       }
-      if (player && typeof player.getPlayerResponse === 'function') {
-        const resp = player.getPlayerResponse();
+      if (p && typeof p.getPlayerResponse === 'function') {
+        const resp = p.getPlayerResponse();
         const details = resp && resp.videoDetails;
         if (details && (!currentVid || !details.videoId || details.videoId === currentVid)) {
-          if (details.isLive === true) return true;
+          if (
+            details.isLive === true &&
+            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
+          ) {
+            return true;
+          }
           const liveMicro =
             resp.microformat &&
             resp.microformat.playerMicroformatRenderer &&
@@ -736,7 +769,8 @@
       }
     } catch (_) {}
 
-    if (video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
+    // Only fallback to non-finite duration if player explicitly has the .ytp-live class
+    if (hasPlayerLiveClass && video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
       return true;
     }
 
