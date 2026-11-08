@@ -588,12 +588,15 @@ html[dark] .cadence-rule-plus {
 .cadence-speed-chip.is-live-blocked:not(.active),
 .cadence-step-chip.is-live-blocked,
 .cadence-seek-capsule.is-live-blocked,
+.cadence-seek-capsule.is-live-blocked .cadence-seek-btn,
 .cadence-speed-chip.is-ad-blocked,
 .cadence-step-chip.is-ad-blocked,
 .cadence-reset-chip.is-ad-blocked,
 .cadence-seek-capsule.is-ad-blocked,
+.cadence-seek-capsule.is-ad-blocked .cadence-seek-btn,
 .cadence-rule-action-btn.is-ad-blocked {
   opacity: 0.42;
+  cursor: not-allowed;
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active):hover,

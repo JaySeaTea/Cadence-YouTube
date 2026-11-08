@@ -732,41 +732,32 @@
     const p = player || getMoviePlayer();
     const v = video || getMainVideo();
 
-    // 1. Definitively VOD or completed stream archive:
-    // When HTMLMediaElement has loaded metadata and duration is finite and positive, it is strictly VOD.
-    if (v && Number.isFinite(v.duration) && v.duration > 0) {
-      return false;
-    }
-
-    // 2. Canonical live stream HTML5 media duration (Infinity)
-    if (v && v.duration === Infinity) {
-      return true;
-    }
-
-    // 3. Player API metadata check
+    // 1. YouTube Player API authoritative metadata check
     if (p) {
       try {
         if (typeof p.getVideoData === 'function') {
           const vd = p.getVideoData();
-          if (vd && vd.isLive === true) {
-            return true;
+          if (vd && typeof vd.isLive === 'boolean') {
+            return vd.isLive;
           }
         }
         if (typeof p.getPlayerResponse === 'function') {
           const resp = p.getPlayerResponse();
           const details = resp && resp.videoDetails;
-          if (details && details.isLive === true) {
+          if (details && typeof details.isLive === 'boolean') {
             const liveMicro =
               resp.microformat &&
               resp.microformat.playerMicroformatRenderer &&
               resp.microformat.playerMicroformatRenderer.liveBroadcastDetails;
-            if (!liveMicro || liveMicro.isLiveNow !== false) {
-              return true;
+            if (liveMicro && liveMicro.isLiveNow === false) {
+              return false;
             }
+            return details.isLive;
           }
         }
       } catch (_) {}
 
+      // 2. Canonical Player classes and DOM indicators
       if (
         p.classList &&
         (p.classList.contains('ytp-live') || p.classList.contains('ytp-live-mode'))
@@ -782,18 +773,12 @@
 
       const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
       if (badge instanceof HTMLElement && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
-        if (
-          badge.classList.contains('ytp-live-badge-is-livehead') ||
-          badge.classList.contains('ytp-livehead') ||
-          (p.classList && p.classList.contains('ytp-live'))
-        ) {
-          return true;
-        }
+        return true;
       }
     }
 
-    // 4. Fallback for non-finite duration after media readyState >= 1
-    if (v && v.readyState >= 1 && !Number.isFinite(v.duration)) {
+    // 3. Canonical live stream HTML5 media duration (Infinity or NaN after loaded)
+    if (v && (v.duration === Infinity || (v.readyState >= 1 && !Number.isFinite(v.duration)))) {
       return true;
     }
 

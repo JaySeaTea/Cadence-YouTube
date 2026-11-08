@@ -993,41 +993,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const p = player || getMoviePlayer();
     const v = video || getMainVideo();
 
-    // 1. Definitively VOD or completed stream archive:
-    // When HTMLMediaElement has loaded metadata and duration is finite and positive, it is strictly VOD.
-    if (v && Number.isFinite(v.duration) && v.duration > 0) {
-      return false;
-    }
-
-    // 2. Canonical live stream HTML5 media duration (Infinity)
-    if (v && v.duration === Infinity) {
-      return true;
-    }
-
-    // 3. Player API metadata check
+    // 1. YouTube Player API authoritative metadata check
     if (p) {
       try {
         if (typeof p.getVideoData === 'function') {
           const vd = p.getVideoData();
-          if (vd && vd.isLive === true) {
-            return true;
+          if (vd && typeof vd.isLive === 'boolean') {
+            return vd.isLive;
           }
         }
         if (typeof p.getPlayerResponse === 'function') {
           const resp = p.getPlayerResponse();
           const details = resp && resp.videoDetails;
-          if (details && details.isLive === true) {
+          if (details && typeof details.isLive === 'boolean') {
             const liveMicro =
               resp.microformat &&
               resp.microformat.playerMicroformatRenderer &&
               resp.microformat.playerMicroformatRenderer.liveBroadcastDetails;
-            if (!liveMicro || liveMicro.isLiveNow !== false) {
-              return true;
+            if (liveMicro && liveMicro.isLiveNow === false) {
+              return false;
             }
+            return details.isLive;
           }
         }
       } catch (_) {}
 
+      // 2. Canonical Player classes and DOM indicators
       if (
         p.classList &&
         (p.classList.contains('ytp-live') || p.classList.contains('ytp-live-mode'))
@@ -1043,18 +1034,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
       if (badge instanceof HTMLElement && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
-        if (
-          badge.classList.contains('ytp-live-badge-is-livehead') ||
-          badge.classList.contains('ytp-livehead') ||
-          (p.classList && p.classList.contains('ytp-live'))
-        ) {
-          return true;
-        }
+        return true;
       }
     }
 
-    // 4. Fallback for non-finite duration after media readyState >= 1
-    if (v && v.readyState >= 1 && !Number.isFinite(v.duration)) {
+    // 3. Canonical live stream HTML5 media duration (Infinity or NaN after loaded)
+    if (v && (v.duration === Infinity || (v.readyState >= 1 && !Number.isFinite(v.duration)))) {
       return true;
     }
 
@@ -3930,30 +3915,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function isDomLiveHeadFallback() {
     if (!isWatchLocation()) return false;
     const player = getWatchPlayerElement();
-    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
+    if (!player || !player.classList) {
       return false;
     }
     if (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')) {
+      return false;
+    }
+    if (
+      !player.classList.contains('ytp-live') &&
+      !player.classList.contains('ytp-live-mode') &&
+      !player.querySelector('.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live')
+    ) {
       return false;
     }
     const video =
       player.querySelector('video.html5-main-video') ||
       document.querySelector('ytd-watch-flexy video.html5-main-video');
     if (video && video.paused) return false;
-    // Standard VOD or completed stream archive: finite positive duration -> strictly non-live
-    if (video && Number.isFinite(video.duration) && video.duration > 0) {
-      return false;
-    }
-    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
-      return false;
-    }
-    try {
-      const style = window.getComputedStyle(badge);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    } catch (_) {
-      return false;
-    }
+
     const curTimeEl = player.querySelector('.ytp-time-display .ytp-time-current');
     if (curTimeEl) {
       const rawTxt = (curTimeEl.textContent || '').trim();
@@ -3961,10 +3940,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
     }
-    return Boolean(
-      badge.classList.contains('ytp-live-badge-is-livehead') ||
-        badge.classList.contains('ytp-livehead')
-    );
+    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (badge instanceof HTMLElement && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
+      return Boolean(
+        badge.classList.contains('ytp-live-badge-is-livehead') ||
+          badge.classList.contains('ytp-livehead') ||
+          badge.disabled === true ||
+          badge.hasAttribute('disabled') ||
+          badge.getAttribute('aria-disabled') === 'true'
+      );
+    }
+    return false;
   }
 
   function isLiveAtHeadForChannel(meta) {
@@ -3975,7 +3961,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       return true;
     }
-    if (remainingState.hidden) {
+    if (remainingState.hidden || isAnyLiveStreamActive()) {
       return isDomLiveHeadFallback();
     }
     return false;
@@ -3985,13 +3971,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (remainingState.isLive) return true;
     const player = getWatchPlayerElement();
     if (!player) return false;
-    const video = player.querySelector('video.html5-main-video');
-    if (video && Number.isFinite(video.duration) && video.duration > 0) return false;
-    if (video && video.duration === Infinity) return true;
-    return Boolean(
+    if (
       player.classList &&
-        (player.classList.contains('ytp-live') || player.classList.contains('ytp-live-mode'))
+      (player.classList.contains('ytp-live') || player.classList.contains('ytp-live-mode'))
+    ) {
+      return true;
+    }
+    const liveTime = player.querySelector(
+      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
     );
+    if (liveTime) return true;
+    const liveBadge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+    if (
+      liveBadge instanceof HTMLElement &&
+      !liveBadge.hasAttribute('hidden') &&
+      liveBadge.offsetParent !== null
+    ) {
+      return true;
+    }
+    const video = player.querySelector('video.html5-main-video');
+    if (video && video.duration === Infinity) return true;
+    return false;
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -4324,6 +4324,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function computeBarUiModeSignature() {
     if (!currentChannel) return 'none';
     const adActive = isCurrentAdActive();
+    const liveStreamActive = !adActive && (remainingState.isLive || isAnyLiveStreamActive());
     const liveAtHead = !adActive && isLiveAtHeadForChannel(currentChannel);
     const dvrUnsupported =
       !adActive && Boolean(remainingState.isLive && remainingState.isDvrSupported === false);
@@ -4333,11 +4334,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
     const durMode = adActive ? 'ad' : computeDurationSlotModel().mode;
     return [
-      adActive ? 'ad' : liveAtHead ? 'live-head' : remainingState.isLive ? 'live-dvr' : 'vod',
+      adActive ? 'ad' : liveStreamActive ? (liveAtHead ? 'live-head' : 'live-dvr') : 'vod',
       dvrUnsupported ? 'nodvr' : 'dvr',
       durMode,
       formatCompactSpeed(displayedBarRate),
-      isSessionActive ? 'session' : matchedRule ? 'rule' : 'default',
+      liveStreamActive ? 'streaming' : isSessionActive ? 'session' : matchedRule ? 'rule' : 'default',
     ].join('|');
   }
 
@@ -4932,6 +4933,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     clearSessionOverrideIfMatchesBaseline(currentChannel);
     const adActive = isCurrentAdActive();
+    const isLiveStream = !adActive && (remainingState.isLive || isAnyLiveStreamActive());
     const matchedRule = findMatchingRule(currentChannel);
     const ruleResolvedSpeed = matchedRule ? resolveSpeedForRule(matchedRule) : null;
     const baselineSpeed = getBaselineSpeedForChannel(currentChannel);
@@ -4950,21 +4952,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const modePrefix = adActive
       ? 'Sponsored Ad'
-      : isSessionActive
-        ? 'Session Override'
-        : matchedRule
-          ? 'Channel Rule'
-          : 'Default';
+      : isLiveStream
+        ? 'Streaming'
+        : isSessionActive
+          ? 'Session Override'
+          : matchedRule
+            ? 'Channel Rule'
+            : 'Default';
     const displayedBarRate = adActive ? 1.0 : effectiveSpeed;
     const tooltip = adActive
       ? isSessionActive
         ? \`Ad playing at 1× · Session \${formatDisplaySpeed(sessionOverride.speed)}× restores automatically after ad\`
         : 'Ad playing at 1× · Controls paused until ad ends'
-      : isSessionActive
-        ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
-        : isLiveRuleClamped
-          ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
-          : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
+      : isLiveStream
+        ? liveAtHead
+          ? matchedRule
+            ? \`Live stream broadcast · Active playback is 1.0× at live edge (Channel Rule \${formatDisplaySpeed(ruleResolvedSpeed)}× is preserved for regular videos)\`
+            : 'Live stream broadcast · Active playback is 1.0× at live broadcast edge'
+          : \`Live stream DVR playback · Active playback is \${formatDisplaySpeed(effectiveSpeed)}×\${matchedRule ? \` (Channel Rule \${formatDisplaySpeed(ruleResolvedSpeed)}× preserved for regular videos)\` : ''}\`
+        : isSessionActive
+          ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
+          : isLiveRuleClamped
+            ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
+            : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
 
     const durationModel = computeDurationSlotModel();
     const savedTimeModel = computeSavedTimeModel();
@@ -6642,12 +6652,15 @@ html[dark] .cadence-rule-plus {
 .cadence-speed-chip.is-live-blocked:not(.active),
 .cadence-step-chip.is-live-blocked,
 .cadence-seek-capsule.is-live-blocked,
+.cadence-seek-capsule.is-live-blocked .cadence-seek-btn,
 .cadence-speed-chip.is-ad-blocked,
 .cadence-step-chip.is-ad-blocked,
 .cadence-reset-chip.is-ad-blocked,
 .cadence-seek-capsule.is-ad-blocked,
+.cadence-seek-capsule.is-ad-blocked .cadence-seek-btn,
 .cadence-rule-action-btn.is-ad-blocked {
   opacity: 0.42;
+  cursor: not-allowed;
 }
 
 .cadence-speed-chip.is-live-blocked:not(.active):hover,
