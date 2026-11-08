@@ -720,10 +720,15 @@
     if (isAdPlaying(player)) return false;
 
     const p = player || getMoviePlayer();
+    // CRITICAL: An active live stream MUST have the 'ytp-live' class on #movie_player.
+    // Standard VODs and archived live stream replays NEVER have 'ytp-live'.
     const hasPlayerLiveClass = Boolean(p && p.classList && p.classList.contains('ytp-live'));
+    if (!hasPlayerLiveClass) {
+      return false;
+    }
 
     // Standard VOD or completed stream archive: duration is finite positive and player lacks .ytp-live class
-    if (video && Number.isFinite(video.duration) && video.duration > 0 && p && !hasPlayerLiveClass) {
+    if (video && Number.isFinite(video.duration) && video.duration > 0 && !hasPlayerLiveClass) {
       return false;
     }
 
@@ -732,7 +737,7 @@
     const liveTimeDisplay = root.querySelector(
       '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
     );
-    if (hasPlayerLiveClass && (visibleBadge || liveTimeDisplay)) {
+    if (visibleBadge || liveTimeDisplay) {
       return true;
     }
 
@@ -741,11 +746,7 @@
       if (p && typeof p.getVideoData === 'function') {
         const vd = p.getVideoData();
         if (vd && (!currentVid || !vd.video_id || vd.video_id === currentVid)) {
-          // If vd.isLive is true, verify stream is actively live (hasPlayerLiveClass or non-finite duration)
-          if (
-            vd.isLive === true &&
-            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
-          ) {
+          if (vd.isLive === true) {
             return true;
           }
         }
@@ -754,23 +755,15 @@
         const resp = p.getPlayerResponse();
         const details = resp && resp.videoDetails;
         if (details && (!currentVid || !details.videoId || details.videoId === currentVid)) {
-          if (
-            details.isLive === true &&
-            (hasPlayerLiveClass || !video || !Number.isFinite(video.duration) || !video.duration)
-          ) {
+          if (details.isLive === true) {
             return true;
           }
-          const liveMicro =
-            resp.microformat &&
-            resp.microformat.playerMicroformatRenderer &&
-            resp.microformat.playerMicroformatRenderer.liveBroadcastDetails;
-          if (liveMicro && liveMicro.isLiveNow === true) return true;
         }
       }
     } catch (_) {}
 
-    // Only fallback to non-finite duration if player explicitly has the .ytp-live class
-    if (hasPlayerLiveClass && video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
+    // Fallback: player has .ytp-live class and video is non-finite or not yet ready
+    if (video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
       return true;
     }
 
@@ -1569,6 +1562,83 @@
     }
   }
 
+  function formatExactMinutesSecondsBridge(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec < 60) {
+      return safeSec + 's';
+    }
+    const mins = Math.floor(safeSec / 60);
+    const secs = safeSec % 60;
+    if (mins >= 60) {
+      const hrs = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return remMins > 0 ? hrs + 'h ' + remMins + 'm' : hrs + 'h';
+    }
+    return secs > 0 ? mins + 'm ' + String(secs).padStart(2, '0') + 's' : mins + 'm';
+  }
+
+  function formatDisplaySpeedBridge(speed) {
+    const num = Number(speed);
+    if (!Number.isFinite(num)) return '1.0';
+    return Number.isInteger(num) ? num.toFixed(1) : parseFloat(num.toFixed(2)).toString();
+  }
+
+  function computeBridgeSavedTimeModel(player, video, rate, rawDurationSec, rawRemainingSec) {
+    if (
+      isAdPlaying(player) ||
+      isLiveBroadcast(player, video) ||
+      rawDurationSec === null ||
+      !Number.isFinite(rawDurationSec) ||
+      rawDurationSec < 5
+    ) {
+      return { visible: false, tone: 'neutral', text: '', title: '' };
+    }
+
+    if (rate < 0.99) {
+      const realTotalSec = Math.round(rawDurationSec / rate);
+      const diffSec = realTotalSec - rawDurationSec;
+      return {
+        visible: true,
+        tone: 'slower',
+        text: '+' + formatExactMinutesSecondsBridge(diffSec),
+        title:
+          'Adds ' +
+          formatExactMinutesSecondsBridge(diffSec) +
+          ' to total video duration at ' +
+          formatDisplaySpeedBridge(rate) +
+          '×',
+      };
+    }
+
+    const banked = Math.max(0, Math.floor(currentVideoTimeSavedSec));
+    const rawRem =
+      typeof rawRemainingSec === 'number' && Number.isFinite(rawRemainingSec)
+        ? rawRemainingSec
+        : Math.max(0, rawDurationSec - (video ? video.currentTime : 0));
+    const remainingProjected =
+      rate > 1.005 ? Math.round((rawRem * (rate - 1.0)) / rate) : 0;
+    const totalSaved = Math.round(banked + remainingProjected);
+
+    if (totalSaved < 3) {
+      return {
+        visible: true,
+        tone: 'neutral',
+        text: '0s saved',
+        title: 'Playing at standard 1.0× speed',
+      };
+    }
+
+    return {
+      visible: true,
+      tone: 'saved',
+      text: 'Saves ' + formatExactMinutesSecondsBridge(totalSaved),
+      title:
+        'Total wall-clock time saved on this video at ' +
+        formatDisplaySpeedBridge(rate) +
+        '×',
+    };
+  }
+
   function emitTimeRemaining(force = false) {
     if (!isSupportedWatchPage()) return;
     if (!force && document.visibilityState === 'hidden') return;
@@ -1590,6 +1660,8 @@
         videoId,
         rawRemainingSec: null,
         rawDurationSec: null,
+        bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
+        savedTimeModel: { visible: false, tone: 'neutral', text: '', title: '' },
         playbackRate: 1.0,
         isAd: true,
         isLive: false,
@@ -1678,6 +1750,8 @@
         videoId,
         rawRemainingSec: null,
         rawDurationSec: null,
+        bankedSavedSec: 0,
+        savedTimeModel: { visible: false, tone: 'neutral', text: '', title: '' },
         playbackRate: Math.round(liveRate * 100) / 100,
         isAd: false,
         isLive: true,
@@ -1714,6 +1788,13 @@
           ? 's' + realRemSec
           : 'm' + Math.round(realRemSec / 60);
     const durBucket = rawDurationSec === null ? 'na' : String(Math.round(rawDurationSec));
+    const savedTimeModel = computeBridgeSavedTimeModel(
+      player,
+      video,
+      rate,
+      rawDurationSec,
+      rawRemainingSec
+    );
     const sig = [
       videoId,
       'vod',
@@ -1721,6 +1802,7 @@
       realBucket,
       durBucket,
       rate.toFixed(2),
+      savedTimeModel.visible ? savedTimeModel.text : 'hidden',
     ].join('|');
 
     if (!force && sig === lastRemainingSignature) return;
@@ -1732,6 +1814,7 @@
       rawRemainingSec,
       rawDurationSec,
       bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
+      savedTimeModel,
       playbackRate: Math.round(rate * 100) / 100,
       isAd: false,
       isLive: false,

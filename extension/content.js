@@ -53,6 +53,7 @@
     rawRemainingSec: null,
     rawDurationSec: null,
     bankedSavedSec: 0,
+    savedTimeModel: { visible: false, tone: 'neutral', text: '', title: '' },
     playbackRate: null,
     isAd: false,
     isLive: false,
@@ -461,7 +462,8 @@
       player.querySelector('video.html5-main-video') ||
       document.querySelector('ytd-watch-flexy video.html5-main-video');
     if (video && video.paused) return false;
-    if (video && Number.isFinite(video.duration) && video.duration > 0 && !player.classList.contains('ytp-live')) {
+    // Standard VOD or completed stream archive: finite positive duration -> strictly non-live
+    if (video && Number.isFinite(video.duration) && video.duration > 0) {
       return false;
     }
     const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
@@ -483,10 +485,7 @@
     }
     return Boolean(
       badge.classList.contains('ytp-live-badge-is-livehead') ||
-        badge.classList.contains('ytp-livehead') ||
-        badge.disabled === true ||
-        badge.hasAttribute('disabled') ||
-        badge.getAttribute('aria-disabled') === 'true'
+        badge.classList.contains('ytp-livehead')
     );
   }
 
@@ -640,6 +639,7 @@
       !currentChannel ||
       isCurrentAdActive() ||
       remainingState.hidden ||
+      remainingState.isLive ||
       isAnyLiveStreamActive()
     ) {
       return { visible: false, tone: 'neutral', text: '', title: '' };
@@ -652,28 +652,28 @@
       return { visible: false, tone: 'neutral', text: '', title: '' };
     }
 
-    let durationSec =
+    const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
+
+    // If bridge passed precomputed savedTimeModel and rate matches current effective speed, use it directly
+    if (
+      remainingState.savedTimeModel &&
+      remainingState.savedTimeModel.visible !== undefined &&
+      (remainingState.playbackRate === null || Math.abs(remainingState.playbackRate - effectiveSpeed) < 0.02)
+    ) {
+      return remainingState.savedTimeModel;
+    }
+
+    const durationSec =
       typeof remainingState.rawDurationSec === 'number' &&
       Number.isFinite(remainingState.rawDurationSec) &&
       remainingState.rawDurationSec > 0
         ? remainingState.rawDurationSec
         : null;
 
-    if (durationSec === null) {
-      const video =
-        document.querySelector('ytd-watch-flexy video.html5-main-video') ||
-        document.querySelector('#movie_player video.html5-main-video') ||
-        document.querySelector('video.html5-main-video');
-      if (video && Number.isFinite(video.duration) && video.duration > 0) {
-        durationSec = video.duration;
-      }
-    }
-
     if (durationSec === null || durationSec < 5) {
-      return { visible: false, tone: 'neutral', text: '', title: '' };
+      return remainingState.savedTimeModel || { visible: false, tone: 'neutral', text: '', title: '' };
     }
 
-    const effectiveSpeed = Math.max(0.25, getEffectiveSpeedForChannel(currentChannel) || 1.0);
     if (effectiveSpeed < 0.99) {
       const realTotalSec = Math.round(durationSec / effectiveSpeed);
       const diffSec = realTotalSec - durationSec;
@@ -686,14 +686,13 @@
     }
 
     const banked = Math.max(0, Number(remainingState.bankedSavedSec) || 0);
-    const watchVideo = getWatchVideoElement();
     const rawRem =
       typeof remainingState.rawRemainingSec === 'number' &&
       Number.isFinite(remainingState.rawRemainingSec)
         ? remainingState.rawRemainingSec
-        : Math.max(0, durationSec - ((watchVideo && watchVideo.currentTime) || 0));
+        : durationSec;
     const remainingProjected =
-      effectiveSpeed > 1.0 ? Math.round((rawRem * (effectiveSpeed - 1.0)) / effectiveSpeed) : 0;
+      effectiveSpeed > 1.005 ? Math.round((rawRem * (effectiveSpeed - 1.0)) / effectiveSpeed) : 0;
     const totalSaved = Math.round(banked + remainingProjected);
 
     if (totalSaved < 3) {
@@ -847,6 +846,7 @@
       savedEl.title = nextTitle;
     }
     savedEl.classList.toggle('is-saved', savedModel.tone === 'saved');
+    savedEl.classList.toggle('is-slower', savedModel.tone === 'slower');
   }
 
   function computeBarUiModeSignature() {
@@ -2085,6 +2085,13 @@
               typeof payload.bankedSavedSec === 'number'
                 ? payload.bankedSavedSec
                 : remainingState.bankedSavedSec || 0,
+            savedTimeModel:
+              payload.savedTimeModel || {
+                visible: false,
+                tone: 'neutral',
+                text: '',
+                title: '',
+              },
             playbackRate:
               typeof payload.playbackRate === 'number' ? payload.playbackRate : null,
             isAd: Boolean(payload.isAd),

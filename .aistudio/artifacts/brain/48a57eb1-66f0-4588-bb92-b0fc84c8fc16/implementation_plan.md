@@ -1,39 +1,44 @@
-# Cadence v1.6.1 — Watch Toolbar Stabilization & Live Detection Fixes
+# Cadence v1.6.0 Re-Roll — Architecture Re-Anchor, Authoritative Bridge Calculations & Extension Script Linting
 
-Cadence `v1.6.1` is a targeted stabilization update resolving three watch-page toolbar issues introduced in v1.6.0:
-1. **Eliminate False-Positive "Live Stream" Detection**: Standard VOD videos and archived stream replays will never be classified as "Live". Multi-factor validation will require genuine YouTube live player classes (`#movie_player.ytp-live`) and confirmed stream metadata before engaging live locks or disabling acceleration controls.
-2. **Immediate Toolbar Speed & "Saves Time" Synchronization**: The toolbar's Row 1 speed readout, active speed chips, and Row 3 "Saves Xm Ys" indicator will update synchronously across all speed adjustments (via toolbar buttons, keyboard shortcuts, or the Extension Popup), whether playing or paused.
-3. **Atomic Off-Screen Toolbar Construction**: The watch toolbar will be fully constructed and validated off-screen before inserting into the DOM, eliminating any possibility of an empty or thin grey placeholder bar rendering during page transitions.
+Cadence `v1.6.0` is re-planned to deliver the full suite of #23 (Disable Video Previews), #24 (Real-Time Per-Video & Lifetime Time Saved), and #26 (Paginated & Filtered Options Rules) while restoring the verified stability of `v1.5.2`:
+1. **Re-Anchor to Proven v1.5.2 Watch Bar Baseline**: Re-establish the clean, tested `v1.5.2` watch toolbar and live/VOD detection state machine in `page-bridge.js` and `content.js`, ensuring zero divergence from its rock-solid daily-driver stability.
+2. **Authoritative Bridge Precomputation (#24)**: Compute all saved-time metrics (both wall-clock banked seconds and projected remaining savings) directly in `page-bridge.js` where the HTML5 `<video>` and `#movie_player` elements reside natively. Pass the precomputed saved-time model directly in `TIME_REMAINING_UPDATE` payloads, turning `content.js` into a lightweight visual presenter with zero DOM video lookups, zero missing helper functions, and zero `ReferenceError`s.
+3. **Automated Extension Script Identifier Linter**: Add a static identifier and syntax validation step to `scripts/build-extension.ts` that audits all extracted extension JavaScript files (`content.js`, `page-bridge.js`, `popup.js`, `options.js`, and `background.js`) to guarantee that any undeclared variable, missing function, or syntax issue fails the build immediately before packaging.
 
 ---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All product behaviors and technical safeguards below directly incorporate your confirmed choices from Phase 1 clarifying questions:
+> All product decisions and architectural directions below incorporate your confirmed choices from the clarifying interview:
 
-- **Confirmed Decision 1 — Live vs. VOD Detection Hardening**:
-  - *User Choice*: Require live player classes and positive stream indicators.
-  - *Implementation*: Detection will require `#movie_player.classList.contains('ytp-live')` AND positive `player.getVideoData().isLive === true`. Buffering states (`NaN` duration) and archived live replays will never trigger the live mode lock. Loose DOM fallback checks in `content.js` will be constrained so dormant or disabled live badge templates never falsely trigger live state.
-- **Confirmed Decision 2 — Real-Time Toolbar Speed & Savings Sync**:
-  - *User Choice*: Keep toolbar fully synchronized across all speed changes.
-  - *Implementation*: When playback speed changes from any source (Extension Popup, keyboard shortcuts `>`/`<`, YouTube player menus, or toolbar buttons), `content.js` will immediately update its active speed state, update Row 1 and Row 2 active chips, recalculate `computeSavedTimeModel()`, and render the "Saves Xm Ys" readout in real time (both while playing and paused).
-- **Confirmed Decision 3 — Zero Blank Bar Guarantee**:
-  - *User Choice*: Construct offscreen and insert only when fully populated.
-  - *Implementation*: In `renderInPageBar()`, `cadence-watch-bar` will be created, populated with `innerHTML`, bound to event listeners, and validated off-screen. Only when fully assembled will it be mounted or replaced in the DOM. If any transient error occurs during video switching, no empty container shell will ever be left in the page.
-- **Confirmed Decision 4 — Chrome Web Store Studio Preservation**:
-  - Promo Frame & CWS Screenshot Studio remain locked at `v1.5.1`. Runtime extension version will bump to `v1.6.1`.
+- **Confirmed Decision 1 — Re-Anchor to Proven v1.5.2 Baseline**:
+  - *User Choice*: Re-anchor to proven v1.5.2 watch bar baseline.
+  - *Execution*: The watch toolbar rendering loop, live stream DVR state machine, and channel rule application logic in `content.js` and `page-bridge.js` will revert to the clean `v1.5.2` foundation before surgical integration of the new v1.6.0 features.
+- **Confirmed Decision 2 — Authoritative Bridge Precomputation**:
+  - *User Choice*: Precompute saved time in bridge and pass in payload.
+  - *Execution*: `page-bridge.js` already runs in the page's MAIN world with direct, synchronous access to `video.currentTime`, `video.duration`, `video.playbackRate`, and `#movie_player`. It will track `currentVideoTimeSavedSec`, compute the projected remaining savings `(remainingSec * (rate - 1.0)) / rate`, and package a complete `savedTimeModel` (`{ visible, tone, text, title }`) inside every `TIME_REMAINING_UPDATE` message. `content.js` will render this model directly without querying `<video>` elements or calling helper functions like `getWatchVideoElement`.
+- **Confirmed Decision 3 — Automated Extension Build Linter**:
+  - *User Choice*: Add automated identifier and linter check to extension build.
+  - *Execution*: Extend `scripts/build-extension.ts` to run automated syntax and undeclared identifier checks across all output scripts using Node.js `vm.Script` / ESLint rules before creating `CWS.zip`.
+- **Confirmed Decision 4 — Preserve Solid v1.6.0 Options & Popup Features**:
+  - Keep the praised v1.6.0 Options page intact: Panel 01 Playback & Feed Controls (5 toggles), Panel 02 Lifetime Time Saved card with typed `"Forget Time Saved"` confirmation, Panel 03 Category Profiles, and Panel 04 Paginated/Filtered Channel Rules (10/25/50/All page size, 3 sort modes, instant search, category pills).
+  - Keep the Extension Popup 5th toggle for Disable Video Previews and the footer rule/time-saved badge.
+- **Confirmed Decision 5 — Chrome Web Store Studio Preservation**:
+  - Promo Frame & CWS Screenshot Studio remain locked at `v1.5.1`. Target release is bumped to `v1.6.0`.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Restores reliable, rock-solid toolbar operation on standard YouTube Watch pages:
-  - Ensures standard videos display the full suite of playback controls, active speed readouts, and projected/banked time savings.
-  - Keeps live stream protections strictly confined to genuinely live broadcasts.
-  - Prevents race conditions during YouTube SPA navigation from rendering an empty toolbar shell.
-- **Target Audience / Persona**: All YouTube viewers using Cadence who rely on the persistent below-video toolbar for fine-grained speed control, quick skips, and time-saved tracking.
-- **Key Value**: Consistency and polish—the toolbar always shows the correct state, updates in lockstep with the video, and never flashes empty or locked states on standard videos.
+- **What It Does**:
+  - Provides a frictionless, stable playback experience on all YouTube watch pages with instantaneous speed updates, reliable channel rule enforcement, and clear visibility of time saved.
+  - Silences intrusive thumbnail video previews across browsing feeds (Home, Search, Sidebar) while preserving creator trailers on `/@channel` pages.
+  - Organizes dozens of saved channel rules into a paginated, searchable, and sortable directory on the Options page.
+- **Root Cause Analysis of Divergence**:
+  - In `content.js`, `computeSavedTimeModel` attempted to call `getWatchVideoElement()`, a helper that only existed in `page-bridge.js`. In isolated content scripts, calling undeclared functions causes an immediate `Uncaught ReferenceError`, aborting the toolbar update loop and freezing UI reactivity.
+  - Concurrently, overly broad live fallback heuristics in `content.js` matched YouTube's dormant player template classes, falsely locking standard VODs into live mode.
+- **The Solution**: Precomputing saved-time metrics authoritatively in `page-bridge.js` completely eliminates cross-context DOM lookups in `content.js`, while strict player class checks (`#movie_player.ytp-live`) guarantee standard videos never enter live lock.
 
 ---
 
@@ -41,38 +46,35 @@ Cadence `v1.6.1` is a targeted stabilization update resolving three watch-page t
 
 ### Key User Flows
 
-1. **Watching Standard Videos (VOD & Archived Streams)**:
-   - Viewer navigates to any standard YouTube video or past live stream replay.
-   - The toolbar immediately renders with normal VOD controls:
-     - Row 1: `Default · 1.5×` or `Channel Rule · 1.5×` (with accurate duration readout).
-     - Row 2: Active speed highlighted (e.g. `1.5×`), full seek capsules active (`-60`, `-30`, `-10`, `+10`, `+30`, `+60`).
-     - Row 3: Steppers (`-0.05`, `+0.05`), `Reset`, channel rule action, and green `"Saves Xm Ys"` readout.
-   - Live stream indicators (red Live dot, "Stream is currently at live end" tooltip) are strictly absent.
-2. **Adjusting Speed via Extension Popup or Keyboard**:
-   - Viewer adjusts speed via the Extension Popup (e.g. clicking `1.75×`) or typing `>`:
-     - The video accelerates to `1.75×`.
-     - The below-video toolbar instantly updates its Row 1 readout to `1.75×`.
-     - The `1.75×` chip on Row 2 highlights immediately.
-     - Row 3 updates its `"Saves Xm Ys"` calculation instantly.
-     - The top-right toast notification displays `1.75× · Session Override`.
-3. **Smooth Video Transitions Without Blank Bars**:
-   - Viewer clicks a recommended video or navigates between tabs.
-   - YouTube's Polymer framework updates the watch page DOM.
-   - Cadence builds the new toolbar off-screen; no empty grey bar or unpopulated frame is ever visible to the user.
+1. **Watching Standard Videos (VOD & Replays)**:
+   - Toolbar loads cleanly below video title (`cadence-watch-bar`):
+     - **Row 1**: Mode tag (`Default · 1.5×` or `Channel Rule · 1.5×`), video time remaining.
+     - **Row 2**: Active speed highlighted, all seek buttons (`-60`, `-30`, `-10`, `+10`, `+30`, `+60`) fully interactive.
+     - **Row 3**: Steppers (`-0.05`, `+0.05`), `Reset`, channel rule action, and green `"Saves Xm Ys"` readout.
+   - Speed adjustments via toolbar chips, Popup, or keyboard shortcuts (`>`, `<`) update the toolbar immediately without delay or visual stutter.
+2. **End-of-Video Autoplay Stop & Savings Summary**:
+   - When a video reaches the end, playback stops cleanly and autoplay queue progression is halted.
+   - The Cadence End-of-Video toolbar pops up with Replay, Next, and Dismiss buttons.
+   - If playback acceleration was used ($\ge 1\text{s}$ saved), the banner displays `" · You saved {time} with Cadence!"`.
+   - Clicking **Replay** resets video to `0:00`, restarts playback, and cleanly dismisses the toolbar.
+3. **Real Live Stream Experience**:
+   - On genuine live streams (`#movie_player.ytp-live` active):
+     - At live edge: Displays `Live Stream · At Live End`, disables $> 1.0\times$ acceleration and forward skips, shows red Live dot.
+     - Rewound behind live (DVR): Displays lag (e.g. `42s behind Live`), allows catch-up speeds up to `2.0×`, shows static `Behind Live` tooltip.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1 — Multi-Factor Live Broadcast Validation**:
-  - *Chosen Approach*: Require BOTH `#movie_player.classList.contains('ytp-live')` AND explicit stream flags in player data (`vd.isLive === true` or ongoing live stream indicators). For DOM checks, verify `offsetParent !== null` and computed `display !== 'none'` on the live badge.
-  - *Why*: YouTube's desktop player HTML template includes `.ytp-live-badge` (with `disabled="true"`) on every video, hiding it via CSS `#movie_player:not(.ytp-live) .ytp-live-badge { display: none; }`. Checking for the presence of the element or disabled attribute caused false positives when evaluated before styles resolved or during buffering. Multi-factor checks eliminate this class of bug completely.
-- **Decision 2 — Duration NaN/Infinity Isolation**:
-  - *Chosen Approach*: When `video.duration` is `NaN` or `Infinity` during initial MSE buffer initialization, do NOT infer live broadcast unless `#movie_player` explicitly has `.ytp-live`. Treat uninitialized durations as "loading VOD", not Live.
-  - *Why*: In Chrome MSE, standard videos frequently report `NaN` or `Infinity` for the first 100–300ms while media segments buffer.
-- **Decision 3 — Atomic Off-Screen DOM Swapping**:
-  - *Chosen Approach*: Construct the new toolbar element completely in memory, populate all child elements and models, and swap it into `#above-the-fold` / `#watch-metadata` using `replaceWith` or single-step insertion.
-  - *Why*: Prevents the browser from painting an empty container div while JavaScript asynchronously computes channel rules, duration models, and saved time metrics.
+- **Decision 1 — Authoritative vs. Distributed Saved-Time Math**:
+  - *Chosen Approach*: `page-bridge.js` performs 100% of the wall-clock time saved tracking and projected duration calculations. It constructs the exact view model and sends it to `content.js`.
+  - *Why*: Eliminates code duplication and DOM traversal bugs in `content.js`. `content.js` simply sets `textContent` and `display` on `#cadence-saved-time` based on the payload.
+- **Decision 2 — Clean Rebase over In-Situ Patching**:
+  - *Chosen Approach*: Restore the tested `v1.5.2` transport deck DOM structure and event wiring, then apply the v1.6.0 delta on top.
+  - *Why*: Eliminates subtle regression artifacts and ensures proven long-session stability.
+- **Decision 3 — Automated AST / Scope Linter in Extension Build**:
+  - *Chosen Approach*: Add an automated verification script that compiles and validates all template string scripts (`content.js`, `page-bridge.js`, `popup.js`, `options.js`, `background.js`) against undefined identifiers before outputting `/extension` and `CWS.zip`.
+  - *Why*: `tsc --noEmit` only validates TypeScript syntax, not string literals containing JavaScript code. Automated script parsing catches `ReferenceError`s before code ever reaches the browser.
 
 ---
 
@@ -80,83 +82,59 @@ Cadence `v1.6.1` is a targeted stabilization update resolving three watch-page t
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                       YouTube Watch Page Player & DOM                       │
+│                      YouTube MAIN World (page-bridge.js)                    │
 │                                                                             │
-│  HTML5 Video & #movie_player              Cadence MAIN Page Bridge          │
-│  ┌───────────────────────────────────┐    ┌──────────────────────────────┐  │
-│  │ #movie_player.ytp-live (REQUIRED) │    │ Multi-factor live check:     │  │
-│  │ video.duration (finite = VOD)     │───►│ • player.classList 'ytp-live'│  │
-│  │ player.getVideoData().isLive      │    │ • vd.isLive === true         │  │
-│  └───────────────────────────────────┘    │ • Never flag NaN as Live     │  │
-│                                           └──────────────┬───────────────┘  │
-│                                                          │ TIME_REMAINING_UPDATE
-│                                                          │ MANUAL_RATE_CHANGE
-│                                                          ▼                  │
-│                                           ┌──────────────────────────────┐  │
-│                                           │ Cadence Content Script       │  │
-│                                           │ • Synchronous rate update    │  │
-│                                           │ • Atomic offscreen mount     │  │
-│                                           │ • Instant saved time calc    │  │
-│                                           └──────────────┬───────────────┘  │
-│                                                          │                  │
-│                                                          ▼                  │
-│                                           ┌──────────────────────────────┐  │
-│                                           │ Below-Video Watch Toolbar    │  │
-│                                           │ • Row 1: Mode & Speed sync   │  │
-│                                           │ • Row 2: Speed chips & seek  │  │
-│                                           │ • Row 3: Saves Xm Ys live    │  │
-│                                           └──────────────────────────────┘  │
+│   HTML5 Video Element             #movie_player Instance                    │
+│   • currentTime / duration        • .classList.contains('ytp-live')         │
+│   • playbackRate                  • getProgressState()                      │
+│            │                               │                                │
+│            ▼                               ▼                                │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │ Authoritative Savings & State Engine                                │   │
+│   │ • Wall-clock bank: dtWall * (rate - 1.0) when rate > 1.0            │   │
+│   │ • Projected remaining: (remainingSec * (rate - 1.0)) / rate         │   │
+│   │ • SavedTimeModel: { visible, tone, text: "Saves Xm Ys", title }     │   │
+│   │ • Multi-factor live check: requires #movie_player.ytp-live          │   │
+│   └──────────────────────────────────┬──────────────────────────────────┘   │
+└──────────────────────────────────────┼──────────────────────────────────────┘
+                                       │ postMessage('TIME_REMAINING_UPDATE')
+                                       │ { savedTimeModel, playbackRate, isLive }
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Content Script Context (content.js)                      │
+│                                                                             │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │ Pure Presenter Watch Toolbar                                        │   │
+│   │ • Receives precomputed savedTimeModel (zero video DOM calls)        │   │
+│   │ • Synchronous speed sync on user clicks & ratechange                │   │
+│   │ • Atomic offscreen mount prevents empty grey bars                   │   │
+│   └──────────────────────────────────┬──────────────────────────────────┘   │
+│                                      │
+│                                      ▼
+│                             #cadence-watch-bar
+│                             Row 1: Readout & Brand
+│                             Row 2: Speed Chips & Seeks
+│                             Row 3: Steppers & Saves Xm Ys
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### Component Changes in `src/extension/generateExtensionZip.ts`
-
-1. **`pageBridgeJs`**:
-   - Overhaul `isLiveBroadcast(player, video)`:
-     - Require `player && player.classList && player.classList.contains('ytp-live')`.
-     - Check `player.getVideoData().isLive === true` or `player.getPlayerResponse()?.videoDetails?.isLive === true`.
-     - If `video && Number.isFinite(video.duration) && video.duration > 0`, treat as VOD unless `.ytp-live` class is active.
-     - Never return `true` purely based on `!Number.isFinite(video.duration)` during initial loading.
-   - Ensure `ratechange` and `SET_SPEED` post `MANUAL_RATE_CHANGE` and `TIME_REMAINING_UPDATE` immediately with the new rate.
-2. **`contentJs`**:
-   - In `isAnyLiveStreamActive()` and `isDomLiveHeadFallback()`:
-     - Require `player && player.classList.contains('ytp-live')`.
-     - Ensure the badge is rendered and visible (`badge.offsetParent !== null` and `getComputedStyle(badge).display !== 'none'`).
-   - In `renderInPageBar()`:
-     - Construct `bar = document.createElement('div')` completely off-screen.
-     - Generate HTML, bind all listeners, apply duration and saved time models.
-     - If valid, mount to the target container or replace the existing bar in a single atomic step.
-     - Wrap in a `try...catch` boundary with safe fallback cleanup.
-   - In message handlers (`CADENCE_SET_CHANNEL_SPEED`, `MANUAL_RATE_CHANGE`, `TIME_REMAINING_UPDATE`):
-     - Synchronously update `remainingState.playbackRate`, `activeSpeed`, and trigger `updateRemainingReadoutInPlace()` or `renderInPageBar()` immediately.
-3. **`generateExtensionZip.ts` & `sampleDefaults.ts`**:
-   - Bump extension runtime version to `v1.6.1`.
-   - Maintain CWS screenshot studio locked at `v1.5.1`.
 
 ---
 
 ## 5. Verification Plan
 
-1. **Compilation & Extension Package Build**:
-   - Run `npm run build:extension` to regenerate `/extension` files and `CWS.zip`.
-   - Run `node --check` across all generated extension JS files (`background.js`, `page-bridge.js`, `content.js`, `popup.js`, `options.js`).
-   - Run `tsc --noEmit` (`lint_applet`) and `vite build` (`compile_applet`) to ensure 0 errors.
-2. **Issue 1 (Live False-Positive) Verification**:
-   - Verify standard VOD videos and archived stream replays never enter live mode.
-   - Verify quick speed chips ($1.25\times$, $1.5\times$, $1.75\times$, $2.0\times$) and forward seek buttons are never greyed out or marked `is-live-blocked`.
-3. **Issue 2 (Speed & "Saves Time" Sync) Verification**:
-   - Change speed in Extension Popup or via `>` shortcut.
-   - Verify toolbar Row 1 speed, Row 2 active chip, and Row 3 "Saves Xm Ys" readout update immediately in real time.
-4. **Issue 3 (Blank Bar Prevention) Verification**:
-   - Simulate rapid video transitions and player mount cycles.
-   - Confirm the toolbar never appears as an unpopulated or thin grey bar.
-
----
-
-## 6. Implementation & Verification Status
-
-- [x] **Live Detection Hardening**: Multi-factor validation implemented across `page-bridge.js`, `content.js`, and `popup.js`. Requires `#movie_player.classList.contains('ytp-live')` and active live indicators; standard VODs and buffering MSE videos (`NaN` duration) are never falsely treated as Live.
-- [x] **Immediate Speed & "Saves Time" Readout Synchronization**: Synchronous rate application implemented on `CADENCE_SET_CHANNEL_SPEED` and `MANUAL_RATE_CHANGE`. Row 1 speed readout, active speed chips, and Row 3 "Saves Xm Ys" calculate and update in real time.
-- [x] **Atomic Offscreen Watch Bar Assembly**: `cadence-watch-bar` is constructed, populated, and wired completely off-screen in memory before atomic insertion (`replaceWith` or single-step insert), protected by error boundaries with auto-cleanup of empty orphan elements.
-- [x] **CWS Snapshot Locked**: Promo Frame and Chrome Web Store Screenshot Studio remain locked at `v1.5.1`.
-- [x] **Extension Build & Validation**: Successfully regenerated `/extension` and `CWS.zip` (60.0 KB) at `v1.6.1`. Validated JS syntax across all 5 scripts (`node --check`), with clean TypeScript check (`tsc --noEmit`) and Vite compilation.
+1. **Automated Static Extension Linting**:
+   - Run `npm run build:extension`.
+   - Verify that all 5 extension scripts pass automated identifier and syntax analysis without undeclared variables or syntax errors.
+   - Run `tsc --noEmit` and `vite build`.
+2. **Toolbar Speed Responsiveness & Saved Time Verification**:
+   - Load video at standard speed (1.0×); verify toolbar displays normal VOD controls.
+   - Accelerate to 1.5× via popup, keyboard shortcut `>`, or toolbar chip:
+     - Verify Row 1 speed readout updates instantly.
+     - Verify active speed chip highlights instantly.
+     - Verify Row 3 `"Saves Xm Ys"` readout displays immediately without throwing `ReferenceError`.
+   - Check Chrome DevTools console for zero `Uncaught ReferenceError`s.
+3. **Live vs. VOD Isolation Verification**:
+   - Confirm standard videos and past live stream replays never show the "Live" badge or clamp speeds.
+   - Confirm actual live streams at live edge properly clamp to 1.0× and show the static Behind Live indicator when rewound.
+4. **Options Page & Popup Integrity**:
+   - Confirm Options page Panel 01 (5 toggles), Panel 02 (Lifetime Time Saved with confirmation reset), Panel 03 (Profiles), and Panel 04 (Paginated/Filtered Rules) function smoothly.

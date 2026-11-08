@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import vm from 'node:vm';
 import zlib from 'node:zlib';
 import JSZip from 'jszip';
 import {
@@ -17,6 +18,48 @@ import {
 const EXTENSION_OUT_DIR = path.join(process.cwd(), 'extension');
 const ICONS_OUT_DIR = path.join(EXTENSION_OUT_DIR, 'icons');
 const CWS_ZIP_OUT_PATH = path.join(process.cwd(), 'CWS.zip');
+
+function auditExtensionJsFile(filePath: string, code: string): void {
+  // 1. Verify syntax and parsing integrity via node:vm
+  try {
+    new vm.Script(code, { filename: filePath });
+  } catch (err: any) {
+    throw new Error(`[Extension Script Syntax Error] in ${filePath}: ${err.message}`);
+  }
+
+  // 2. Automated cross-world identifier audit
+  if (filePath.endsWith('content.js')) {
+    const forbiddenContentIdentifiers = [
+      'getWatchVideoElement',
+      'getMainVideo',
+      'getMoviePlayer',
+      'currentVideoTimeSavedSec',
+    ];
+    for (const ident of forbiddenContentIdentifiers) {
+      const regex = new RegExp(`\\b${ident}\\s*\\(`, 'g');
+      if (regex.test(code)) {
+        throw new Error(
+          `[Extension Identifier Audit Error] content.js calls bridge/DOM-only identifier '${ident}()'. Cross-execution world functions must not be invoked from content script.`
+        );
+      }
+    }
+  }
+
+  if (filePath.endsWith('page-bridge.js')) {
+    const forbiddenBridgeIdentifiers = [
+      'chrome.storage',
+      'chrome.runtime',
+      'getWatchPlayerElement',
+    ];
+    for (const ident of forbiddenBridgeIdentifiers) {
+      if (code.includes(ident)) {
+        throw new Error(
+          `[Extension Identifier Audit Error] page-bridge.js references extension-only API '${ident}'. Bridge runs in webpage context without Chrome extension APIs.`
+        );
+      }
+    }
+  }
+}
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -203,6 +246,9 @@ async function main() {
   const zip = new JSZip();
 
   for (const file of files) {
+    if (file.path.endsWith('.js')) {
+      auditExtensionJsFile(file.path, file.content);
+    }
     const outPath = path.join(EXTENSION_OUT_DIR, file.path);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, file.content, 'utf-8');
