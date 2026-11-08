@@ -342,10 +342,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let lastSavedTickWallMs = 0;
   let lastSavedTickVideoSec = null;
   let lastTimeSavedFlushAt = 0;
+  let currentSavedTrackingVideoId = '';
+
+  function resetCurrentVideoTimeSaved() {
+    flushTimeSavedDelta();
+    currentVideoTimeSavedSec = 0;
+    unflushedTimeSavedDeltaSec = 0;
+    lastSavedTickWallMs = 0;
+    lastSavedTickVideoSec = null;
+  }
+
+  function ensurePerVideoSavedTimeBoundary(videoId) {
+    if (!videoId) return;
+    if (currentSavedTrackingVideoId && currentSavedTrackingVideoId !== videoId) {
+      resetCurrentVideoTimeSaved();
+    }
+    currentSavedTrackingVideoId = videoId;
+  }
 
   function trackTimeSavedTick() {
     const player = getMoviePlayer();
     const video = getMainVideo();
+    const vid = getCurrentVideoId(player);
+    if (vid) {
+      ensurePerVideoSavedTimeBoundary(vid);
+    }
     if (!video || video.paused || isAdPlaying(player) || isLiveBroadcast(player, video)) {
       lastSavedTickWallMs = Date.now();
       lastSavedTickVideoSec = video ? video.currentTime : null;
@@ -384,14 +405,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         unflushedTimeSavedDeltaSec -= toSend;
       }
     }
-  }
-
-  function resetCurrentVideoTimeSaved() {
-    flushTimeSavedDelta();
-    currentVideoTimeSavedSec = 0;
-    unflushedTimeSavedDeltaSec = 0;
-    lastSavedTickWallMs = 0;
-    lastSavedTickVideoSec = null;
   }
 
   function suppressInlinePreviewPlayerIfNeeded() {
@@ -675,6 +688,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!player || !video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) {
       return;
     }
+    if (!Number.isFinite(video.duration) || video.duration === Infinity) {
+      return;
+    }
     const target = e.target instanceof Element ? e.target : null;
     const isPlayerScrubbing =
       wasDraggingBar ||
@@ -943,16 +959,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   function getLiveBadgeElement(player) {
     const p = player || getMoviePlayer();
-    if (p && p.classList && !p.classList.contains('ytp-live')) {
-      return null;
-    }
     const root = p || document;
     const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
     if (!(badge instanceof HTMLElement)) return null;
     if (badge.hasAttribute('hidden')) return null;
-    if (badge.offsetParent === null && !(p && p.classList && p.classList.contains('ytp-live'))) {
-      return null;
-    }
     try {
       const style = window.getComputedStyle(badge);
       if (style.display === 'none' || style.visibility === 'hidden') return null;
@@ -981,50 +991,70 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (isAdPlaying(player)) return false;
 
     const p = player || getMoviePlayer();
-    // CRITICAL: An active live stream MUST have the 'ytp-live' class on #movie_player.
-    // Standard VODs and archived live stream replays NEVER have 'ytp-live'.
-    const hasPlayerLiveClass = Boolean(p && p.classList && p.classList.contains('ytp-live'));
-    if (!hasPlayerLiveClass) {
+    const v = video || getMainVideo();
+
+    // 1. Definitively VOD or completed stream archive:
+    // When HTMLMediaElement has loaded metadata and duration is finite and positive, it is strictly VOD.
+    if (v && Number.isFinite(v.duration) && v.duration > 0) {
       return false;
     }
 
-    // Standard VOD or completed stream archive: duration is finite positive and player lacks .ytp-live class
-    if (video && Number.isFinite(video.duration) && video.duration > 0 && !hasPlayerLiveClass) {
-      return false;
-    }
-
-    const visibleBadge = getLiveBadgeElement(p);
-    const root = p || document;
-    const liveTimeDisplay = root.querySelector(
-      '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
-    );
-    if (visibleBadge || liveTimeDisplay) {
+    // 2. Canonical live stream HTML5 media duration (Infinity)
+    if (v && v.duration === Infinity) {
       return true;
     }
 
-    const currentVid = getCurrentVideoId(p);
-    try {
-      if (p && typeof p.getVideoData === 'function') {
-        const vd = p.getVideoData();
-        if (vd && (!currentVid || !vd.video_id || vd.video_id === currentVid)) {
-          if (vd.isLive === true) {
+    // 3. Player API metadata check
+    if (p) {
+      try {
+        if (typeof p.getVideoData === 'function') {
+          const vd = p.getVideoData();
+          if (vd && vd.isLive === true) {
             return true;
           }
         }
-      }
-      if (p && typeof p.getPlayerResponse === 'function') {
-        const resp = p.getPlayerResponse();
-        const details = resp && resp.videoDetails;
-        if (details && (!currentVid || !details.videoId || details.videoId === currentVid)) {
-          if (details.isLive === true) {
-            return true;
+        if (typeof p.getPlayerResponse === 'function') {
+          const resp = p.getPlayerResponse();
+          const details = resp && resp.videoDetails;
+          if (details && details.isLive === true) {
+            const liveMicro =
+              resp.microformat &&
+              resp.microformat.playerMicroformatRenderer &&
+              resp.microformat.playerMicroformatRenderer.liveBroadcastDetails;
+            if (!liveMicro || liveMicro.isLiveNow !== false) {
+              return true;
+            }
           }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
 
-    // Fallback: player has .ytp-live class and video is non-finite or not yet ready
-    if (video && video.readyState >= 1 && !Number.isFinite(video.duration)) {
+      if (
+        p.classList &&
+        (p.classList.contains('ytp-live') || p.classList.contains('ytp-live-mode'))
+      ) {
+        return true;
+      }
+
+      const root = p || document;
+      const liveTimeDisplay = root.querySelector(
+        '.ytp-chrome-bottom .ytp-time-display.ytp-live, .ytp-time-display.ytp-live'
+      );
+      if (liveTimeDisplay) return true;
+
+      const badge = root.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
+      if (badge instanceof HTMLElement && !badge.hasAttribute('hidden') && badge.offsetParent !== null) {
+        if (
+          badge.classList.contains('ytp-live-badge-is-livehead') ||
+          badge.classList.contains('ytp-livehead') ||
+          (p.classList && p.classList.contains('ytp-live'))
+        ) {
+          return true;
+        }
+      }
+    }
+
+    // 4. Fallback for non-finite duration after media readyState >= 1
+    if (v && v.readyState >= 1 && !Number.isFinite(v.duration)) {
       return true;
     }
 
@@ -1911,6 +1941,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!video) return;
 
     const videoId = getCurrentVideoId(player) || '';
+    if (videoId) {
+      ensurePerVideoSavedTimeBoundary(videoId);
+    }
     const adActive = isAdPlaying(player);
     if (adActive) {
       const adSig = videoId + '|ad';
@@ -2351,8 +2384,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   function resolveEffectiveVodDurationSec(player, video) {
+    if (!video || isLiveBroadcast(player, video)) return null;
+    if (!Number.isFinite(video.duration) || video.duration === Infinity) return null;
     const candidates = [];
-    if (video && Number.isFinite(video.duration) && video.duration > 0) {
+    if (Number.isFinite(video.duration) && video.duration > 0) {
       candidates.push(video.duration);
     }
     try {
@@ -2415,6 +2450,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function triggerEndOfVideoStop(player, video, seekNearEndTarget = null, forceBanner = false) {
     if (!config.enabled || !config.stopAfterVideoEnds || !isSupportedWatchPage()) return false;
     if (!video || isAdPlaying(player) || video.loop || isLiveBroadcast(player, video)) return false;
+    if (!Number.isFinite(video.duration) || video.duration === Infinity) return false;
     if (Date.now() <= userInitiatedNavUntil || Date.now() <= replayGraceUntil) return false;
 
     const currentVideoId = getCurrentVideoId(player) || 'active';
@@ -2899,6 +2935,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     suppressNativeAutoplayAndPlaylist();
     const meta = extractChannelMetadata();
     if (!meta) return;
+    if (meta.videoId) {
+      ensurePerVideoSavedTimeBoundary(meta.videoId);
+    }
     if (!meta.isPreview) {
       lockedVideoId = meta.videoId;
     }
@@ -3314,6 +3353,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
+      resetCurrentVideoTimeSaved();
       if (maybeRedirectCurrentShortsRoute()) return;
       syncShortsLinksInDom(true);
       if (!isSupportedWatchPage()) {
@@ -3944,20 +3984,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   function isAnyLiveStreamActive() {
     if (remainingState.isLive) return true;
     const player = getWatchPlayerElement();
-    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
-      return false;
-    }
-    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
-      return false;
-    }
-    try {
-      const style = window.getComputedStyle(badge);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    } catch (_) {
-      return false;
-    }
-    return true;
+    if (!player) return false;
+    const video = player.querySelector('video.html5-main-video');
+    if (video && Number.isFinite(video.duration) && video.duration > 0) return false;
+    if (video && video.duration === Infinity) return true;
+    return Boolean(
+      player.classList &&
+        (player.classList.contains('ytp-live') || player.classList.contains('ytp-live-mode'))
+    );
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -5513,16 +5547,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const prevAd = Boolean(remainingState.isAd);
           const prevLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
           const prevIsLive = Boolean(remainingState.isLive);
+          const prevVideoId = remainingState.videoId;
+          const isNewVideo = Boolean(payload.videoId && prevVideoId && payload.videoId !== prevVideoId);
           remainingState = {
             videoId: payload.videoId || null,
             rawRemainingSec:
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
             rawDurationSec:
               typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
-            bankedSavedSec:
-              typeof payload.bankedSavedSec === 'number'
+            bankedSavedSec: isNewVideo
+              ? (typeof payload.bankedSavedSec === 'number' ? payload.bankedSavedSec : 0)
+              : (typeof payload.bankedSavedSec === 'number'
                 ? payload.bankedSavedSec
-                : remainingState.bankedSavedSec || 0,
+                : remainingState.bankedSavedSec || 0),
             savedTimeModel:
               payload.savedTimeModel || {
                 visible: false,
@@ -5700,6 +5737,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 videoId: payload.videoId,
                 rawRemainingSec: null,
                 rawDurationSec: null,
+                bankedSavedSec: 0,
+                savedTimeModel: { visible: false, tone: 'neutral', text: '', title: '' },
                 playbackRate: null,
                 isAd: Boolean(payload.isAd),
                 isLive: false,

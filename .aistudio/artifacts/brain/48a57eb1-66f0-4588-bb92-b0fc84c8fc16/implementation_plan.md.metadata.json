@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for re-rolling Cadence v1.6.0 from the proven v1.5.2 baseline, precomputing saved time authoritatively in page-bridge.js, and adding automated script identifier verification to the extension build.",
-  "updatedAt":  "2026-11-08T04:06:36.382544647Z",
+  "summary":  "Cadence v1.6.0 Fix & Stabilization Implementation Plan to resolve Live stream detection, eliminate end-of-video auto-stop on streams, guarantee zero cross-video saved time leaks, and stabilize the real-time saved time calculator.",
+  "updatedAt":  "2026-11-08T04:50:33.568628886Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

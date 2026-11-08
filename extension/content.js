@@ -506,20 +506,14 @@
   function isAnyLiveStreamActive() {
     if (remainingState.isLive) return true;
     const player = getWatchPlayerElement();
-    if (!player || !player.classList || !player.classList.contains('ytp-live')) {
-      return false;
-    }
-    const badge = player.querySelector('.ytp-chrome-bottom .ytp-live-badge, .ytp-live-badge');
-    if (!(badge instanceof HTMLElement) || badge.hasAttribute('hidden') || badge.offsetParent === null) {
-      return false;
-    }
-    try {
-      const style = window.getComputedStyle(badge);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-    } catch (_) {
-      return false;
-    }
-    return true;
+    if (!player) return false;
+    const video = player.querySelector('video.html5-main-video');
+    if (video && Number.isFinite(video.duration) && video.duration > 0) return false;
+    if (video && video.duration === Infinity) return true;
+    return Boolean(
+      player.classList &&
+        (player.classList.contains('ytp-live') || player.classList.contains('ytp-live-mode'))
+    );
   }
 
   function getConfiguredSpeedForChannel(meta) {
@@ -2075,16 +2069,19 @@
           const prevAd = Boolean(remainingState.isAd);
           const prevLiveAtHead = Boolean(remainingState.isLive && remainingState.isAtLiveHead);
           const prevIsLive = Boolean(remainingState.isLive);
+          const prevVideoId = remainingState.videoId;
+          const isNewVideo = Boolean(payload.videoId && prevVideoId && payload.videoId !== prevVideoId);
           remainingState = {
             videoId: payload.videoId || null,
             rawRemainingSec:
               typeof payload.rawRemainingSec === 'number' ? payload.rawRemainingSec : null,
             rawDurationSec:
               typeof payload.rawDurationSec === 'number' ? payload.rawDurationSec : null,
-            bankedSavedSec:
-              typeof payload.bankedSavedSec === 'number'
+            bankedSavedSec: isNewVideo
+              ? (typeof payload.bankedSavedSec === 'number' ? payload.bankedSavedSec : 0)
+              : (typeof payload.bankedSavedSec === 'number'
                 ? payload.bankedSavedSec
-                : remainingState.bankedSavedSec || 0,
+                : remainingState.bankedSavedSec || 0),
             savedTimeModel:
               payload.savedTimeModel || {
                 visible: false,
@@ -2262,6 +2259,8 @@
                 videoId: payload.videoId,
                 rawRemainingSec: null,
                 rawDurationSec: null,
+                bankedSavedSec: 0,
+                savedTimeModel: { visible: false, tone: 'neutral', text: '', title: '' },
                 playbackRate: null,
                 isAd: Boolean(payload.isAd),
                 isLive: false,

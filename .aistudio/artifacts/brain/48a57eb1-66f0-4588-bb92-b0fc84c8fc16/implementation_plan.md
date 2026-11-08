@@ -1,140 +1,124 @@
-# Cadence v1.6.0 Re-Roll — Architecture Re-Anchor, Authoritative Bridge Calculations & Extension Script Linting
+# Cadence v1.6.0 Live Stream & Saved Time Stabilization Plan
 
-Cadence `v1.6.0` is re-planned to deliver the full suite of #23 (Disable Video Previews), #24 (Real-Time Per-Video & Lifetime Time Saved), and #26 (Paginated & Filtered Options Rules) while restoring the verified stability of `v1.5.2`:
-1. **Re-Anchor to Proven v1.5.2 Watch Bar Baseline**: Re-establish the clean, tested `v1.5.2` watch toolbar and live/VOD detection state machine in `page-bridge.js` and `content.js`, ensuring zero divergence from its rock-solid daily-driver stability.
-2. **Authoritative Bridge Precomputation (#24)**: Compute all saved-time metrics (both wall-clock banked seconds and projected remaining savings) directly in `page-bridge.js` where the HTML5 `<video>` and `#movie_player` elements reside natively. Pass the precomputed saved-time model directly in `TIME_REMAINING_UPDATE` payloads, turning `content.js` into a lightweight visual presenter with zero DOM video lookups, zero missing helper functions, and zero `ReferenceError`s.
-3. **Automated Extension Script Identifier Linter**: Add a static identifier and syntax validation step to `scripts/build-extension.ts` that audits all extracted extension JavaScript files (`content.js`, `page-bridge.js`, `popup.js`, `options.js`, and `background.js`) to guarantee that any undeclared variable, missing function, or syntax issue fails the build immediately before packaging.
-
----
+Stabilize Cadence v1.6.0 by restoring authoritative YouTube Live Stream detection across player API metadata and infinite video durations, completely disarming End-of-Video auto-stop on all live streams, enforcing strict per-video reset of banked saved time on every video ID transition, and stabilizing dynamic time saved calculations.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All product decisions and architectural directions below incorporate your confirmed choices from the clarifying interview:
-
-- **Confirmed Decision 1 — Re-Anchor to Proven v1.5.2 Baseline**:
-  - *User Choice*: Re-anchor to proven v1.5.2 watch bar baseline.
-  - *Execution*: The watch toolbar rendering loop, live stream DVR state machine, and channel rule application logic in `content.js` and `page-bridge.js` will revert to the clean `v1.5.2` foundation before surgical integration of the new v1.6.0 features.
-- **Confirmed Decision 2 — Authoritative Bridge Precomputation**:
-  - *User Choice*: Precompute saved time in bridge and pass in payload.
-  - *Execution*: `page-bridge.js` already runs in the page's MAIN world with direct, synchronous access to `video.currentTime`, `video.duration`, `video.playbackRate`, and `#movie_player`. It will track `currentVideoTimeSavedSec`, compute the projected remaining savings `(remainingSec * (rate - 1.0)) / rate`, and package a complete `savedTimeModel` (`{ visible, tone, text, title }`) inside every `TIME_REMAINING_UPDATE` message. `content.js` will render this model directly without querying `<video>` elements or calling helper functions like `getWatchVideoElement`.
-- **Confirmed Decision 3 — Automated Extension Build Linter**:
-  - *User Choice*: Add automated identifier and linter check to extension build.
-  - *Execution*: Extend `scripts/build-extension.ts` to run automated syntax and undeclared identifier checks across all output scripts using Node.js `vm.Script` / ESLint rules before creating `CWS.zip`.
-- **Confirmed Decision 4 — Preserve Solid v1.6.0 Options & Popup Features**:
-  - Keep the praised v1.6.0 Options page intact: Panel 01 Playback & Feed Controls (5 toggles), Panel 02 Lifetime Time Saved card with typed `"Forget Time Saved"` confirmation, Panel 03 Category Profiles, and Panel 04 Paginated/Filtered Channel Rules (10/25/50/All page size, 3 sort modes, instant search, category pills).
-  - Keep the Extension Popup 5th toggle for Disable Video Previews and the footer rule/time-saved badge.
-- **Confirmed Decision 5 — Chrome Web Store Studio Preservation**:
-  - Promo Frame & CWS Screenshot Studio remain locked at `v1.5.1`. Target release is bumped to `v1.6.0`.
+> The following architectural decisions were confirmed in Phase 1:
+> - **Live Stream Detection & Auto-Stop Disarmament**: Cadence will authoritatively inspect YouTube player metadata (`player.getVideoData()?.isLive === true`, `player.getPlayerResponse()?.videoDetails?.isLive === true`), live UI elements, and `!Number.isFinite(video.duration)`. Live streams will be strictly immune to End-of-Video auto-stop triggers (both progress bar releases and auto-advance blockers).
+> - **Per-Video Saved Time Reset**: Banked saved seconds (`currentVideoTimeSavedSec` in bridge and `remainingState.bankedSavedSec` in content script) will reset to `0` immediately whenever the active video ID changes, eliminating cross-video leakage where a new 1.0× video inherited previous saved time.
+> - **Saved Time Formula**: The watch bar will present `Banked Time Watched + Projected Remaining Savings` for VODs, showing `0s saved` at 1.0× baseline and dynamically reflecting savings during accelerated playback.
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Overview & Root Cause Analysis
 
-- **What It Does**:
-  - Provides a frictionless, stable playback experience on all YouTube watch pages with instantaneous speed updates, reliable channel rule enforcement, and clear visibility of time saved.
-  - Silences intrusive thumbnail video previews across browsing feeds (Home, Search, Sidebar) while preserving creator trailers on `/@channel` pages.
-  - Organizes dozens of saved channel rules into a paginated, searchable, and sortable directory on the Options page.
-- **Root Cause Analysis of Divergence**:
-  - In `content.js`, `computeSavedTimeModel` attempted to call `getWatchVideoElement()`, a helper that only existed in `page-bridge.js`. In isolated content scripts, calling undeclared functions causes an immediate `Uncaught ReferenceError`, aborting the toolbar update loop and freezing UI reactivity.
-  - Concurrently, overly broad live fallback heuristics in `content.js` matched YouTube's dormant player template classes, falsely locking standard VODs into live mode.
-- **The Solution**: Precomputing saved-time metrics authoritatively in `page-bridge.js` completely eliminates cross-context DOM lookups in `content.js`, while strict player class checks (`#movie_player.ytp-live`) guarantee standard videos never enter live lock.
+### A. Live Stream Detection Failure
+- **Root Cause:** In the previous update, `isLiveBroadcast` was modified to require `p.classList.contains('ytp-live')` as a hard prerequisite. On YouTube desktop, `#movie_player` does not always retain `.ytp-live` at the player root in modern Polymer layouts, especially during initial hydration or DVR seeking. Consequently, `isLiveBroadcast` evaluated to `false`, causing live streams to be treated as standard VODs. This enabled VOD skip-ahead buttons, calculated standard duration, and permitted `triggerEndOfVideoStop` to prematurely stop live playback.
+- **Resolution:** Re-establish authoritative multi-source live detection checking `player.getVideoData().isLive === true`, `player.getPlayerResponse().videoDetails.isLive === true`, visible live badges, and `video.duration === Infinity` or non-finite duration. In addition, explicitly disarm `triggerEndOfVideoStop` whenever live indicators are present.
 
----
+### B. Saved Time Leakage Across Videos
+- **Root Cause:** `currentVideoTimeSavedSec` in `page-bridge.js` and `remainingState.bankedSavedSec` in `content.js` were only reset on explicit video transition gates that depended on `lockedVideoId`. When navigating via YouTube's in-page SPF router (`yt-navigate-finish`), the previous video's banked time (e.g. 61 seconds / 1m 01s) was not purged, causing new 1.0× videos to display "Saves 1m 01s".
+- **Resolution:** Introduce a dedicated `ensureVideoBoundaryReset(newVideoId)` hook in both `page-bridge.js` and `content.js`. Any time the detected video ID changes, `currentVideoTimeSavedSec` and `remainingState.bankedSavedSec` immediately zero out.
 
-## 2. User Experience & Visual Design
-
-### Key User Flows
-
-1. **Watching Standard Videos (VOD & Replays)**:
-   - Toolbar loads cleanly below video title (`cadence-watch-bar`):
-     - **Row 1**: Mode tag (`Default · 1.5×` or `Channel Rule · 1.5×`), video time remaining.
-     - **Row 2**: Active speed highlighted, all seek buttons (`-60`, `-30`, `-10`, `+10`, `+30`, `+60`) fully interactive.
-     - **Row 3**: Steppers (`-0.05`, `+0.05`), `Reset`, channel rule action, and green `"Saves Xm Ys"` readout.
-   - Speed adjustments via toolbar chips, Popup, or keyboard shortcuts (`>`, `<`) update the toolbar immediately without delay or visual stutter.
-2. **End-of-Video Autoplay Stop & Savings Summary**:
-   - When a video reaches the end, playback stops cleanly and autoplay queue progression is halted.
-   - The Cadence End-of-Video toolbar pops up with Replay, Next, and Dismiss buttons.
-   - If playback acceleration was used ($\ge 1\text{s}$ saved), the banner displays `" · You saved {time} with Cadence!"`.
-   - Clicking **Replay** resets video to `0:00`, restarts playback, and cleanly dismisses the toolbar.
-3. **Real Live Stream Experience**:
-   - On genuine live streams (`#movie_player.ytp-live` active):
-     - At live edge: Displays `Live Stream · At Live End`, disables $> 1.0\times$ acceleration and forward skips, shows red Live dot.
-     - Rewound behind live (DVR): Displays lag (e.g. `42s behind Live`), allows catch-up speeds up to `2.0×`, shows static `Behind Live` tooltip.
+### C. Seeking vs. Saved Time Behavior
+- **Root Cause:** When skipping forward, remaining video duration decreases, reducing projected savings. When replaying, remaining duration increases, increasing projected savings.
+- **Resolution:** Clarify the calculation so `banked` accurately reflects wall-clock savings already realized, `projected` is computed from current playback rate and remaining playable duration, and at standard `1.0×` playback with zero banked time, the readout displays `0s saved` (or neutral badge) rather than false positive savings.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1 — Authoritative vs. Distributed Saved-Time Math**:
-  - *Chosen Approach*: `page-bridge.js` performs 100% of the wall-clock time saved tracking and projected duration calculations. It constructs the exact view model and sends it to `content.js`.
-  - *Why*: Eliminates code duplication and DOM traversal bugs in `content.js`. `content.js` simply sets `textContent` and `display` on `#cadence-saved-time` based on the payload.
-- **Decision 2 — Clean Rebase over In-Situ Patching**:
-  - *Chosen Approach*: Restore the tested `v1.5.2` transport deck DOM structure and event wiring, then apply the v1.6.0 delta on top.
-  - *Why*: Eliminates subtle regression artifacts and ensures proven long-session stability.
-- **Decision 3 — Automated AST / Scope Linter in Extension Build**:
-  - *Chosen Approach*: Add an automated verification script that compiles and validates all template string scripts (`content.js`, `page-bridge.js`, `popup.js`, `options.js`, `background.js`) against undefined identifiers before outputting `/extension` and `CWS.zip`.
-  - *Why*: `tsc --noEmit` only validates TypeScript syntax, not string literals containing JavaScript code. Automated script parsing catches `ReferenceError`s before code ever reaches the browser.
-
----
-
-## 4. Technical Architecture & Data Strategy
+## 2. Technical Architecture & Data Strategy
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      YouTube MAIN World (page-bridge.js)                    │
+│                       MAIN WORLD (page-bridge.js)                           │
 │                                                                             │
-│   HTML5 Video Element             #movie_player Instance                    │
-│   • currentTime / duration        • .classList.contains('ytp-live')         │
-│   • playbackRate                  • getProgressState()                      │
-│            │                               │                                │
-│            ▼                               ▼                                │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ Authoritative Savings & State Engine                                │   │
-│   │ • Wall-clock bank: dtWall * (rate - 1.0) when rate > 1.0            │   │
-│   │ • Projected remaining: (remainingSec * (rate - 1.0)) / rate         │   │
-│   │ • SavedTimeModel: { visible, tone, text: "Saves Xm Ys", title }     │   │
-│   │ • Multi-factor live check: requires #movie_player.ytp-live          │   │
-│   └──────────────────────────────────┬──────────────────────────────────┘   │
-└──────────────────────────────────────┼──────────────────────────────────────┘
-                                       │ postMessage('TIME_REMAINING_UPDATE')
-                                       │ { savedTimeModel, playbackRate, isLive }
-                                       ▼
+│  ┌───────────────────────┐         ┌─────────────────────────────────────┐  │
+│  │ YouTube Player API    │         │ Authoritative Live & DVR Engine     │  │
+│  │ • getVideoData()      │────────▶│ • isLiveBroadcast(player, video)    │  │
+│  │ • getPlayerResponse() │         │   - player.getVideoData().isLive    │  │
+│  │ • video.duration      │         │   - details.isLive === true         │  │
+│  └───────────────────────┘         │   - video.duration === Infinity     │  │
+│                                    │   - live badge / live time display  │  │
+│                                    └──────────────────┬──────────────────┘  │
+│                                                       │                     │
+│                                    ┌──────────────────▼──────────────────┐  │
+│                                    │ End-of-Video Auto-Stop Shield       │  │
+│                                    │ • triggerEndOfVideoStop:            │  │
+│                                    │   NEVER triggers if isLiveBroadcast │  │
+│                                    │   NEVER triggers if dur === Infinity│  │
+│                                    └─────────────────────────────────────┘  │
+│                                                       │                     │
+│  ┌─────────────────────────────────────────────────┐  │                     │
+│  │ Per-Video Saved Time Accrual Loop               │  │                     │
+│  │ • On videoId change: reset to 0 immediately     │  │                     │
+│  │ • If isLiveBroadcast: zero saved time           │  │                     │
+│  │ • If VOD: banked + projected remaining          │  │                     │
+│  └────────────────────────┬────────────────────────┘  │                     │
+└───────────────────────────┼───────────────────────────┼─────────────────────┘
+                            │                           │
+                            │ TIME_REMAINING_UPDATE     │
+                            ▼                           ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Content Script Context (content.js)                      │
+│                    ISOLATED WORLD (content.js)                              │
 │                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ Pure Presenter Watch Toolbar                                        │   │
-│   │ • Receives precomputed savedTimeModel (zero video DOM calls)        │   │
-│   │ • Synchronous speed sync on user clicks & ratechange                │   │
-│   │ • Atomic offscreen mount prevents empty grey bars                   │   │
-│   └──────────────────────────────────┬──────────────────────────────────┘   │
-│                                      │
-│                                      ▼
-│                             #cadence-watch-bar
-│                             Row 1: Readout & Brand
-│                             Row 2: Speed Chips & Seeks
-│                             Row 3: Steppers & Saves Xm Ys
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ Toolbar Presentation & Safeguards                                     │  │
+│  │ • isLive: true ──▶ Live toolbar (Live Badge, DVR lag, 1.0× clamp)     │  │
+│  │ • isLive: false ──▶ VOD toolbar (Saves time, real duration, skips)    │  │
+│  │ • Reset remainingState.bankedSavedSec = 0 on video change             │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Verification Plan
+## 3. Step-by-Step Implementation Strategy
 
-1. **Automated Static Extension Linting**:
-   - Run `npm run build:extension`.
-   - Verify that all 5 extension scripts pass automated identifier and syntax analysis without undeclared variables or syntax errors.
-   - Run `tsc --noEmit` and `vite build`.
-2. **Toolbar Speed Responsiveness & Saved Time Verification**:
-   - Load video at standard speed (1.0×); verify toolbar displays normal VOD controls.
-   - Accelerate to 1.5× via popup, keyboard shortcut `>`, or toolbar chip:
-     - Verify Row 1 speed readout updates instantly.
-     - Verify active speed chip highlights instantly.
-     - Verify Row 3 `"Saves Xm Ys"` readout displays immediately without throwing `ReferenceError`.
-   - Check Chrome DevTools console for zero `Uncaught ReferenceError`s.
-3. **Live vs. VOD Isolation Verification**:
-   - Confirm standard videos and past live stream replays never show the "Live" badge or clamp speeds.
-   - Confirm actual live streams at live edge properly clamp to 1.0× and show the static Behind Live indicator when rewound.
-4. **Options Page & Popup Integrity**:
-   - Confirm Options page Panel 01 (5 toggles), Panel 02 (Lifetime Time Saved with confirmation reset), Panel 03 (Profiles), and Panel 04 (Paginated/Filtered Rules) function smoothly.
+### Step 1: Re-anchor Live Stream Detection in `page-bridge.js`
+1. Re-implement `isLiveBroadcast(player, video)`:
+   - If `isAdPlaying(player)` -> return `false`.
+   - Check `player.getVideoData()?.isLive === true`.
+   - Check `player.getPlayerResponse()?.videoDetails?.isLive === true`.
+   - Check `!Number.isFinite(video?.duration) || video?.duration === Infinity`.
+   - Check player element classes (`.ytp-live`, `.ytp-live-mode`) or `.ytp-time-display.ytp-live` or visible `.ytp-live-badge`.
+   - If any positive indicator confirms live broadcast and `video.duration` is not a standard finite VOD duration, return `true`.
+2. Update `measureLiveDvrState(player, video, currentVid)`:
+   - If not live, return clean non-live state.
+   - Accurately measure live head position, DVR seekability, and lag seconds.
+
+### Step 2: Auto-Stop Disarmament on Live Streams
+1. Update `handleProgressBarReleaseAtEnd(e)`:
+   - Check `if (isLiveBroadcast(player, video) || !Number.isFinite(effectiveDur)) return;`
+2. Update `triggerEndOfVideoStop(player, video, targetTime, fromScrub)`:
+   - Add early return: `if (isLiveBroadcast(player, video) || !video || !Number.isFinite(video.duration)) return;`
+   - Disarm any auto-stop timers or banners on live streams.
+
+### Step 3: Zero Cross-Video Saved Time Leakage
+1. In `page-bridge.js`:
+   - Store `currentVideoId = getCurrentVideoId(player) || getUrlVideoId()`.
+   - In `emitTimeRemaining`, `trackTimeSavedTick`, and navigation listeners:
+     If `videoId !== currentTrackingVideoId`, call `resetCurrentVideoTimeSaved()` immediately.
+   - Ensure `currentVideoTimeSavedSec = 0` on every new video.
+2. In `content.js`:
+   - In `TIME_REMAINING_UPDATE`: if `payload.videoId !== remainingState.videoId`, reset `remainingState.bankedSavedSec = 0` and clear any previous video's saved time model.
+3. In `computeBridgeSavedTimeModel`:
+   - If `rate >= 0.99 && rate <= 1.01` and `banked < 3`: return `{ visible: true, tone: 'neutral', text: '0s saved', title: 'Playing at standard 1.0× speed' }`.
+
+### Step 4: Validate Toolbar Presentation for Live vs. VOD
+1. Verify live edge toolbar:
+   - Speed buttons clamped to `1.0×`.
+   - Skip ahead buttons greyed out with tooltip: `"Unavailable while synced at live end — rewind stream to speed up"`.
+   - Red live dot / "Live" badge visible.
+   - Zero saved time indicator displayed on live streams.
+2. Verify VOD toolbar:
+   - Instant response on speed changes.
+   - Banked time starts at `0s saved` at `1.0×`.
+   - Accelerated playback cleanly calculates banked + remaining projected savings.
+
+### Step 5: Build, Test & Lint
+1. Re-run `npm run build:extension` with automated syntax and identifier validation.
+2. Execute `node --check` across all generated extension scripts.
+3. Co-execute `compile_applet` and `lint_applet` to verify TypeScript integrity.
+4. Restart dev server and verify.
