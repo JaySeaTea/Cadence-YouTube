@@ -92,7 +92,7 @@
   }
 
   function renderRuleCount() {
-    summaryEl.textContent = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'} · ${formatCompactDuration(totalTimeSavedSec)} saved`;
+    summaryEl.innerHTML = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'} · <span class="time-saved-highlight">${formatCompactDuration(totalTimeSavedSec)} saved</span>`;
   }
   renderRuleCount();
 

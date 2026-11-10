@@ -1900,7 +1900,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         visible: true,
         tone: 'neutral',
         text: '0s saved',
-        title: 'Playing at standard 1.0× speed',
+        title: 'Increase playback speed to unlock Cadence time savings',
       };
     }
 
@@ -1909,9 +1909,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       tone: 'saved',
       text: 'Saves ' + formatExactMinutesSecondsBridge(totalSaved),
       title:
-        'Total wall-clock time saved on this video at ' +
-        formatDisplaySpeedBridge(rate) +
-        '×',
+        'Total potential wall-clock time saved based on previous playback acceleration and potential savings at current playback setting',
     };
   }
 
@@ -4172,7 +4170,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         visible: true,
         tone: 'neutral',
         text: '0s saved',
-        title: 'Playing at standard 1.0× speed',
+        title: 'Increase playback speed to unlock Cadence time savings',
       };
     }
 
@@ -4180,7 +4178,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       visible: true,
       tone: 'saved',
       text: \`Saves \${formatExactMinutesSeconds(totalSaved)}\`,
-      title: \`Total wall-clock time saved on this video at \${formatDisplaySpeed(effectiveSpeed)}×\`,
+      title:
+        'Total potential wall-clock time saved based on previous playback acceleration and potential savings at current playback setting',
     };
   }
 
@@ -4597,13 +4596,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const textEl = banner.querySelector('.cadence-stopped-text');
-    let stoppedMsg = hasPlaylist
+    const baseMsg = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
     if (typeof remainingState.bankedSavedSec === 'number' && remainingState.bankedSavedSec >= 1) {
-      stoppedMsg += ' · You saved ' + formatExactMinutesSeconds(remainingState.bankedSavedSec) + ' with Cadence!';
+      textEl.innerHTML = \`<span>\${baseMsg} · </span><strong class="cadence-stopped-saved">You saved \${formatExactMinutesSeconds(remainingState.bankedSavedSec)} with Cadence!</strong>\`;
+    } else {
+      textEl.textContent = baseMsg;
     }
-    textEl.textContent = stoppedMsg;
     bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
@@ -4971,10 +4971,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : 'Live stream broadcast · Active playback is 1.0× at live broadcast edge'
           : \`Live stream DVR playback · Active playback is \${formatDisplaySpeed(effectiveSpeed)}×\${matchedRule ? \` (Channel Rule \${formatDisplaySpeed(ruleResolvedSpeed)}× preserved for regular videos)\` : ''}\`
         : isSessionActive
-          ? \`Session override for this video only · Baseline is \${formatDisplaySpeed(baselineSpeed)}×\`
+          ? matchedRule
+            ? \`Session override for this video only · \${currentChannel.channelName || 'Channel'} rule is \${formatDisplaySpeed(ruleResolvedSpeed)}×\`
+            : \`Session override for this video only · Default speed is \${formatDisplaySpeed(baselineSpeed)}×\`
           : isLiveRuleClamped
             ? \`Live stream at live end · Saved \${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge\`
-            : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
+            : 'Video-specific playback info. Use Cadence controls to change. Use lower-right interactive buttons to set or update Channel Rules.';
 
     const durationModel = computeDurationSlotModel();
     const savedTimeModel = computeSavedTimeModel();
@@ -4991,14 +4993,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       \`;
     } else if (isSessionActive && !adActive) {
       ruleSlotHtml = \`
-        <span class="cadence-rule-status">Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <span class="cadence-rule-status">Channel Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
         <button type="button" data-rule-action="update" class="cadence-rule-action-btn is-update" title="\${\`Update \${currentChannel.channelName || 'channel'} Rule from \${formatDisplaySpeed(ruleResolvedSpeed)}× to \${formatDisplaySpeed(effectiveSpeed)}×\`}">
           <span>Update → \${formatDisplaySpeed(effectiveSpeed)}×</span>
         </button>
       \`;
     } else {
       ruleSlotHtml = \`
-        <span class="cadence-rule-status">Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <span class="cadence-rule-status">Channel Rule: \${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
         <button type="button" data-rule-action="clear" class="cadence-rule-action-btn\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Clear saved Rule and revert to Default speed'}">
           <span>Clear</span>
           <span class="cadence-rule-clear-x" aria-hidden="true">×</span>
@@ -6789,6 +6791,12 @@ html[dark] .cadence-rule-plus {
   transform: translateY(0);
 }
 
+.cadence-stopped-saved {
+  color: #34d399;
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
 .cadence-stopped-actions {
   display: flex;
   align-items: center;
@@ -7017,6 +7025,7 @@ html[dark] .cadence-rule-plus {
         justify-content: space-between;
       }
       .rule-count { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+      .time-saved-highlight { color: #34d399; font-weight: 600; }
     </style>
   </head>
   <body>
@@ -7199,7 +7208,7 @@ html[dark] .cadence-rule-plus {
   }
 
   function renderRuleCount() {
-    summaryEl.textContent = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'} · \${formatCompactDuration(totalTimeSavedSec)} saved\`;
+    summaryEl.innerHTML = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'} · <span class="time-saved-highlight">\${formatCompactDuration(totalTimeSavedSec)} saved</span>\`;
   }
   renderRuleCount();
 
@@ -7882,7 +7891,7 @@ html[dark] .cadence-rule-plus {
         border-radius: 8px;
         padding: 16px 20px;
       }
-      .stat-val { font-size: 26px; font-weight: 700; color: #38bdf8; font-variant-numeric: tabular-nums; }
+      .stat-val { font-size: 26px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
       .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
       .inline-confirm-box {
         margin-top: 14px;

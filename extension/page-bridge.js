@@ -1639,7 +1639,7 @@
         visible: true,
         tone: 'neutral',
         text: '0s saved',
-        title: 'Playing at standard 1.0× speed',
+        title: 'Increase playback speed to unlock Cadence time savings',
       };
     }
 
@@ -1648,9 +1648,7 @@
       tone: 'saved',
       text: 'Saves ' + formatExactMinutesSecondsBridge(totalSaved),
       title:
-        'Total wall-clock time saved on this video at ' +
-        formatDisplaySpeedBridge(rate) +
-        '×',
+        'Total potential wall-clock time saved based on previous playback acceleration and potential savings at current playback setting',
     };
   }
 

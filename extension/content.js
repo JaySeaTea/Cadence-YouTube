@@ -709,7 +709,7 @@
         visible: true,
         tone: 'neutral',
         text: '0s saved',
-        title: 'Playing at standard 1.0× speed',
+        title: 'Increase playback speed to unlock Cadence time savings',
       };
     }
 
@@ -717,7 +717,8 @@
       visible: true,
       tone: 'saved',
       text: `Saves ${formatExactMinutesSeconds(totalSaved)}`,
-      title: `Total wall-clock time saved on this video at ${formatDisplaySpeed(effectiveSpeed)}×`,
+      title:
+        'Total potential wall-clock time saved based on previous playback acceleration and potential savings at current playback setting',
     };
   }
 
@@ -1134,13 +1135,14 @@
     }
 
     const textEl = banner.querySelector('.cadence-stopped-text');
-    let stoppedMsg = hasPlaylist
+    const baseMsg = hasPlaylist
       ? 'Cadence stopped playback · Playlist auto-advance prevented'
       : 'Cadence stopped playback · Autoplay prevented';
     if (typeof remainingState.bankedSavedSec === 'number' && remainingState.bankedSavedSec >= 1) {
-      stoppedMsg += ' · You saved ' + formatExactMinutesSeconds(remainingState.bankedSavedSec) + ' with Cadence!';
+      textEl.innerHTML = `<span>${baseMsg} · </span><strong class="cadence-stopped-saved">You saved ${formatExactMinutesSeconds(remainingState.bankedSavedSec)} with Cadence!</strong>`;
+    } else {
+      textEl.textContent = baseMsg;
     }
-    textEl.textContent = stoppedMsg;
     bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
@@ -1508,10 +1510,12 @@
             : 'Live stream broadcast · Active playback is 1.0× at live broadcast edge'
           : `Live stream DVR playback · Active playback is ${formatDisplaySpeed(effectiveSpeed)}×${matchedRule ? ` (Channel Rule ${formatDisplaySpeed(ruleResolvedSpeed)}× preserved for regular videos)` : ''}`
         : isSessionActive
-          ? `Session override for this video only · Baseline is ${formatDisplaySpeed(baselineSpeed)}×`
+          ? matchedRule
+            ? `Session override for this video only · ${currentChannel.channelName || 'Channel'} rule is ${formatDisplaySpeed(ruleResolvedSpeed)}×`
+            : `Session override for this video only · Default speed is ${formatDisplaySpeed(baselineSpeed)}×`
           : isLiveRuleClamped
             ? `Live stream at live end · Saved ${formatDisplaySpeed(baselineSpeed)}× rule is clamped to 1.0× at live edge`
-            : 'Session-only transport deck · Use Row 3 right to save or update channel rules';
+            : 'Video-specific playback info. Use Cadence controls to change. Use lower-right interactive buttons to set or update Channel Rules.';
 
     const durationModel = computeDurationSlotModel();
     const savedTimeModel = computeSavedTimeModel();
@@ -1528,14 +1532,14 @@
       `;
     } else if (isSessionActive && !adActive) {
       ruleSlotHtml = `
-        <span class="cadence-rule-status">Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <span class="cadence-rule-status">Channel Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
         <button type="button" data-rule-action="update" class="cadence-rule-action-btn is-update" title="${`Update ${currentChannel.channelName || 'channel'} Rule from ${formatDisplaySpeed(ruleResolvedSpeed)}× to ${formatDisplaySpeed(effectiveSpeed)}×`}">
           <span>Update → ${formatDisplaySpeed(effectiveSpeed)}×</span>
         </button>
       `;
     } else {
       ruleSlotHtml = `
-        <span class="cadence-rule-status">Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
+        <span class="cadence-rule-status">Channel Rule: ${formatDisplaySpeed(ruleResolvedSpeed)}×</span>
         <button type="button" data-rule-action="clear" class="cadence-rule-action-btn${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : 'Clear saved Rule and revert to Default speed'}">
           <span>Clear</span>
           <span class="cadence-rule-clear-x" aria-hidden="true">×</span>

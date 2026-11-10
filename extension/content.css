@@ -725,6 +725,12 @@ html[dark] .cadence-rule-plus {
   transform: translateY(0);
 }
 
+.cadence-stopped-saved {
+  color: #34d399;
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
 .cadence-stopped-actions {
   display: flex;
   align-items: center;

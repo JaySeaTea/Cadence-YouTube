@@ -556,7 +556,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
     if (Math.abs(deltaSec) < 3) {
       return (
         <span
-          title="Playing at standard 1.0× speed"
+          title="Increase playback speed to unlock Cadence time savings"
           className="ml-1 text-[10.5px] font-mono tabular-nums text-slate-400/75 whitespace-nowrap shrink-0"
         >
           0s saved
@@ -567,7 +567,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
     if (deltaSec > 0) {
       return (
         <span
-          title={`Total wall-clock time saved on this ${formatClock(totalDurationSec)} video at ${formatSpeed(effectiveSpeed)}×`}
+          title="Total potential wall-clock time saved based on previous playback acceleration and potential savings at current playback setting"
           className="ml-1 text-[10.5px] font-mono tabular-nums text-emerald-400 whitespace-nowrap shrink-0"
         >
           Saves {formatExactMinutesSeconds(deltaSec)}
@@ -727,7 +727,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
       return (
         <div className="inline-flex items-center gap-1.5 italic whitespace-nowrap shrink-0">
           <span className="text-[10.5px] tabular-nums text-slate-400/85">
-            Rule: {formatSpeed(savedRuleSpeed)}×
+            Channel Rule: {formatSpeed(savedRuleSpeed)}×
           </span>
           <button
             type="button"
@@ -744,7 +744,7 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
     return (
       <div className="inline-flex items-center gap-1.5 italic whitespace-nowrap shrink-0">
         <span className="text-[10.5px] tabular-nums text-slate-400/85">
-          Rule: {formatSpeed(savedRuleSpeed)}×
+          Channel Rule: {formatSpeed(savedRuleSpeed)}×
         </span>
         <button
           type="button"
