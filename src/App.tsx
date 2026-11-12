@@ -24,6 +24,7 @@ import { ChannelRulesManager } from './components/ChannelRulesManager';
 import { ExtensionCodeViewer } from './components/ExtensionCodeViewer';
 import { InstallGuide } from './components/InstallGuide';
 import { ToolbarLayoutLab } from './components/ToolbarLayoutLab';
+import { ExternalLink } from 'lucide-react';
 
 const LEGACY_V1_KEYS = [
   'cadence_ext_settings_v1',
@@ -469,15 +470,25 @@ export default function App() {
             })}
           </nav>
 
-          {/* Zone 3: 1 primary action */}
-          <div className="flex items-center shrink-0">
+          {/* Zone 3: Store link & 1 primary action */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <a
+              href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+              title="View and install Cadence directly from the official Chrome Web Store"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+              <span>Chrome Store</span>
+            </a>
             <button
               type="button"
               onClick={handleDownloadZip}
               disabled={isExporting}
               className="px-4 py-2 text-xs font-semibold text-white bg-red-600 rounded-lg hover:bg-red-500 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              {isExporting ? 'Packaging .zip...' : 'Download Extension (.zip)'}
+              {isExporting ? 'Packaging .zip...' : 'Download (.zip)'}
             </button>
           </div>
         </div>

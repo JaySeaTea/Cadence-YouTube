@@ -1,6 +1,11 @@
 # Cadence — Per-Channel Speed & Playlist Stop for YouTube
 
-**Cadence** (`v1.5.1`) is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
+[![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Install%20v1.5.1-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support%20Cadence-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jayseatea)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-10b981?style=for-the-badge)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-slate?style=for-the-badge)](./LICENSE)
+
+**Cadence** is a Manifest V3 Chrome Extension (plus an interactive dark-mode web workbench) engineered around high-impact playback control on YouTube:
 
 1. **Automatic Per-Channel Playback Speeds + Full-Width 3-Row Watch Deck**: Assign channels to reusable category profiles—such as **Music (`1.0×`)**, **Educational (`1.5×`)**, or **Podcast / Lecture (`2.0×`)**—or set any custom speed from `0.25×` to `4.0×` via the toolbar popup, Options page, or directly from the watch toolbar's italic 1-click **Rule** slot (`+ Save Rule`, `Update →`, `Clear ×`). Whenever a video starts, Cadence locks in its saved rate within milliseconds, locks speed and skip adjustments during ads (`"Speed locked during ad"` / `"Skip locked during ad"`), and restores any active Session override or Channel Rule automatically when an ad finishes. Mounted full-width directly **above `#title`** inside `ytd-watch-metadata #above-the-fold` (leaving Subscribe, Like, and Share 100% untouched), the 3-row deck includes `0.75×`–`2.0×` quick presets, `±0.05` fine steppers, **10s / 30s / 60s Replay & Skip Ahead capsules**, real-time **remaining duration** (`11m left @ 1.75×`), **VOD wall-clock saved time** (`Saves 6m 09s`), **live broadcast detection** (`● Live`) with `1.0×` live-end clamp, a monotonic **Live DVR catch-up countdown** (`−10m · Live in 10m @ 2.0×`), and a **constant inline warning** (`⚠ Rewind unavailable on this live stream`) during slowed `< 1.0×` playback on rewind-disabled live streams that resets cleanly to `1.0×` on stream catch-up.
 2. **Automatic Shorts-to-Watch Conversion (`/shorts/` → `/watch`)**: Enabled by default (with a 1-click toggle in the Extension Popup), Cadence rewrites `<a href*="/shorts/">` feed links to `/watch?v=<id>` in-place and redirects direct or SPA `/shorts/<id>` routes with history-safe `location.replace`—giving every Short a full timeline scrubber, per-channel speed lock, and below-video transport deck without trapping your browser Back button.
@@ -30,9 +35,21 @@
 
 ---
 
-## Install in Google Chrome (Standalone `/extension` Folder)
+## Install from the Chrome Web Store
 
-You can load Cadence directly from a cloned copy of this repository—no build step required:
+Cadence is published and available directly on the official Chrome Web Store:
+
+👉 **[Install Cadence on the Chrome Web Store](https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe)**
+
+- One-click installation and automatic updates.
+- Verified Manifest V3 with minimal permissions (`storage`, `scripting`).
+- 100% private: zero analytics, zero cookies, zero external trackers.
+
+---
+
+## Install Manually (Developer Mode / Standalone `/extension` Folder)
+
+You can also load Cadence directly from a local clone of this repository without an internet build step:
 
 1. Clone this repository to a permanent folder on your machine:
    ```bash
@@ -94,6 +111,20 @@ This repository includes structured GitHub Issue Forms in `.github/ISSUE_TEMPLAT
 
 - **Bug Report** (`bug` label): Dropdowns for the exact YouTube surface (`Watch`, `Watch Later`, `Creator Playlist`, `Shorts`, `Popup`, `Options`) plus URL and error/screenshot fields.
 - **Feature / Enhancement** (`enhancement` label): Checkboxes for target surfaces (`Background`, `Below-Video Bar`, `Popup`, `Keyboard Shortcut`, `Options`) and a **Batch Priority** selector (`Next Release Batch`, `Soon`, `Someday`).
+
+---
+
+## ☕ Support & Donations
+
+Cadence is completely free, open-source, and privacy-first. There are no paywalls, subscriptions, telemetry, or advertisements.
+
+If Cadence saves you time every day, consider buying a coffee to support ongoing maintenance and feature development:
+
+<a href="https://buymeacoffee.com/jayseatea" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="42" width="150" />
+</a>
+
+Or support directly via: **[buymeacoffee.com/jayseatea](https://buymeacoffee.com/jayseatea)**
 
 ---
 

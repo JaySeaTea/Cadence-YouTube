@@ -7026,6 +7026,18 @@ html[dark] .cadence-rule-plus {
       }
       .rule-count { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
       .time-saved-highlight { color: #34d399; font-weight: 600; }
+      .popup-coffee {
+        text-decoration: none;
+        font-size: 13px;
+        opacity: 0.85;
+        transition: opacity 0.15s, transform 0.15s;
+        display: inline-block;
+        line-height: 1;
+      }
+      .popup-coffee:hover {
+        opacity: 1;
+        transform: scale(1.15);
+      }
     </style>
   </head>
   <body>
@@ -7106,7 +7118,10 @@ html[dark] .cadence-rule-plus {
 
     <div class="section footer-row">
       <span class="rule-count" id="saved-summary">0 channels configured</span>
-      <span class="version-meta" id="footer-version"></span>
+      <div style="display:inline-flex; align-items:center; gap:8px;">
+        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
+        <span class="version-meta" id="footer-version"></span>
+      </div>
     </div>
 
     <script src="popup.js"></script>
@@ -8062,6 +8077,25 @@ html[dark] .cadence-rule-plus {
       }
       button.danger-btn:hover:not(:disabled) { background: #b91c1c; }
       button.danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .coffee-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f59e0b;
+        color: #0b0f19;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: background 0.15s, transform 0.15s;
+      }
+      .coffee-btn:hover {
+        background: #fbbf24;
+        color: #0b0f19;
+        transform: translateY(-1px);
+      }
     </style>
   </head>
   <body>
@@ -8079,6 +8113,7 @@ html[dark] .cadence-rule-plus {
           <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
           <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
           <button type="button" id="btn-reset-presets" class="ghost">Reset Presets</button>
+          <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="coffee-btn" title="Support Cadence on Buy Me a Coffee">☕ Buy Me a Coffee</a>
         </div>
       </div>
 

@@ -284,6 +284,25 @@
       }
       button.danger-btn:hover:not(:disabled) { background: #b91c1c; }
       button.danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .coffee-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f59e0b;
+        color: #0b0f19;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: background 0.15s, transform 0.15s;
+      }
+      .coffee-btn:hover {
+        background: #fbbf24;
+        color: #0b0f19;
+        transform: translateY(-1px);
+      }
     </style>
   </head>
   <body>
@@ -301,6 +320,7 @@
           <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
           <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
           <button type="button" id="btn-reset-presets" class="ghost">Reset Presets</button>
+          <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="coffee-btn" title="Support Cadence on Buy Me a Coffee">☕ Buy Me a Coffee</a>
         </div>
       </div>
 

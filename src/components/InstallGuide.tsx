@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Copy, Download } from 'lucide-react';
+import { Check, Copy, Download, ExternalLink } from 'lucide-react';
 import { EXTENSION_VERSION } from '../data/initialData';
 import { PromoFrameStudio } from './PromoFrameStudio';
 
@@ -55,6 +55,31 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
           </code>
           ), and zero pre-seeded sample rules ready for the Chrome Web Store Developer Dashboard.
         </p>
+      </div>
+
+      {/* Live on Chrome Web Store Banner */}
+      <div className="bg-gradient-to-r from-blue-950/60 via-indigo-950/40 to-slate-900 border border-blue-500/40 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg shadow-blue-950/30">
+        <div className="space-y-1">
+          <div className="inline-flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-300">Live on Chrome Web Store</span>
+          </div>
+          <h2 className="text-base font-bold text-slate-100">
+            Cadence is officially live in Google’s store!
+          </h2>
+          <p className="text-sm text-slate-300/90 leading-relaxed max-w-xl">
+            Users can now install Cadence directly from the Chrome Web Store for instant 1-click setup, security verification, and automatic updates.
+          </p>
+        </div>
+        <a
+          href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer shadow-md shadow-blue-900/40"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span>View on Chrome Web Store</span>
+        </a>
       </div>
 
       {/* Standalone /extension & CWS.zip Export */}

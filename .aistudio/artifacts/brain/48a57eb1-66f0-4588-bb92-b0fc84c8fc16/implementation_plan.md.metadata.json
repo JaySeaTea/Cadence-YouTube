@@ -1,6 +1,0 @@
-{
-  "summary":  "Updated implementation plan incorporating the user's feedback to replace 'Channel Rule · 1.0×' / 'Default · 1.0×' in Row 1 with 'Streaming · [Speed]×' whenever a Live Stream is detected. This resolves contradictory status messaging between Row 1 and Row 3 channel rule badges while clearly identifying live broadcast context.",
-  "updatedAt":  "2026-11-08T14:23:08.714751742Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
