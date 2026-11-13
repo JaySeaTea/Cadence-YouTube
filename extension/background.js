@@ -144,14 +144,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (Object.keys(nextPayload).length > 0) {
     await chrome.storage.local.set(nextPayload);
   }
-  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
-  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' }).catch(() => {});
+  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' }).catch(() => {});
   await injectIntoExistingYouTubeTabs();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
-  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' }).catch(() => {});
+  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' }).catch(() => {});
   await injectIntoExistingYouTubeTabs();
 });
 

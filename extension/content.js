@@ -82,13 +82,31 @@
         style = document.createElement('style');
         style.id = 'cadence-preview-blocker-style';
         style.textContent =
-          'body:not([page-subtype="channels"]) ytd-video-preview, ' +
-          'body:not([page-subtype="channels"]) #inline-preview-player, ' +
-          'body:not([page-subtype="channels"]) ytd-moving-thumbnail-renderer, ' +
-          'body:not([page-subtype="channels"]) #mouseover-overlay, ' +
+          'ytd-video-preview, ' +
+          '#preview > ytd-video-preview, ' +
+          '#inline-preview-player, ' +
+          '#video-preview-container, ' +
+          'ytd-moving-thumbnail-renderer, ' +
+          'yt-animated-thumbnail-view-model, ' +
+          'ytd-thumbnail-overlay-loading-preview-renderer, ' +
+          'ytd-thumbnail #mouseover-overlay, ' +
+          'yt-thumbnail-view-model #mouseover-overlay, ' +
+          'yt-thumbnail-hover-overlay-view-model, ' +
+          'ytd-browse[page-subtype="history"] ytd-moving-thumbnail-renderer, ' +
+          'ytd-browse[page-subtype="history"] yt-animated-thumbnail-view-model, ' +
+          'ytd-browse[page-subtype="history"] #mouseover-overlay, ' +
+          'ytd-browse[page-subtype="history"] ytd-video-preview, ' +
+          'ytd-browse[page-subtype="history"] #inline-preview-player, ' +
+          'ytd-browse[page-subtype="history"] #video-preview-container, ' +
+          'ytd-moving-thumbnail-renderer img[src*="an_webp"], ' +
+          'yt-animated-thumbnail-view-model img[src*="an_webp"], ' +
+          'yt-thumbnail-hover-overlay-view-model img[src*="an_webp"], ' +
+          '#mouseover-overlay img[src*="an_webp"], ' +
           '#secondary ytd-video-preview, ' +
           '#secondary #inline-preview-player, ' +
+          '#secondary #video-preview-container, ' +
           '#secondary ytd-moving-thumbnail-renderer, ' +
+          '#secondary yt-animated-thumbnail-view-model, ' +
           '#secondary #mouseover-overlay { ' +
           'display: none !important; ' +
           'pointer-events: none !important; ' +

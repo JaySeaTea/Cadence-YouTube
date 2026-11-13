@@ -16,19 +16,21 @@
 ## Repository Structure
 
 ```text
-├── CWS.zip                     # Ready-to-upload Chrome Web Store package (manifest.json at root)
-├── PRIVACY.md                  # Chrome Web Store Privacy Policy & permission disclosures
-├── extension/                  # Standalone Manifest V3 Chrome Extension (Load Unpacked directly!)
-│   ├── manifest.json           # Manifest V3 config (v1.5.1 — storage, scripting, Chrome 111+)
-│   ├── background.js           # Service worker: v4 schema sync, badge readout & open-tab attach
+├── CWS.zip                     # Ready-to-upload Chrome/Brave/Edge package (manifest.json at root)
+├── Firefox.zip                 # Ready-to-upload Firefox Add-ons (AMO) package (manifest.json at root)
+├── PRIVACY.md                  # Store Privacy Policy & permission disclosures
+├── extension/                  # Standalone Manifest V3 Chromium Extension (Chrome, Brave, Edge, Opera)
+│   ├── manifest.json           # Manifest V3 config (storage, scripting, Chrome 111+)
+│   ├── background.js           # Service worker / event page: schema sync, badge readout & tab attach
 │   ├── page-bridge.js          # MAIN-world bridge for #movie_player API, seek, Shorts & stop guard
 │   ├── content.js              # ISOLATED-world 3-row watch deck above #title, rule slot & popup API
 │   ├── content.css             # Light/dark styles for full-width 3-row deck & end-stop banner
 │   ├── popup.html / popup.js   # Dark-mode toolbar popup (presets, ±0.05× stepper & 4 core toggles)
 │   ├── options.html / .js      # Full-tab rule manager with version readout, JSON Import & Backup
 │   └── icons/                  # 16×16, 32×32, 48×48, and 128×128 extension icons
+├── extension-firefox/          # Standalone Manifest V3 Firefox 128+ Extension (Load Temporary Add-on)
 ├── scripts/
-│   └── build-extension.ts      # Regenerates /extension and root-level CWS.zip (0 sample rules)
+│   └── build-extension.ts      # Regenerates /extension, /extension-firefox, CWS.zip & Firefox.zip
 ├── src/                        # Interactive React + Tailwind dark-mode simulator & rule studio
 └── server.ts                   # Express + Vite dev/start server with gitignored local state API
 ```
@@ -86,8 +88,8 @@ npm install
 # Start the Express + Vite workbench on http://localhost:3000
 npm run dev
 
-# Regenerate standalone /extension folder and Chrome Web Store CWS.zip
-npm run package:cws
+# Regenerate standalone Chrome (/extension + CWS.zip) and Firefox (/extension-firefox + Firefox.zip) packages
+npm run build:extension
 
 # Type-check and build production assets
 npm run lint

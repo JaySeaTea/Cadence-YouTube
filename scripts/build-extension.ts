@@ -8,16 +8,20 @@ import {
   DEFAULT_SETTINGS,
   EXTENSION_VERSION,
 } from '../src/data/sampleDefaults';
-import { buildExtensionFiles } from '../src/extension/generateExtensionZip';
+import {
+  buildExtensionFiles,
+  type ExtensionTarget,
+} from '../src/extension/generateExtensionZip';
 import {
   PROMO_PRESETS,
   renderIntroFrameSvg,
   renderOutroFrameSvg,
 } from '../src/utils/promoFrameRenderer';
 
-const EXTENSION_OUT_DIR = path.join(process.cwd(), 'extension');
-const ICONS_OUT_DIR = path.join(EXTENSION_OUT_DIR, 'icons');
+const CHROME_OUT_DIR = path.join(process.cwd(), 'extension');
+const FIREFOX_OUT_DIR = path.join(process.cwd(), 'extension-firefox');
 const CWS_ZIP_OUT_PATH = path.join(process.cwd(), 'CWS.zip');
+const FIREFOX_ZIP_OUT_PATH = path.join(process.cwd(), 'Firefox.zip');
 
 function auditExtensionJsFile(filePath: string, code: string): void {
   // 1. Verify syntax and parsing integrity via node:vm
@@ -237,31 +241,65 @@ function renderCadenceEmblemSvg(): string {
   ].join('\n');
 }
 
-async function main() {
-  await fs.mkdir(ICONS_OUT_DIR, { recursive: true });
-  await fs.mkdir(PUBLIC_ASSETS_OUT_DIR, { recursive: true });
+async function buildTargetPackage(
+  target: ExtensionTarget,
+  outDir: string,
+  zipOutPath: string,
+  iconBuffers: Array<{ size: number; buffer: Buffer }>
+): Promise<number> {
+  const iconsDir = path.join(outDir, 'icons');
+  await fs.mkdir(iconsDir, { recursive: true });
 
-  // Chrome Web Store & standalone unpacked builds start with 0 pre-seeded channel rules
-  const files = buildExtensionFiles(DEFAULT_SETTINGS, DEFAULT_PRESETS, []);
+  // Store & standalone unpacked builds start with 0 pre-seeded channel rules
+  const files = buildExtensionFiles(DEFAULT_SETTINGS, DEFAULT_PRESETS, [], target);
   const zip = new JSZip();
 
   for (const file of files) {
     if (file.path.endsWith('.js')) {
       auditExtensionJsFile(file.path, file.content);
     }
-    const outPath = path.join(EXTENSION_OUT_DIR, file.path);
+    const outPath = path.join(outDir, file.path);
     await fs.mkdir(path.dirname(outPath), { recursive: true });
     await fs.writeFile(outPath, file.content, 'utf-8');
     zip.file(file.path, file.content);
   }
 
-  for (const size of [16, 32, 48, 128]) {
-    const pngBuffer = renderCadenceIconPng(size);
-    await fs.writeFile(path.join(ICONS_OUT_DIR, `icon${size}.png`), pngBuffer);
-    zip.file(`icons/icon${size}.png`, pngBuffer);
+  for (const { size, buffer } of iconBuffers) {
+    await fs.writeFile(path.join(iconsDir, `icon${size}.png`), buffer);
+    zip.file(`icons/icon${size}.png`, buffer);
   }
 
-  // High-resolution 4K-ready brand emblem & promo bookend assets (kept outside CWS.zip to preserve lean package size)
+  const zipBuffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
+  await fs.writeFile(zipOutPath, zipBuffer);
+  return zipBuffer.byteLength;
+}
+
+async function main() {
+  await fs.mkdir(PUBLIC_ASSETS_OUT_DIR, { recursive: true });
+
+  const iconBuffers = [16, 32, 48, 128].map((size) => ({
+    size,
+    buffer: renderCadenceIconPng(size),
+  }));
+
+  const chromeZipBytes = await buildTargetPackage(
+    'chrome',
+    CHROME_OUT_DIR,
+    CWS_ZIP_OUT_PATH,
+    iconBuffers
+  );
+  const firefoxZipBytes = await buildTargetPackage(
+    'firefox',
+    FIREFOX_OUT_DIR,
+    FIREFOX_ZIP_OUT_PATH,
+    iconBuffers
+  );
+
+  // High-resolution 4K-ready brand emblem & promo bookend assets (kept outside extension zips to preserve lean package size)
   const emblemSvg = renderCadenceEmblemSvg();
   const emblem1024Png = renderCadenceIconPng(1024);
   const intro4kSvg = renderIntroFrameSvg(PROMO_PRESETS.polished.intro);
@@ -272,15 +310,8 @@ async function main() {
   await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-intro-4k.svg'), intro4kSvg, 'utf-8');
   await fs.writeFile(path.join(PUBLIC_ASSETS_OUT_DIR, 'cadence-outro-4k.svg'), outro4kSvg, 'utf-8');
 
-  const cwsZipBuffer = await zip.generateAsync({
-    type: 'nodebuffer',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 9 },
-  });
-  await fs.writeFile(CWS_ZIP_OUT_PATH, cwsZipBuffer);
-
   console.log(
-    `Generated standalone Chrome extension v${EXTENSION_VERSION} in /extension, CWS.zip (${(cwsZipBuffer.byteLength / 1024).toFixed(1)} KB), and 4K promo assets in /public/assets/ (cadence-emblem.svg, cadence-emblem-1024.png, cadence-intro-4k.svg, cadence-outro-4k.svg).`
+    `Generated Cadence v${EXTENSION_VERSION}: Chrome (/extension + CWS.zip ${(chromeZipBytes / 1024).toFixed(1)} KB), Firefox (/extension-firefox + Firefox.zip ${(firefoxZipBytes / 1024).toFixed(1)} KB), and 4K promo assets in /public/assets/.`
   );
 }
 

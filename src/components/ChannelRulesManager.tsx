@@ -145,7 +145,7 @@ export const ChannelRulesManager: React.FC<ChannelRulesManagerProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'cadence-backup-v1.6.0.json';
+    a.download = `cadence-backup-v${EXTENSION_VERSION}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -374,12 +374,12 @@ export const ChannelRulesManager: React.FC<ChannelRulesManagerProps> = ({
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-slate-200">Disable Video Previews</span>
                 <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-red-950/80 border border-red-700/60 text-red-300 rounded">
-                  New in v1.6.0
+                  Updated in v{EXTENSION_VERSION}
                 </span>
               </div>
               <div className="text-xs text-slate-400 mt-0.5">
-                Blocks thumbnail video hover previews and animated hover overlays across Home, Search, Feeds,
-                and Watch Sidebar, while preserving creator featured trailers on /@channel pages.
+                Blocks thumbnail video hover previews and animated hover overlays across Home, Search,
+                History, Feeds, and Watch Sidebar, while preserving creator featured trailers on /@channel pages.
               </div>
             </div>
             <input

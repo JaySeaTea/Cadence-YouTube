@@ -17,60 +17,86 @@ export interface GeneratedExtensionFile {
   content: string;
 }
 
+export type ExtensionTarget = 'chrome' | 'firefox';
+
 export function buildExtensionFiles(
   settings: ExtensionSettings,
   presets: CategoryPreset[],
-  rules: ChannelRule[]
+  rules: ChannelRule[],
+  target: ExtensionTarget = 'chrome'
 ): GeneratedExtensionFile[] {
-  const manifestJson = JSON.stringify(
-    {
-      manifest_version: 3,
-      name: 'Cadence — Per-Channel Speed & Playlist Stop for YouTube',
-      short_name: 'Cadence',
-      version: EXTENSION_VERSION,
-      description:
-        'Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.',
-      minimum_chrome_version: '111',
-      permissions: ['storage', 'scripting'],
-      host_permissions: ['*://*.youtube.com/*'],
-      background: {
-        service_worker: 'background.js',
-      },
-      action: {
-        default_popup: 'popup.html',
-        default_title: 'Cadence for YouTube',
-        default_icon: {
-          '16': 'icons/icon16.png',
-          '32': 'icons/icon32.png',
-          '48': 'icons/icon48.png',
-          '128': 'icons/icon128.png',
-        },
-      },
-      options_page: 'options.html',
-      icons: {
+  const manifestBase = {
+    manifest_version: 3,
+    name: 'Cadence — Per-Channel Speed & Playlist Stop for YouTube',
+    short_name: 'Cadence',
+    version: EXTENSION_VERSION,
+    description:
+      'Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.',
+    permissions: ['storage', 'scripting'],
+    host_permissions: ['*://*.youtube.com/*'],
+    action: {
+      default_popup: 'popup.html',
+      default_title: 'Cadence for YouTube',
+      default_icon: {
         '16': 'icons/icon16.png',
         '32': 'icons/icon32.png',
         '48': 'icons/icon48.png',
         '128': 'icons/icon128.png',
       },
-      content_scripts: [
-        {
-          matches: ['*://*.youtube.com/*'],
-          js: ['page-bridge.js'],
-          world: 'MAIN',
-          run_at: 'document_start',
-        },
-        {
-          matches: ['*://*.youtube.com/*'],
-          js: ['content.js'],
-          css: ['content.css'],
-          run_at: 'document_start',
-        },
-      ],
     },
-    null,
-    2
-  );
+    icons: {
+      '16': 'icons/icon16.png',
+      '32': 'icons/icon32.png',
+      '48': 'icons/icon48.png',
+      '128': 'icons/icon128.png',
+    },
+    content_scripts: [
+      {
+        matches: ['*://*.youtube.com/*'],
+        js: ['page-bridge.js'],
+        world: 'MAIN',
+        run_at: 'document_start',
+      },
+      {
+        matches: ['*://*.youtube.com/*'],
+        js: ['content.js'],
+        css: ['content.css'],
+        run_at: 'document_start',
+      },
+    ],
+  };
+
+  const manifestObj =
+    target === 'firefox'
+      ? {
+          ...manifestBase,
+          background: {
+            scripts: ['background.js'],
+          },
+          options_ui: {
+            page: 'options.html',
+            open_in_tab: true,
+          },
+          browser_specific_settings: {
+            gecko: {
+              id: 'cadence-youtube@jayseatea.github.io',
+              strict_min_version: '128.0',
+              data_collection_permissions: {
+                required: ['none'],
+              },
+            },
+          },
+        }
+      : {
+          ...manifestBase,
+          minimum_chrome_version: '111',
+          background: {
+            service_worker: 'background.js',
+          },
+          options_page: 'options.html',
+        };
+
+  const manifestJson = JSON.stringify(manifestObj, null, 2);
 
   const initialSeed = JSON.stringify(
     {
@@ -195,14 +221,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (Object.keys(nextPayload).length > 0) {
     await chrome.storage.local.set(nextPayload);
   }
-  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
-  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' }).catch(() => {});
+  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' }).catch(() => {});
   await injectIntoExistingYouTubeTabs();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' });
-  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#DC2626' }).catch(() => {});
+  await chrome.action.setBadgeTextColor({ color: '#FFFFFF' }).catch(() => {});
   await injectIntoExistingYouTubeTabs();
 });
 
@@ -407,14 +433,64 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
 
+  function isChannelTrailerVideo(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(el.closest('ytd-channel-video-player-renderer, #c4-player'));
+  }
+
+  function isPreviewVideoElement(video) {
+    if (!video || video.nodeName !== 'VIDEO') return false;
+    if (isChannelTrailerVideo(video)) return false;
+    if (
+      typeof video.closest === 'function' &&
+      video.closest(
+        'ytd-video-preview, #inline-preview-player, #video-preview-container, ytd-moving-thumbnail-renderer, yt-animated-thumbnail-view-model, yt-thumbnail-hover-overlay-view-model, yt-lockup-view-model, ytd-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, #mouseover-overlay'
+      )
+    ) {
+      return true;
+    }
+    const watchPlayer = getMoviePlayer();
+    if (watchPlayer && watchPlayer.contains(video)) return false;
+    if (typeof video.closest === 'function' && video.closest('ytd-watch-flexy #movie_player, #ytd-player #movie_player, ytd-shorts')) {
+      return false;
+    }
+    return !isSupportedWatchPage();
+  }
+
+  function stopPreviewVideoElement(video) {
+    if (!video) return;
+    try {
+      video.autoplay = false;
+      video.muted = true;
+      if (!video.paused) {
+        video.pause();
+      }
+    } catch (_) {}
+  }
+
   function suppressInlinePreviewPlayerIfNeeded() {
     if (!config.enabled || config.disableVideoPreviews === false) return;
-    if (document.body && document.body.getAttribute('page-subtype') === 'channels') return;
-    const inlinePlayer = document.querySelector('ytd-video-preview #inline-preview-player, #inline-preview-player');
-    if (inlinePlayer && typeof inlinePlayer.pauseVideo === 'function') {
-      try {
-        inlinePlayer.pauseVideo();
-      } catch (_) {}
+    const inlinePlayers = document.querySelectorAll('ytd-video-preview #inline-preview-player, #inline-preview-player');
+    for (const inlinePlayer of inlinePlayers) {
+      if (isChannelTrailerVideo(inlinePlayer)) continue;
+      if (typeof inlinePlayer.mute === 'function') {
+        try {
+          inlinePlayer.mute();
+        } catch (_) {}
+      }
+      if (typeof inlinePlayer.pauseVideo === 'function') {
+        try {
+          inlinePlayer.pauseVideo();
+        } catch (_) {}
+      }
+    }
+    const previewVideos = document.querySelectorAll(
+      'ytd-video-preview video, #inline-preview-player video, #video-preview-container video, yt-lockup-view-model video, ytd-video-renderer video, ytd-moving-thumbnail-renderer video, yt-animated-thumbnail-view-model video'
+    );
+    for (const previewVideo of previewVideos) {
+      if (isPreviewVideoElement(previewVideo)) {
+        stopPreviewVideoElement(previewVideo);
+      }
     }
   }
 
@@ -3379,6 +3455,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   );
 
   document.addEventListener(
+    'play',
+    (event) => {
+      if (!config.enabled || config.disableVideoPreviews === false) return;
+      const target = event && event.target;
+      if (target && target.nodeName === 'VIDEO' && isPreviewVideoElement(target)) {
+        stopPreviewVideoElement(target);
+      }
+    },
+    { capture: true, signal: bridgeSignal }
+  );
+
+  document.addEventListener(
+    'playing',
+    (event) => {
+      if (!config.enabled || config.disableVideoPreviews === false) return;
+      const target = event && event.target;
+      if (target && target.nodeName === 'VIDEO' && isPreviewVideoElement(target)) {
+        stopPreviewVideoElement(target);
+      }
+    },
+    { capture: true, signal: bridgeSignal }
+  );
+
+  document.addEventListener(
     'visibilitychange',
     () => {
       if (document.visibilityState === 'visible' && isSupportedWatchPage()) {
@@ -3543,13 +3643,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         style = document.createElement('style');
         style.id = 'cadence-preview-blocker-style';
         style.textContent =
-          'body:not([page-subtype="channels"]) ytd-video-preview, ' +
-          'body:not([page-subtype="channels"]) #inline-preview-player, ' +
-          'body:not([page-subtype="channels"]) ytd-moving-thumbnail-renderer, ' +
-          'body:not([page-subtype="channels"]) #mouseover-overlay, ' +
+          'ytd-video-preview, ' +
+          '#preview > ytd-video-preview, ' +
+          '#inline-preview-player, ' +
+          '#video-preview-container, ' +
+          'ytd-moving-thumbnail-renderer, ' +
+          'yt-animated-thumbnail-view-model, ' +
+          'ytd-thumbnail-overlay-loading-preview-renderer, ' +
+          'ytd-thumbnail #mouseover-overlay, ' +
+          'yt-thumbnail-view-model #mouseover-overlay, ' +
+          'yt-thumbnail-hover-overlay-view-model, ' +
+          'ytd-browse[page-subtype="history"] ytd-moving-thumbnail-renderer, ' +
+          'ytd-browse[page-subtype="history"] yt-animated-thumbnail-view-model, ' +
+          'ytd-browse[page-subtype="history"] #mouseover-overlay, ' +
+          'ytd-browse[page-subtype="history"] ytd-video-preview, ' +
+          'ytd-browse[page-subtype="history"] #inline-preview-player, ' +
+          'ytd-browse[page-subtype="history"] #video-preview-container, ' +
+          'ytd-moving-thumbnail-renderer img[src*="an_webp"], ' +
+          'yt-animated-thumbnail-view-model img[src*="an_webp"], ' +
+          'yt-thumbnail-hover-overlay-view-model img[src*="an_webp"], ' +
+          '#mouseover-overlay img[src*="an_webp"], ' +
           '#secondary ytd-video-preview, ' +
           '#secondary #inline-preview-player, ' +
+          '#secondary #video-preview-container, ' +
           '#secondary ytd-moving-thumbnail-renderer, ' +
+          '#secondary yt-animated-thumbnail-view-model, ' +
           '#secondary #mouseover-overlay { ' +
           'display: none !important; ' +
           'pointer-events: none !important; ' +
@@ -8676,7 +8794,7 @@ html[dark] .cadence-rule-plus {
   exportBtnEl.addEventListener('click', () => {
     const payload = JSON.stringify(
       {
-        version: manifestVersion || '1.6.0',
+        version: manifestVersion || '${EXTENSION_VERSION}',
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
         settings,
@@ -8690,7 +8808,7 @@ html[dark] .cadence-rule-plus {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = \`cadence-backup-v\${manifestVersion || '1.6.0'}.json\`;
+    a.download = \`cadence-backup-v\${manifestVersion || '${EXTENSION_VERSION}'}.json\`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -8855,7 +8973,10 @@ html[dark] .cadence-rule-plus {
     {
       path: 'manifest.json',
       language: 'json',
-      description: `Manifest V3 (v${EXTENSION_VERSION}) with minimal storage + scripting permissions, minimum_chrome_version 111, and YouTube host access.`,
+      description:
+        target === 'firefox'
+          ? `Firefox Manifest V3 (v${EXTENSION_VERSION}) with background event scripts, Gecko ID cadence-youtube@jayseatea.github.io (128.0+), and zero data collection declaration.`
+          : `Manifest V3 (v${EXTENSION_VERSION}) with minimal storage + scripting permissions, minimum_chrome_version 111, and YouTube host access.`,
       content: manifestJson,
     },
     {

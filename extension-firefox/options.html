@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en" style="color-scheme: dark;">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cadence — Channel Rules &amp; Playback Settings</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0f19;
+        color: #f1f5f9;
+        padding: 36px 24px;
+      }
+      .container { max-width: 900px; margin: 0 auto; }
+      .top-header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .title-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      h1 { font-size: 24px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; }
+      .version-meta {
+        font-size: 13px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
+      .sub { color: #94a3b8; font-size: 14px; max-width: 580px; line-height: 1.5; }
+      .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .status-banner {
+        display: none;
+        padding: 10px 14px;
+        margin-bottom: 20px;
+        border-radius: 8px;
+        background: #111827;
+        border: 1px solid #334155;
+        color: #e2e8f0;
+        font-size: 13px;
+      }
+      .status-banner.visible { display: block; }
+      .panel {
+        background: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 24px;
+      }
+      .panel-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
+      .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+      /* Toggle switch styles */
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+        border-top: 1px solid #1e293b;
+      }
+      .toggle-row:first-of-type { border-top: none; }
+      .toggle-info h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+      .toggle-info p { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+      }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #334155; transition: .2s; border-radius: 24px;
+      }
+      .slider:before {
+        position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+        background-color: white; transition: .2s; border-radius: 50%;
+      }
+      input:checked + .slider { background-color: #dc2626; }
+      input:checked + .slider:before { transform: translateX(18px); }
+
+      /* Lifetime stats & reset */
+      .stat-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 16px 20px;
+      }
+      .stat-val { font-size: 26px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
+      .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+      .inline-confirm-box {
+        margin-top: 14px;
+        padding: 14px;
+        background: #181216;
+        border: 1px solid #ef4444;
+        border-radius: 8px;
+        display: none;
+      }
+      .inline-confirm-box.visible { display: block; }
+      .confirm-prompt { font-size: 12px; color: #fca5a5; font-weight: 600; margin-bottom: 8px; }
+      .confirm-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+      /* Rows & inputs */
+      .preset-row, .rule-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid #1e293b;
+      }
+      .preset-row:first-of-type, .rule-row:first-of-type { border-top: none; }
+      input[type="text"], input[type="number"], select {
+        padding: 7px 10px;
+        background: #0b0f19;
+        color: #f1f5f9;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+      .add-form input[type="text"] { flex: 1; min-width: 180px; }
+
+      /* Filter & Pagination Controls (#26) */
+      .filter-toolbar {
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .filter-row-top {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .filter-search-input {
+        flex: 1;
+        min-width: 220px;
+      }
+      .pill-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .pill-btn {
+        background: #111827;
+        color: #94a3b8;
+        border: 1px solid #334155;
+        padding: 5px 11px;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .pill-btn:hover { color: #f8fafc; border-color: #475569; }
+      .pill-btn.active {
+        background: #38bdf8;
+        color: #0b0f19;
+        border-color: #38bdf8;
+      }
+      .filter-row-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding-top: 8px;
+        border-top: 1px solid #1e293b;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .sort-controls { display: flex; align-items: center; gap: 8px; }
+      .pagination-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid #1e293b;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+      .page-btn-group { display: flex; gap: 4px; align-items: center; }
+      .page-btn {
+        background: #0b0f19;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .page-btn:hover:not(:disabled) { background: #1e293b; color: #fff; }
+      .page-btn.active {
+        background: #dc2626;
+        color: #fff;
+        border-color: #dc2626;
+        font-weight: 600;
+      }
+      .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+      /* Buttons */
+      button.primary {
+        background: #dc2626;
+        color: #ffffff;
+        border: none;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.primary:hover { background: #ef4444; }
+      button.ghost {
+        background: #111827;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        padding: 7px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button.ghost:hover { color: #f8fafc; background: #1e293b; border-color: #475569; }
+      button.row-remove {
+        background: transparent;
+        color: #94a3b8;
+        border: 1px solid #334155;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.row-remove:hover { color: #f87171; border-color: #ef4444; }
+      button.danger-btn {
+        background: #dc2626;
+        color: #ffffff;
+        border: 1px solid #ef4444;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.danger-btn:hover:not(:disabled) { background: #b91c1c; }
+      button.danger-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .coffee-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f59e0b;
+        color: #0b0f19;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: background 0.15s, transform 0.15s;
+      }
+      .coffee-btn:hover {
+        background: #fbbf24;
+        color: #0b0f19;
+        transform: translateY(-1px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="top-header">
+        <div>
+          <div class="title-row">
+            <h1>Cadence for YouTube</h1>
+            <span id="ext-version" class="version-meta"></span>
+          </div>
+          <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
+        </div>
+        <div class="toolbar-actions">
+          <input type="file" id="import-json-input" accept="application/json,.json" style="display:none;" />
+          <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
+          <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
+          <button type="button" id="btn-reset-presets" class="ghost">Reset Presets</button>
+          <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="coffee-btn" title="Support Cadence on Buy Me a Coffee">☕ Buy Me a Coffee</a>
+        </div>
+      </div>
+
+      <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
+
+      <!-- Panel 01: Playback & Feed Controls (#23) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>01. Playback &amp; Feed Controls</h2>
+          <span class="count-label">Global player defaults</span>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Per-Channel Playback Speed</h3>
+            <p>Remember and restore custom playback speeds for individual creators.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-speed" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Stop Playback After Video Ends</h3>
+            <p>Pause when current video completes and prevent autoplay queues or playlist leaps.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-stop" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Show Speed Bar</h3>
+            <p>Mount the Cadence 3-row transport deck directly above the YouTube player title.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-bar" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Convert Shorts to Regular Videos</h3>
+            <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-shorts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <h3>Disable Video Previews</h3>
+            <p>Block autoplay hover previews on Home, Search, and Sidebar while keeping channel trailers intact.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-previews" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Panel 02: Lifetime Time Saved (#24) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>02. Lifetime Time Saved</h2>
+          <span class="count-label">Accelerated playback tracking</span>
+        </div>
+        <div class="stat-card">
+          <div>
+            <div id="stat-saved-value" class="stat-val">0s saved</div>
+            <div class="stat-sub">Accrues in real time whenever watching videos faster than 1.0×.</div>
+          </div>
+          <button type="button" id="btn-open-reset" class="row-remove">Reset Counter</button>
+        </div>
+        <div id="reset-confirm-box" class="inline-confirm-box">
+          <div class="confirm-prompt">Type "Forget Time Saved" to confirm resetting your lifetime stats:</div>
+          <div class="confirm-row">
+            <input type="text" id="input-confirm-forget" placeholder="Forget Time Saved" style="flex:1;min-width:200px;" autocomplete="off" />
+            <button type="button" id="btn-confirm-forget" class="danger-btn" disabled>Confirm Reset</button>
+            <button type="button" id="btn-cancel-forget" class="ghost">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 03: Category Speed Profiles -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>03. Category Speed Profiles</h2>
+          <span class="count-label">Applies to linked channels</span>
+        </div>
+        <div id="presets-list"></div>
+      </div>
+
+      <!-- Panel 04: Saved Channel Speed Rules (#26) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>04. Saved Channel Speed Rules</h2>
+          <span id="rules-count" class="count-label">0 saved</span>
+        </div>
+        <form id="add-rule-form" class="add-form">
+          <input type="text" id="input-name" placeholder="Channel name (e.g. Veritasium)" required />
+          <input type="text" id="input-handle" placeholder="@handle (optional)" />
+          <select id="input-preset">
+            <option value="music">Music (1.0×)</option>
+            <option value="educational" selected>Educational (1.5×)</option>
+            <option value="podcast">Podcast / Lecture (2.0×)</option>
+            <option value="custom">Custom Speed</option>
+          </select>
+          <input type="number" id="input-speed" step="0.05" min="0.25" max="4" value="1.5" style="width: 88px;" />
+          <button type="submit" class="primary">Save Channel</button>
+        </form>
+
+        <!-- Search, Category Filters, Sort, and Page Size (#26) -->
+        <div class="filter-toolbar">
+          <div class="filter-row-top">
+            <input type="text" id="input-rule-search" class="filter-search-input" placeholder="Search channel name or @handle..." />
+            <div class="pill-group" id="category-pills">
+              <button type="button" class="pill-btn active" data-category="all">All</button>
+              <button type="button" class="pill-btn" data-category="educational">Educational</button>
+              <button type="button" class="pill-btn" data-category="podcast">Podcast</button>
+              <button type="button" class="pill-btn" data-category="music">Music</button>
+              <button type="button" class="pill-btn" data-category="custom">Custom</button>
+            </div>
+          </div>
+          <div class="filter-row-bottom">
+            <div class="sort-controls">
+              <label for="select-sort">Sort by:</label>
+              <select id="select-sort">
+                <option value="recent">Recently updated</option>
+                <option value="name">Channel Name A–Z</option>
+                <option value="speed">Speed (Highest to Lowest)</option>
+              </select>
+            </div>
+            <div class="sort-controls">
+              <label for="select-page-size">Show:</label>
+              <select id="select-page-size">
+                <option value="10" selected>10 per page</option>
+                <option value="25">25 per page</option>
+                <option value="50">50 per page</option>
+                <option value="all">All rules</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="rules-list"></div>
+
+        <div id="pagination-bar" class="pagination-bar">
+          <span id="rules-range">Showing 0–0 of 0 rules</span>
+          <div class="page-btn-group" id="page-buttons"></div>
+        </div>
+      </div>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>

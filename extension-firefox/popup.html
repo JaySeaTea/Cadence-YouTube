@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en" style="color-scheme: dark;">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cadence for YouTube</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 356px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0b0f19;
+        color: #f1f5f9;
+        padding: 16px;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .brand-wrap {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .version-meta {
+        font-size: 11px;
+        font-weight: 500;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
+      .link-btn {
+        border: none;
+        background: none;
+        color: #94a3b8;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        text-decoration: underline;
+      }
+      .link-btn:hover { color: #f8fafc; }
+      .section {
+        padding: 12px 0;
+        border-bottom: 1px solid #1e293b;
+      }
+      .section:last-child { border-bottom: none; padding-bottom: 0; }
+      .meta-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .kicker { font-size: 11px; color: #94a3b8; }
+      .speed-readout {
+        font-size: 12px;
+        font-weight: 700;
+        color: #f8fafc;
+        font-variant-numeric: tabular-nums;
+      }
+      .channel-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #f8fafc;
+        word-break: break-word;
+      }
+      .channel-handle {
+        font-size: 11px;
+        color: #94a3b8;
+        margin-top: 2px;
+      }
+      .popup-toast {
+        display: none;
+        margin-top: 8px;
+        padding: 6px 9px;
+        border-radius: 6px;
+        background: #111827;
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        color: #fde68a;
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1.35;
+      }
+      .popup-toast.visible {
+        display: block;
+      }
+      .controls-wrap {
+        margin-top: 10px;
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .preset-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+      .preset-btn {
+        padding: 7px 8px;
+        border: 1px solid #334155;
+        background: #111827;
+        color: #e2e8f0;
+        border-radius: 6px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .preset-btn:hover { background: #1e293b; }
+      .preset-btn.active {
+        background: #dc2626;
+        border-color: #dc2626;
+        color: #ffffff;
+      }
+      .preset-name { font-size: 11px; font-weight: 500; display: block; }
+      .preset-spd {
+        font-size: 12px;
+        font-weight: 700;
+        margin-top: 2px;
+        display: block;
+        font-variant-numeric: tabular-nums;
+      }
+      .speed-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 5px;
+      }
+      .spd-btn {
+        padding: 6px 0;
+        border: 1px solid #334155;
+        background: #111827;
+        color: #e2e8f0;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        font-variant-numeric: tabular-nums;
+      }
+      .spd-btn:hover { background: #1e293b; }
+      .spd-btn.active {
+        background: #dc2626;
+        border-color: #dc2626;
+        color: #ffffff;
+      }
+      .stepper-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 2px;
+      }
+      .stepper-label { font-size: 11px; color: #94a3b8; }
+      .stepper-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .step-btn {
+        padding: 4px 8px;
+        border: 1px solid #334155;
+        background: #111827;
+        color: #e2e8f0;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        font-variant-numeric: tabular-nums;
+      }
+      .step-btn:hover { background: #1e293b; }
+      .preset-btn.is-blocked:not(.active),
+      .spd-btn.is-blocked:not(.active),
+      .step-btn.is-blocked {
+        opacity: 0.45;
+      }
+      .step-val {
+        min-width: 48px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: #f8fafc;
+        font-variant-numeric: tabular-nums;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 0;
+      }
+      .row-label { font-size: 13px; font-weight: 500; color: #f1f5f9; }
+      .row-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+      input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
+      .footer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .rule-count { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+      .time-saved-highlight { color: #34d399; font-weight: 600; }
+      .popup-coffee {
+        text-decoration: none;
+        font-size: 13px;
+        opacity: 0.85;
+        transition: opacity 0.15s, transform 0.15s;
+        display: inline-block;
+        line-height: 1;
+      }
+      .popup-coffee:hover {
+        opacity: 1;
+        transform: scale(1.15);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div class="brand-wrap">
+        <span class="brand">Cadence</span>
+        <span class="version-meta" id="ext-version"></span>
+      </div>
+      <button id="open-options" class="link-btn">All Channel Rules</button>
+    </div>
+
+    <div class="section" id="active-channel-box">
+      <div class="meta-row">
+        <span class="kicker" id="channel-status">Active YouTube Tab</span>
+        <span class="speed-readout" id="active-speed-readout"></span>
+      </div>
+      <div class="channel-title" id="channel-name">Open a YouTube video</div>
+      <div class="channel-handle" id="channel-handle"></div>
+      <div class="popup-toast" id="popup-toast" role="status" aria-live="polite"></div>
+
+      <div class="controls-wrap" id="controls-wrap">
+        <div class="preset-grid" id="preset-buttons"></div>
+        <div class="speed-grid" id="speed-buttons">
+          <button class="spd-btn" data-speed="1">1.0×</button>
+          <button class="spd-btn" data-speed="1.25">1.25×</button>
+          <button class="spd-btn" data-speed="1.5">1.5×</button>
+          <button class="spd-btn" data-speed="1.75">1.75×</button>
+          <button class="spd-btn" data-speed="2">2.0×</button>
+        </div>
+        <div class="stepper-row">
+          <span class="stepper-label">Channel Rule Fine Stepper</span>
+          <div class="stepper-controls">
+            <button type="button" class="step-btn" id="step-down">−0.05×</button>
+            <span class="step-val" id="stepper-value">1.0×</span>
+            <button type="button" class="step-btn" id="step-up">+0.05×</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="row">
+        <div>
+          <div class="row-label">Per-Channel Playback Speed</div>
+          <div class="row-sub">Auto-apply saved speed on channel load</div>
+        </div>
+        <input type="checkbox" id="toggle-speed" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Stop Playback After Video Ends</div>
+          <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
+        </div>
+        <input type="checkbox" id="toggle-stop" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Show Speed Bar Below Video</div>
+          <div class="row-sub">Full-width speed, skip &amp; rule deck above title</div>
+        </div>
+        <input type="checkbox" id="toggle-bar" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Convert Shorts to Standard Player</div>
+          <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
+        </div>
+        <input type="checkbox" id="toggle-shorts" />
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Disable Video Previews</div>
+          <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
+        </div>
+        <input type="checkbox" id="toggle-previews" />
+      </div>
+    </div>
+
+    <div class="section footer-row">
+      <span class="rule-count" id="saved-summary">0 channels configured</span>
+      <div style="display:inline-flex; align-items:center; gap:8px;">
+        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
+        <span class="version-meta" id="footer-version"></span>
+      </div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
