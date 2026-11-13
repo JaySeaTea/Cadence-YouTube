@@ -810,6 +810,186 @@ export async function renderCwsSmallPromoTileToCanvas(
   ctx.restore();
 }
 
+/**
+ * Renders the Chrome Web Store Marquee Promo Tile (1400x560, 24-bit RGB compatible).
+ */
+export async function renderCwsMarqueePromoTileToCanvas(
+  canvas: HTMLCanvasElement,
+  showAnnotations: boolean = true
+): Promise<void> {
+  const width = 1400;
+  const height = 560;
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  await ensurePromoFontsReady();
+  const img = await loadPromoImage('/assets/aistudio/Zoomed_Channel_Rule_Active_03536fe2.png');
+
+  drawCwsCanvasBackdrop(ctx, width, height, 980, 280);
+
+  // Subtle left-side crimson accent behind brand mark
+  const leftBloom = ctx.createRadialGradient(132, 130, 0, 132, 130, 220);
+  leftBloom.addColorStop(0, 'rgba(239, 68, 68, 0.24)');
+  leftBloom.addColorStop(0.55, 'rgba(220, 38, 38, 0.08)');
+  leftBloom.addColorStop(1, 'rgba(220, 38, 38, 0)');
+  ctx.fillStyle = leftBloom;
+  ctx.fillRect(0, 0, 580, height);
+
+  const leftX = 64;
+  const leftMaxW = 500;
+
+  // Brand lockup + eyebrow
+  drawMiniEmblemAndEyebrow(
+    ctx,
+    leftX,
+    78,
+    'YOUTUBE SPEED CONTROLLER & AUTOPLAY STOP',
+    false
+  );
+
+  // Large Floating Mark + Brand Name
+  ctx.save();
+  const markX = leftX;
+  const markCy = 148;
+  ctx.shadowColor = 'rgba(239, 68, 68, 0.55)';
+  ctx.shadowBlur = 14;
+  ctx.beginPath();
+  ctx.moveTo(markX, markCy - 22);
+  ctx.lineTo(markX + 30, markCy);
+  ctx.lineTo(markX, markCy + 22);
+  ctx.closePath();
+  ctx.fillStyle = '#EF4444';
+  ctx.fill();
+
+  ctx.shadowColor = 'rgba(248, 250, 252, 0.28)';
+  ctx.shadowBlur = 8;
+  roundedRect(ctx, markX + 36, markCy - 22, 8.5, 44, 2);
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#F8FAFC';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = '800 54px "Plus Jakarta Sans", -apple-system, sans-serif';
+  ctx.fillText('Cadence', markX + 62, markCy + 2);
+  ctx.restore();
+
+  // Value proposition copy
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#CBD5E1';
+  ctx.font = '500 19px "Public Sans", -apple-system, sans-serif';
+  const subLines = wrapTextLines(
+    ctx,
+    'Automatically save playback speeds per channel, stop playlist autoplay, and watch Shorts in the standard video player.',
+    leftMaxW
+  );
+  let subY = 224;
+  for (const line of subLines) {
+    ctx.fillText(line, leftX, subY);
+    subY += 29;
+  }
+  ctx.restore();
+
+  // Three feature rows
+  const features: Array<{ label: string; tag: string; dot: string }> = [
+    { label: 'Per-Channel Speed Memory', tag: '0.25× – 4.0×', dot: '#EF4444' },
+    { label: 'Shorts → Standard Player', tag: 'Back-Safe', dot: '#34D399' },
+    { label: 'Playlist & Watch Later Stop', tag: 'list=WL Guard', dot: '#F59E0B' },
+  ];
+
+  let rowY = 334;
+  for (const feat of features) {
+    const rowW = leftMaxW;
+    const rowH = 44;
+
+    ctx.save();
+    roundedRect(ctx, leftX, rowY, rowW, rowH, 10);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.85)';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(leftX + 18, rowY + rowH / 2, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = feat.dot;
+    ctx.fill();
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 14.5px "Public Sans", -apple-system, sans-serif';
+    ctx.fillStyle = '#F1F5F9';
+    ctx.fillText(feat.label, leftX + 34, rowY + rowH / 2 + 0.5);
+
+    ctx.textAlign = 'right';
+    ctx.font = '600 12.5px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillStyle = '#94A3B8';
+    ctx.fillText(feat.tag, leftX + rowW - 16, rowY + rowH / 2 + 0.5);
+    ctx.restore();
+
+    rowY += rowH + 12;
+  }
+
+  // Right Hero Product Showcase (Zoomed Watch Deck Screenshot)
+  const cropX = 0;
+  const cropY = 0;
+  const cropW = img.naturalWidth || img.width;
+  const cropH = img.naturalHeight || img.height;
+
+  const rightAreaX = 612;
+  const rightAreaW = width - rightAreaX - 52;
+  const maxRightH = 456;
+  const fitScale = Math.min(rightAreaW / cropW, maxRightH / cropH);
+  const drawW = Math.round(cropW * fitScale);
+  const drawH = Math.round(cropH * fitScale);
+  const drawX = Math.round(rightAreaX + (rightAreaW - drawW) / 2);
+  const drawY = Math.round((height - drawH) / 2);
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(2, 6, 23, 0.85)';
+  ctx.shadowBlur = 42;
+  ctx.shadowOffsetY = 16;
+  roundedRect(ctx, drawX, drawY, drawW, drawH, 16);
+  ctx.fillStyle = '#0B0F19';
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  roundedRect(ctx, drawX, drawY, drawW, drawH, 16);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, cropX, cropY, cropW, cropH, drawX, drawY, drawW, drawH);
+  ctx.restore();
+
+  ctx.save();
+  roundedRect(ctx, drawX, drawY, drawW, drawH, 16);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.34)';
+  ctx.stroke();
+  ctx.restore();
+
+  if (showAnnotations) {
+    const marqueeSpec = CWS_SLIDE_SPECS[0];
+    drawHighlightsOverImage(
+      ctx,
+      marqueeSpec,
+      cropX,
+      cropY,
+      drawX,
+      drawY,
+      drawW / cropW,
+      drawH / cropH
+    );
+  }
+}
+
 export async function exportAllCwsStoreAssetsZip(
   showAnnotations: boolean
 ): Promise<Blob> {
@@ -825,6 +1005,10 @@ export async function exportAllCwsStoreAssetsZip(
   await renderCwsSmallPromoTileToCanvas(canvas);
   const tileBlob = await encodeCanvasTo24BitPngBlob(canvas);
   zip.file('06-cadence-small-promo-tile-440x280.png', tileBlob);
+
+  await renderCwsMarqueePromoTileToCanvas(canvas, showAnnotations);
+  const marqueeBlob = await encodeCanvasTo24BitPngBlob(canvas);
+  zip.file('07-cadence-marquee-promo-tile-1400x560.png', marqueeBlob);
 
   return zip.generateAsync({
     type: 'blob',

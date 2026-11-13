@@ -21,6 +21,7 @@ import {
   CwsSlideSpec,
   encodeCanvasTo24BitPngBlob,
   exportAllCwsStoreAssetsZip,
+  renderCwsMarqueePromoTileToCanvas,
   renderCwsSlideToCanvas,
   renderCwsSmallPromoTileToCanvas,
 } from '../utils/cwsScreenshotRenderer';
@@ -57,6 +58,7 @@ export const PromoFrameStudio: React.FC = () => {
   const overlayCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
   const cwsCanvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
   const promoTileCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const marqueeTileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const applyPreset = (nextPreset: PromoPresetId) => {
     setPresetId(nextPreset);
@@ -131,6 +133,13 @@ export const PromoFrameStudio: React.FC = () => {
       if (!cancelled && promoTileCanvasRef.current) {
         await renderCwsSmallPromoTileToCanvas(promoTileCanvasRef.current);
       }
+      if (!cancelled && marqueeTileCanvasRef.current) {
+        try {
+          await renderCwsMarqueePromoTileToCanvas(marqueeTileCanvasRef.current, cwsAnnotations);
+        } catch {
+          // Ignore transient image load cancellation
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -178,6 +187,32 @@ export const PromoFrameStudio: React.FC = () => {
           offscreen.toBlob(
             (blob) => {
               if (blob) triggerBlobDownload(blob, '06-cadence-small-promo-tile-440x280.jpg');
+              resolve();
+            },
+            'image/jpeg',
+            0.96
+          );
+        });
+      }
+    } finally {
+      setExportingKey(null);
+    }
+  };
+
+  const downloadMarqueeTile = async (format: 'png24' | 'jpeg') => {
+    const key = `marquee-${format}`;
+    setExportingKey(key);
+    try {
+      const offscreen = document.createElement('canvas');
+      await renderCwsMarqueePromoTileToCanvas(offscreen, cwsAnnotations);
+      if (format === 'png24') {
+        const blob = await encodeCanvasTo24BitPngBlob(offscreen);
+        triggerBlobDownload(blob, '07-cadence-marquee-promo-tile-1400x560.png');
+      } else {
+        await new Promise<void>((resolve) => {
+          offscreen.toBlob(
+            (blob) => {
+              if (blob) triggerBlobDownload(blob, '07-cadence-marquee-promo-tile-1400x560.jpg');
               resolve();
             },
             'image/jpeg',
@@ -274,11 +309,15 @@ export const PromoFrameStudio: React.FC = () => {
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded tabular-nums">
               1280×800
             </code>{' '}
-            store screenshots +{' '}
+            store screenshots,{' '}
             <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded tabular-nums">
               440×280
             </code>{' '}
-            promo tile encoded as true <strong className="text-slate-200">24-bit RGB PNGs (no alpha)</strong>,
+            small promo tile, and{' '}
+            <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded tabular-nums">
+              1400×560
+            </code>{' '}
+            marquee banner encoded as true <strong className="text-slate-200">24-bit RGB PNGs (no alpha)</strong> or JPEG,
             alongside static 4K video bookends and transparent scene overlays.
           </p>
         </div>
@@ -294,7 +333,7 @@ export const PromoFrameStudio: React.FC = () => {
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              CWS Screenshots (5 + Tile)
+              CWS Screenshots (5 + 2 Tiles)
             </button>
             <button
               type="button"
@@ -362,8 +401,8 @@ export const PromoFrameStudio: React.FC = () => {
             >
               <Download className="w-3.5 h-3.5" />
               {exportingKey === 'cws-all-zip'
-                ? 'Bundling 6 CWS PNGs...'
-                : 'Download All 6 CWS Images (.zip)'}
+                ? 'Bundling 7 CWS PNGs...'
+                : 'Download All 7 CWS Images (.zip)'}
             </button>
           </div>
 
@@ -458,6 +497,51 @@ export const PromoFrameStudio: React.FC = () => {
                 >
                   <Download className="w-3.5 h-3.5" />
                   .JPG (440×280)
+                </button>
+              </div>
+            </div>
+
+            {/* 7th Card: Marquee Promo Tile (1400x560) */}
+            <div className="lg:col-span-2 p-4 rounded-xl bg-[#0B0F19] border border-slate-800/90 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">
+                    Bonus · Marquee Promo Tile (Store Feature Hero Banner)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    07-cadence-marquee-promo-tile-1400x560.png
+                  </p>
+                </div>
+                <span className="text-xs font-mono tabular-nums text-slate-400 shrink-0">
+                  1400×560 · 5:2 · RGB
+                </span>
+              </div>
+
+              <div className="aspect-[5/2] w-full rounded-lg overflow-hidden border border-slate-800 bg-[#050811]">
+                <canvas
+                  ref={marqueeTileCanvasRef}
+                  className="w-full h-full block object-contain"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadMarqueeTile('png24')}
+                  disabled={exportingKey === 'marquee-png24'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  24-bit .PNG (1400×560, No Alpha)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadMarqueeTile('jpeg')}
+                  disabled={exportingKey === 'marquee-jpeg'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  .JPG (1400×560)
                 </button>
               </div>
             </div>
