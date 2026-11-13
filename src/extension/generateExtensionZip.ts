@@ -27,11 +27,11 @@ export function buildExtensionFiles(
 ): GeneratedExtensionFile[] {
   const manifestBase = {
     manifest_version: 3,
-    name: 'Cadence — Per-Channel Speed & Playlist Stop for YouTube',
+    name: 'Cadence — YouTube Speed Controller & Autoplay Stop',
     short_name: 'Cadence',
     version: EXTENSION_VERSION,
     description:
-      'Per-channel YouTube playback speeds, full-width speed & skip deck, Shorts-to-Watch conversion, and end-of-video playlist stop.',
+      'Automatically save YouTube playback speeds per channel, stop playlist autoplay, and watch Shorts in the standard video player.',
     permissions: ['storage', 'scripting'],
     host_permissions: ['*://*.youtube.com/*'],
     action: {

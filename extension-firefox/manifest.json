@@ -3,7 +3,7 @@
   "name": "Cadence — YouTube Speed Controller & Autoplay Stop",
   "short_name": "Cadence",
   "version": "1.6.1",
-  "description": "Automatically save YouTube playback speeds per channel, stop playlist autoplay, and watch Shorts in the standard video player..",
+  "description": "Automatically save YouTube playback speeds per channel, stop playlist autoplay, and watch Shorts in the standard video player.",
   "permissions": [
     "storage",
     "scripting"
