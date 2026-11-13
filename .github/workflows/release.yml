@@ -11,19 +11,19 @@ permissions:
 
 jobs:
   build-packages:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: TypeScript lint check
         run: npm run lint
@@ -35,7 +35,7 @@ jobs:
         run: npm run build:extension
 
       - name: Upload zip artifacts to workflow run
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cadence-extension-packages
           path: |
@@ -44,7 +44,7 @@ jobs:
 
       - name: Attach zips to GitHub Release (on version tags)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
