@@ -2248,32 +2248,17 @@
     if (loggedIn === false) {
       return null;
     }
-    const sapisid3p = readCookieValue('SAPISID') || readCookieValue('__Secure-3PAPISID');
-    const sapisid1p = readCookieValue('__Secure-1PAPISID');
-    const primarySid = sapisid3p || sapisid1p;
+    const primarySid =
+      readCookieValue('SAPISID') ||
+      readCookieValue('__Secure-3PAPISID') ||
+      readCookieValue('__Secure-1PAPISID');
     if (!primarySid) {
       return null;
     }
     const origin = location.origin || 'https://www.youtube.com';
     const ts = Math.floor(Date.now() / 1000);
-    const tokens = [];
-    if (sapisid3p) {
-      const hash3p = await sha1Hex(ts + ' ' + sapisid3p + ' ' + origin);
-      if (hash3p) {
-        tokens.push('SAPISIDHASH ' + ts + '_' + hash3p);
-        tokens.push('SAPISID3PHASH ' + ts + '_' + hash3p);
-      }
-    }
-    if (sapisid1p) {
-      const hash1p = await sha1Hex(ts + ' ' + sapisid1p + ' ' + origin);
-      if (hash1p) {
-        if (!sapisid3p) {
-          tokens.push('SAPISIDHASH ' + ts + '_' + hash1p);
-        }
-        tokens.push('SAPISID1PHASH ' + ts + '_' + hash1p);
-      }
-    }
-    if (tokens.length === 0) {
+    const hash = await sha1Hex(ts + ' ' + primarySid + ' ' + origin);
+    if (!hash) {
       return null;
     }
 
@@ -2288,7 +2273,7 @@
 
     const headers = {
       'Content-Type': 'application/json',
-      Authorization: tokens.join(' '),
+      Authorization: 'SAPISIDHASH ' + ts + '_' + hash,
       'X-Origin': origin,
       'X-Goog-AuthUser': sessionIndex !== undefined && sessionIndex !== null ? String(sessionIndex) : '0',
     };
@@ -2316,16 +2301,18 @@
 
       if (
         !Array.isArray(cur) &&
-        cur.playlistId === 'WL' &&
+        (cur.playlistId === 'WL' || cur.listId === 'WL') &&
         (typeof cur.containsSelectedVideos === 'string' ||
           typeof cur.toggled === 'boolean' ||
-          typeof cur.selected === 'boolean')
+          typeof cur.selected === 'boolean' ||
+          typeof cur.isSelected === 'boolean')
       ) {
         return Boolean(
           cur.containsSelectedVideos === 'ALL' ||
             cur.containsSelectedVideos === 'SOME' ||
             cur.toggled === true ||
-            cur.selected === true
+            cur.selected === true ||
+            cur.isSelected === true
         );
       }
 
@@ -3324,6 +3311,10 @@
         } else if (payload.action === 'REPLAY_VIDEO') {
           const video = getMainVideo();
           const player = getMoviePlayer();
+          const replayVid = getCurrentVideoId(player);
+          if (replayVid && !removedWatchLaterVideoIds.has(replayVid)) {
+            watchLaterStatusByVideo.delete(replayVid);
+          }
           resetCurrentVideoTimeSaved();
           replayGraceUntil = Date.now() + 1400;
           heldAtEndVideoId = null;
@@ -3475,6 +3466,10 @@
     () => {
       heldAtEndVideoId = null;
       window.__CADENCE_HELD_VIDEO_ID__ = null;
+      const navVid = getUrlVideoId();
+      if (navVid && !removedWatchLaterVideoIds.has(navVid)) {
+        watchLaterStatusByVideo.delete(navVid);
+      }
       resetCurrentVideoTimeSaved();
       if (maybeRedirectCurrentShortsRoute()) return;
       syncShortsLinksInDom(true);
