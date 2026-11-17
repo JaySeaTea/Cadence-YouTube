@@ -70,11 +70,15 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    const vitePromise = createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      vitePromise
+        .then((vite) => vite.middlewares(req, res, next))
+        .catch(next);
+    });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
@@ -88,4 +92,7 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Failed to start Cadence server:', err);
+  process.exit(1);
+});

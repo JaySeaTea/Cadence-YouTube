@@ -8,7 +8,8 @@ const INITIAL_STATE = {
     "showSpeedToast": true,
     "convertShortsToWatch": true,
     "disableVideoPreviews": true,
-    "settingsSchemaVersion": 5
+    "showWatchLaterRemoveAction": true,
+    "settingsSchemaVersion": 6
   },
   "presets": [
     {
@@ -102,9 +103,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.disableVideoPreviews === 'boolean'
           ? cleanInitialSettings.disableVideoPreviews
           : true,
-      settingsSchemaVersion: 5,
+      showWatchLaterRemoveAction:
+        typeof cleanInitialSettings.showWatchLaterRemoveAction === 'boolean'
+          ? cleanInitialSettings.showWatchLaterRemoveAction
+          : true,
+      settingsSchemaVersion: 6,
     };
-  } else if (prevSchemaVersion < 5) {
+  } else if (prevSchemaVersion < 6) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -116,7 +121,11 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.disableVideoPreviews === 'boolean'
           ? existing.settings.disableVideoPreviews
           : true,
-      settingsSchemaVersion: 5,
+      showWatchLaterRemoveAction:
+        typeof existing.settings.showWatchLaterRemoveAction === 'boolean'
+          ? existing.settings.showWatchLaterRemoveAction
+          : true,
+      settingsSchemaVersion: 6,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;

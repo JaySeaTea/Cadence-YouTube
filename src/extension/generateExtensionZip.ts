@@ -179,9 +179,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.disableVideoPreviews === 'boolean'
           ? cleanInitialSettings.disableVideoPreviews
           : true,
-      settingsSchemaVersion: 5,
+      showWatchLaterRemoveAction:
+        typeof cleanInitialSettings.showWatchLaterRemoveAction === 'boolean'
+          ? cleanInitialSettings.showWatchLaterRemoveAction
+          : true,
+      settingsSchemaVersion: 6,
     };
-  } else if (prevSchemaVersion < 5) {
+  } else if (prevSchemaVersion < 6) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -193,7 +197,11 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.disableVideoPreviews === 'boolean'
           ? existing.settings.disableVideoPreviews
           : true,
-      settingsSchemaVersion: 5,
+      showWatchLaterRemoveAction:
+        typeof existing.settings.showWatchLaterRemoveAction === 'boolean'
+          ? existing.settings.showWatchLaterRemoveAction
+          : true,
+      settingsSchemaVersion: 6,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;
@@ -304,6 +312,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopAfterVideoEnds: true,
     convertShortsToWatch: true,
     disableVideoPreviews: true,
+    showWatchLaterRemoveAction: true,
     defaultSpeed: 1.0,
     targetSpeed: 1.0,
   };
@@ -2469,6 +2478,336 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return Math.min(...candidates);
   }
 
+  const watchLaterStatusByVideo = new Map();
+  const removedWatchLaterVideoIds = new Set();
+  let watchLaterInFlightVideoId = '';
+
+  function isWatchLaterRouteOrPanel() {
+    try {
+      if (new URLSearchParams(location.search).get('list') === 'WL') {
+        return true;
+      }
+      const panel = document.querySelector(
+        'ytd-watch-flexy ytd-playlist-panel-renderer:not([hidden]), ytd-playlist-panel-renderer#playlist:not([hidden])'
+      );
+      if (panel && panel.offsetParent !== null) {
+        const wlLink = panel.querySelector('a[href*="list=WL"]');
+        if (wlLink) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function readCookieValue(name) {
+    try {
+      const target = name + '=';
+      const parts = document.cookie ? document.cookie.split(';') : [];
+      for (let i = 0; i < parts.length; i++) {
+        const trimmed = parts[i].trim();
+        if (trimmed.startsWith(target)) {
+          return decodeURIComponent(trimmed.slice(target.length));
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function getYtcfgValue(key) {
+    try {
+      const cfg = window.ytcfg;
+      if (!cfg) return undefined;
+      if (typeof cfg.get === 'function') {
+        return cfg.get(key);
+      }
+      if (cfg.data_ && typeof cfg.data_ === 'object') {
+        return cfg.data_[key];
+      }
+    } catch (_) {}
+    return undefined;
+  }
+
+  async function sha1Hex(input) {
+    if (!window.crypto || !window.crypto.subtle) return '';
+    const encoded = new TextEncoder().encode(input);
+    const digest = await window.crypto.subtle.digest('SHA-1', encoded);
+    const bytes = new Uint8Array(digest);
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+      hex += bytes[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+  }
+
+  async function buildYouTubeSessionRequestMeta() {
+    const loggedIn = getYtcfgValue('LOGGED_IN');
+    if (loggedIn === false) {
+      return null;
+    }
+    const sapisid3p = readCookieValue('SAPISID') || readCookieValue('__Secure-3PAPISID');
+    const sapisid1p = readCookieValue('__Secure-1PAPISID');
+    const primarySid = sapisid3p || sapisid1p;
+    if (!primarySid) {
+      return null;
+    }
+    const origin = location.origin || 'https://www.youtube.com';
+    const ts = Math.floor(Date.now() / 1000);
+    const tokens = [];
+    if (sapisid3p) {
+      const hash3p = await sha1Hex(ts + ' ' + sapisid3p + ' ' + origin);
+      if (hash3p) {
+        tokens.push('SAPISIDHASH ' + ts + '_' + hash3p);
+        tokens.push('SAPISID3PHASH ' + ts + '_' + hash3p);
+      }
+    }
+    if (sapisid1p) {
+      const hash1p = await sha1Hex(ts + ' ' + sapisid1p + ' ' + origin);
+      if (hash1p) {
+        if (!sapisid3p) {
+          tokens.push('SAPISIDHASH ' + ts + '_' + hash1p);
+        }
+        tokens.push('SAPISID1PHASH ' + ts + '_' + hash1p);
+      }
+    }
+    if (tokens.length === 0) {
+      return null;
+    }
+
+    const apiKey = getYtcfgValue('INNERTUBE_API_KEY') || '';
+    const context = getYtcfgValue('INNERTUBE_CONTEXT');
+    if (!context || typeof context !== 'object') {
+      return null;
+    }
+    const sessionIndex = getYtcfgValue('SESSION_INDEX');
+    const visitorData = getYtcfgValue('VISITOR_DATA');
+    const delegatedSessionId = getYtcfgValue('DELEGATED_SESSION_ID');
+
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: tokens.join(' '),
+      'X-Origin': origin,
+      'X-Goog-AuthUser': sessionIndex !== undefined && sessionIndex !== null ? String(sessionIndex) : '0',
+    };
+    if (visitorData) {
+      headers['X-Goog-Visitor-Id'] = String(visitorData);
+    }
+    if (delegatedSessionId) {
+      headers['X-Goog-PageId'] = String(delegatedSessionId);
+    }
+
+    return { apiKey, context, headers };
+  }
+
+  function findWatchLaterOptionState(rootObj) {
+    if (!rootObj || typeof rootObj !== 'object') return null;
+    const queue = [rootObj];
+    const visited = new WeakSet();
+    let inspected = 0;
+
+    while (queue.length > 0 && inspected < 2500) {
+      const cur = queue.shift();
+      if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+      visited.add(cur);
+      inspected += 1;
+
+      if (
+        !Array.isArray(cur) &&
+        cur.playlistId === 'WL' &&
+        (typeof cur.containsSelectedVideos === 'string' ||
+          typeof cur.toggled === 'boolean' ||
+          typeof cur.selected === 'boolean')
+      ) {
+        return Boolean(
+          cur.containsSelectedVideos === 'ALL' ||
+            cur.containsSelectedVideos === 'SOME' ||
+            cur.toggled === true ||
+            cur.selected === true
+        );
+      }
+
+      if (Array.isArray(cur)) {
+        for (let i = 0; i < cur.length; i++) {
+          if (cur[i] && typeof cur[i] === 'object') {
+            queue.push(cur[i]);
+          }
+        }
+      } else {
+        const keys = Object.keys(cur);
+        for (let i = 0; i < keys.length; i++) {
+          const val = cur[keys[i]];
+          if (val && typeof val === 'object') {
+            queue.push(val);
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  async function checkWatchLaterMembershipOnEnd(videoId) {
+    if (!videoId || videoId === 'active' || config.showWatchLaterRemoveAction === false) {
+      return;
+    }
+    if (removedWatchLaterVideoIds.has(videoId)) {
+      postToContent('WATCH_LATER_STATUS', {
+        videoId,
+        inWatchLater: false,
+        removed: true,
+        error: false,
+      });
+      return;
+    }
+    if (isWatchLaterRouteOrPanel()) {
+      watchLaterStatusByVideo.set(videoId, { inWatchLater: true, removed: false });
+      postToContent('WATCH_LATER_STATUS', {
+        videoId,
+        inWatchLater: true,
+        removed: false,
+        error: false,
+      });
+      return;
+    }
+    const cached = watchLaterStatusByVideo.get(videoId);
+    if (cached) {
+      postToContent('WATCH_LATER_STATUS', {
+        videoId,
+        inWatchLater: Boolean(cached.inWatchLater),
+        removed: Boolean(cached.removed),
+        error: false,
+      });
+      return;
+    }
+    if (watchLaterInFlightVideoId === videoId) return;
+    watchLaterInFlightVideoId = videoId;
+
+    try {
+      const reqMeta = await buildYouTubeSessionRequestMeta();
+      if (!reqMeta) {
+        return;
+      }
+      const endpoint =
+        '/youtubei/v1/playlist/get_add_to_playlist' +
+        (reqMeta.apiKey ? '?key=' + encodeURIComponent(reqMeta.apiKey) + '&prettyPrint=false' : '?prettyPrint=false');
+
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: reqMeta.headers,
+        body: JSON.stringify({
+          context: reqMeta.context,
+          videoIds: [videoId],
+        }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const optionState = findWatchLaterOptionState(data);
+      const inWatchLater = optionState === true;
+      watchLaterStatusByVideo.set(videoId, { inWatchLater, removed: false });
+
+      if (getCurrentVideoId(getMoviePlayer()) === videoId && heldAtEndVideoId === videoId) {
+        postToContent('WATCH_LATER_STATUS', {
+          videoId,
+          inWatchLater,
+          removed: false,
+          error: false,
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (watchLaterInFlightVideoId === videoId) {
+        watchLaterInFlightVideoId = '';
+      }
+    }
+  }
+
+  async function removeVideoFromWatchLater(videoId) {
+    const targetId = videoId || getCurrentVideoId(getMoviePlayer()) || '';
+    if (!targetId || targetId === 'active') {
+      postToContent('WATCH_LATER_STATUS', {
+        videoId: targetId,
+        inWatchLater: true,
+        removed: false,
+        error: true,
+      });
+      return;
+    }
+
+    try {
+      const reqMeta = await buildYouTubeSessionRequestMeta();
+      if (!reqMeta) {
+        postToContent('WATCH_LATER_STATUS', {
+          videoId: targetId,
+          inWatchLater: true,
+          removed: false,
+          error: true,
+        });
+        return;
+      }
+      const endpoint =
+        '/youtubei/v1/browse/edit_playlist' +
+        (reqMeta.apiKey ? '?key=' + encodeURIComponent(reqMeta.apiKey) + '&prettyPrint=false' : '?prettyPrint=false');
+
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: reqMeta.headers,
+        body: JSON.stringify({
+          context: reqMeta.context,
+          playlistId: 'WL',
+          actions: [
+            {
+              action: 'ACTION_REMOVE_VIDEO_BY_VIDEO_ID',
+              removedVideoId: targetId,
+            },
+          ],
+        }),
+      });
+      if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status);
+      }
+      const data = await resp.json().catch(() => ({}));
+      if (data && data.status === 'STATUS_FAILED') {
+        throw new Error('YouTube rejected playlist edit');
+      }
+
+      removedWatchLaterVideoIds.add(targetId);
+      watchLaterStatusByVideo.set(targetId, { inWatchLater: false, removed: true });
+      postToContent('WATCH_LATER_STATUS', {
+        videoId: targetId,
+        inWatchLater: false,
+        removed: true,
+        error: false,
+      });
+    } catch (_) {
+      postToContent('WATCH_LATER_STATUS', {
+        videoId: targetId,
+        inWatchLater: true,
+        removed: false,
+        error: true,
+      });
+    }
+  }
+
+  function navigateToYouTubeHome() {
+    markUserNavigationIntent();
+    heldAtEndVideoId = null;
+    window.__CADENCE_HELD_VIDEO_ID__ = null;
+    const homeLogo = document.querySelector(
+      'ytd-topbar-logo-renderer a#logo, a#logo[href="/"], ytd-masthead a[title="YouTube Home"]'
+    );
+    if (homeLogo instanceof HTMLElement) {
+      try {
+        homeLogo.click();
+        setTimeout(() => {
+          if (location.pathname !== '/') {
+            location.assign('https://www.youtube.com/');
+          }
+        }, 180);
+        return;
+      } catch (_) {}
+    }
+    location.assign('https://www.youtube.com/');
+  }
+
   function hasActivePlaylistContext() {
     if (new URLSearchParams(location.search).has('list')) return true;
     const playlistPanel = document.querySelector(
@@ -2577,13 +2916,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     flushTimeSavedDelta();
+    const wlEnabled = config.showWatchLaterRemoveAction !== false;
+    const wlRemoved = Boolean(currentVideoId && removedWatchLaterVideoIds.has(currentVideoId));
+    const wlRoute = wlEnabled && isWatchLaterRouteOrPanel();
+    const wlCached = currentVideoId ? watchLaterStatusByVideo.get(currentVideoId) : null;
+    const immediateInWl = Boolean(
+      wlEnabled && !wlRemoved && (wlRoute || (wlCached && wlCached.inWatchLater))
+    );
+
     if (!alreadyHeld || forceBanner) {
       postToContent('PLAYBACK_STOPPED', {
         videoId: currentVideoId,
         hasPlaylist: hasActivePlaylistContext(),
         bankedSavedSec: Math.floor(currentVideoTimeSavedSec),
+        inWatchLater: immediateInWl,
+        watchLaterRemoved: wlRemoved,
       });
     }
+
+    if (wlEnabled && !wlRoute && !wlRemoved && currentVideoId && currentVideoId !== 'active') {
+      checkWatchLaterMembershipOnEnd(currentVideoId);
+    }
+
     emitTimeRemaining(true);
     return true;
   }
@@ -3361,6 +3715,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           lastCatchupVideoSec = null;
           emitTimeRemaining(true);
           setTimeout(() => emitTimeRemaining(true), 80);
+        } else if (payload.action === 'REMOVE_FROM_WATCH_LATER') {
+          removeVideoFromWatchLater(payload.videoId || '');
+        } else if (payload.action === 'GO_TO_YOUTUBE_HOME') {
+          navigateToYouTubeHome();
         } else if (payload.action === 'FORCE_DETECT') {
           broadcastChannelMetadata(true);
           emitTimeRemaining(true);
@@ -3634,6 +3992,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let barMountAttempts = 0;
   let barResizeObserver = null;
   let bannerProtectedUntil = 0;
+  let stoppedBannerVideoId = null;
+  let watchLaterState = {
+    videoId: null,
+    status: 'idle',
+  };
 
   function syncPreviewBlockerStyle() {
     const block = Boolean(state.settings && state.settings.enabled && state.settings.disableVideoPreviews !== false);
@@ -3705,6 +4068,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     '<svg class="cadence-seek-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>' +
     '<path d="M21 3v5h-5"/>' +
+    '</svg>';
+
+  const HOME_ICON_SVG =
+    '<svg class="cadence-banner-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M3 9.5L10 3.5L17 9.5"/>' +
+    '<path d="M5.2 8.2V16.5H14.8V8.2"/>' +
+    '</svg>';
+
+  const WL_REMOVE_ICON_SVG =
+    '<svg class="cadence-banner-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M5 3.5H15V17L10 13.8L5 17V3.5Z"/>' +
+    '<path d="M7.5 8.5H12.5"/>' +
+    '</svg>';
+
+  const CHECK_ICON_SVG =
+    '<svg class="cadence-banner-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4.5 10.5L8.2 14.2L15.5 6.2"/>' +
+    '</svg>';
+
+  const CLOSE_ICON_SVG =
+    '<svg class="cadence-dismiss-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+    '<path d="M4 4L12 12"/>' +
+    '<path d="M12 4L4 12"/>' +
     '</svg>';
 
   function disconnectBarResizeObserver() {
@@ -4494,6 +4880,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       enabled: state.settings.enabled,
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
       convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+      disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+      showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
       hasSessionOverride: hasSession,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
@@ -4654,13 +5042,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
   }
 
-  function showStoppedBanner(hasPlaylist) {
+  function syncStoppedBannerWatchLaterUi(banner) {
+    if (!banner) return;
+    const wlBtn = banner.querySelector('.cadence-wl-btn');
+    if (!wlBtn) return;
+
+    const featureEnabled = !state.settings || state.settings.showWatchLaterRemoveAction !== false;
+    const status = featureEnabled ? watchLaterState.status : 'idle';
+
+    wlBtn.classList.remove('is-removing', 'is-removed', 'is-error');
+    if (status === 'idle') {
+      wlBtn.hidden = true;
+      wlBtn.disabled = false;
+      return;
+    }
+
+    wlBtn.hidden = false;
+    if (status === 'removing') {
+      wlBtn.disabled = true;
+      wlBtn.classList.add('is-removing');
+      wlBtn.innerHTML = \`\${WL_REMOVE_ICON_SVG}<span>Removing…</span>\`;
+      wlBtn.title = 'Removing video from Watch Later playlist';
+    } else if (status === 'removed') {
+      wlBtn.disabled = true;
+      wlBtn.classList.add('is-removed');
+      wlBtn.innerHTML = \`\${CHECK_ICON_SVG}<span>Removed from Watch Later</span>\`;
+      wlBtn.title = 'Removed from your Watch Later playlist';
+    } else if (status === 'error') {
+      wlBtn.disabled = false;
+      wlBtn.classList.add('is-error');
+      wlBtn.innerHTML = \`\${WL_REMOVE_ICON_SVG}<span>Retry Remove</span>\`;
+      wlBtn.title = 'Could not remove from Watch Later — click to retry';
+    } else {
+      wlBtn.disabled = false;
+      wlBtn.innerHTML = \`\${WL_REMOVE_ICON_SVG}<span>Remove from Watch Later</span>\`;
+      wlBtn.title = 'Remove this video from your Watch Later playlist';
+    }
+  }
+
+  function showStoppedBanner(hasPlaylist, videoId = null) {
     if (isDestroyed || !isExtensionContextValid()) {
       teardownInstance();
       return;
     }
     const player = getWatchPlayerElement();
     if (!player) return;
+    const resolvedVideoId = videoId || (currentChannel && currentChannel.videoId) || stoppedBannerVideoId || null;
+    if (resolvedVideoId) {
+      stoppedBannerVideoId = resolvedVideoId;
+      if (watchLaterState.videoId !== resolvedVideoId) {
+        watchLaterState = { videoId: resolvedVideoId, status: 'idle' };
+      }
+    }
+
     let banner = player.querySelector('.cadence-stopped-banner');
     if (banner && banner.getAttribute('data-cadence-instance') !== INSTANCE_TOKEN) {
       banner.remove();
@@ -4675,7 +5109,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         <div class="cadence-stopped-actions">
           <button type="button" class="cadence-btn cadence-replay-btn">Replay</button>
           <button type="button" class="cadence-btn cadence-play-next-btn">Play Next</button>
-          <button type="button" class="cadence-btn cadence-dismiss-btn">Dismiss</button>
+          <button type="button" class="cadence-btn cadence-home-btn" title="Go to YouTube Home">\${HOME_ICON_SVG}<span>YouTube Home</span></button>
+          <button type="button" class="cadence-btn cadence-wl-btn" hidden></button>
+          <button type="button" class="cadence-btn cadence-dismiss-btn" aria-label="Dismiss" title="Dismiss">\${CLOSE_ICON_SVG}</button>
         </div>
       \`;
       banner.querySelector('.cadence-replay-btn').addEventListener(
@@ -4697,6 +5133,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           bannerProtectedUntil = 0;
           banner.classList.remove('cadence-visible');
           postToBridge('COMMAND', { action: 'PLAY_NEXT_MANUAL' });
+        },
+        { signal: lifecycleSignal }
+      );
+      banner.querySelector('.cadence-home-btn').addEventListener(
+        'click',
+        (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          bannerProtectedUntil = 0;
+          banner.classList.remove('cadence-visible');
+          postToBridge('COMMAND', { action: 'GO_TO_YOUTUBE_HOME' });
+        },
+        { signal: lifecycleSignal }
+      );
+      banner.querySelector('.cadence-wl-btn').addEventListener(
+        'click',
+        (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (watchLaterState.status === 'removing' || watchLaterState.status === 'removed') {
+            return;
+          }
+          const targetVid =
+            stoppedBannerVideoId ||
+            (currentChannel && currentChannel.videoId) ||
+            watchLaterState.videoId ||
+            '';
+          if (!targetVid) return;
+          watchLaterState = { videoId: targetVid, status: 'removing' };
+          syncStoppedBannerWatchLaterUi(banner);
+          postToBridge('COMMAND', {
+            action: 'REMOVE_FROM_WATCH_LATER',
+            videoId: targetVid,
+          });
         },
         { signal: lifecycleSignal }
       );
@@ -4722,6 +5192,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       textEl.textContent = baseMsg;
     }
+    syncStoppedBannerWatchLaterUi(banner);
     bannerProtectedUntil = Date.now() + 900;
     banner.classList.add('cadence-visible');
   }
@@ -5429,6 +5900,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     currentChannel = null;
     sessionOverride = { videoId: null, speed: null };
     nonDvrClampedVideoId = null;
+    stoppedBannerVideoId = null;
+    watchLaterState = { videoId: null, status: 'idle' };
     remainingState = {
       videoId: null,
       rawRemainingSec: null,
@@ -5840,6 +6313,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             enabled: state.settings.enabled,
             perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
             convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+            disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+            showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
             stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
             defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
             targetSpeed: activeSpeed,
@@ -5856,6 +6331,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const wasChannelAd = Boolean(currentChannel && currentChannel.isAd);
           if (payload.videoId && payload.videoId !== prevVideoId) {
             hideBarToast();
+            stoppedBannerVideoId = payload.videoId;
+            watchLaterState = { videoId: payload.videoId, status: 'idle' };
             if (nonDvrClampedVideoId && nonDvrClampedVideoId !== payload.videoId) {
               nonDvrClampedVideoId = null;
             }
@@ -5961,7 +6438,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (payload && typeof payload.bankedSavedSec === 'number') {
             remainingState.bankedSavedSec = payload.bankedSavedSec;
           }
-          showStoppedBanner(Boolean(payload && payload.hasPlaylist));
+          const stoppedVid =
+            (payload && payload.videoId) || (currentChannel && currentChannel.videoId) || null;
+          if (stoppedVid) {
+            stoppedBannerVideoId = stoppedVid;
+            if (watchLaterState.videoId !== stoppedVid) {
+              watchLaterState = { videoId: stoppedVid, status: 'idle' };
+            }
+          }
+          if (state.settings && state.settings.showWatchLaterRemoveAction === false) {
+            watchLaterState.status = 'idle';
+          } else if (payload && payload.watchLaterRemoved) {
+            watchLaterState.status = 'removed';
+          } else if (payload && payload.inWatchLater && watchLaterState.status !== 'removed') {
+            watchLaterState.status = 'available';
+          }
+          showStoppedBanner(Boolean(payload && payload.hasPlaylist), stoppedVid);
+        } else if (type === 'WATCH_LATER_STATUS' && payload) {
+          const eventVid = payload.videoId || null;
+          const activeBannerVid =
+            stoppedBannerVideoId || (currentChannel && currentChannel.videoId) || null;
+          if (eventVid && activeBannerVid && eventVid !== activeBannerVid) {
+            return;
+          }
+          const targetVid = eventVid || activeBannerVid;
+          if (state.settings && state.settings.showWatchLaterRemoveAction === false) {
+            watchLaterState = { videoId: targetVid, status: 'idle' };
+          } else if (payload.removed) {
+            watchLaterState = { videoId: targetVid, status: 'removed' };
+          } else if (payload.error) {
+            watchLaterState = { videoId: targetVid, status: 'error' };
+          } else if (payload.inWatchLater) {
+            watchLaterState = { videoId: targetVid, status: 'available' };
+          } else if (watchLaterState.status !== 'removed') {
+            watchLaterState = { videoId: targetVid, status: 'idle' };
+          }
+          const existingBanner = document.querySelector('.cadence-stopped-banner');
+          if (existingBanner) {
+            syncStoppedBannerWatchLaterUi(existingBanner);
+          }
         }
       } catch (_) {
         if (!isExtensionContextValid()) {
@@ -6122,6 +6637,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (changes.settings) {
         state.settings = changes.settings.newValue;
         syncPreviewBlockerStyle();
+        const existingBanner = document.querySelector('.cadence-stopped-banner');
+        if (existingBanner) {
+          syncStoppedBannerWatchLaterUi(existingBanner);
+        }
       }
       if (changes.presets) state.presets = changes.presets.newValue;
       if (changes.rules) state.rules = changes.rules.newValue;
@@ -6133,6 +6652,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
         convertShortsToWatch: state.settings.convertShortsToWatch !== false,
         disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+        showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
         hasSessionOverride: Boolean(
           currentChannel && hasActiveSessionOverride(currentChannel.videoId)
         ),
@@ -6162,6 +6682,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
       convertShortsToWatch: state.settings.convertShortsToWatch !== false,
       disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+      showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
       stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
       defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
       targetSpeed: activeSpeed,
@@ -6887,10 +7408,11 @@ html[dark] .cadence-rule-plus {
   bottom: 68px;
   z-index: 1200;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 8px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -6909,6 +7431,11 @@ html[dark] .cadence-rule-plus {
   transform: translateY(0);
 }
 
+.cadence-stopped-text {
+  flex: 1 1 240px;
+  line-height: 1.35;
+}
+
 .cadence-stopped-saved {
   color: #34d399;
   font-weight: 700;
@@ -6916,24 +7443,42 @@ html[dark] .cadence-rule-plus {
 }
 
 .cadence-stopped-actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .cadence-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
-  padding: 5px 10px;
+  padding: 5px 9px;
   border-radius: 5px;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
 }
 
-.cadence-btn:hover {
+.cadence-btn[hidden] {
+  display: none;
+}
+
+.cadence-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.2);
+}
+
+.cadence-banner-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 
 .cadence-play-next-btn {
@@ -6941,8 +7486,55 @@ html[dark] .cadence-rule-plus {
   border-color: #dc2626;
 }
 
-.cadence-play-next-btn:hover {
+.cadence-play-next-btn:hover:not(:disabled) {
   background: #b91c1c;
+}
+
+.cadence-home-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.cadence-wl-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.cadence-wl-btn.is-removing {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.cadence-wl-btn.is-removed {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(52, 211, 153, 0.48);
+  color: #6ee7b7;
+  cursor: default;
+}
+
+.cadence-wl-btn.is-error {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(251, 191, 36, 0.52);
+  color: #fde68a;
+}
+
+.cadence-dismiss-btn {
+  padding: 5px 6px;
+  margin-left: 2px;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.cadence-dismiss-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.cadence-dismiss-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
 }
 `;
 
@@ -7287,9 +7879,10 @@ html[dark] .cadence-rule-plus {
     showInPageControlBar: true,
     convertShortsToWatch: true,
     disableVideoPreviews: true,
+    showWatchLaterRemoveAction: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 5,
+    settingsSchemaVersion: 6,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);
@@ -8265,6 +8858,16 @@ html[dark] .cadence-rule-plus {
         </div>
         <div class="toggle-row">
           <div class="toggle-info">
+            <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
+            <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-watch-later" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-info">
             <h3>Show Speed Bar</h3>
             <p>Mount the Cadence 3-row transport deck directly above the YouTube player title.</p>
           </div>
@@ -8401,7 +9004,8 @@ html[dark] .cadence-rule-plus {
     showSpeedBar: true,
     convertShorts: true,
     disableVideoPreviews: true,
-    settingsSchemaVersion: 5
+    showWatchLaterRemoveAction: true,
+    settingsSchemaVersion: 6
   };
 
   const manifestVersion =
@@ -8451,6 +9055,7 @@ html[dark] .cadence-rule-plus {
   // Toggles DOM
   const toggleSpeedEl = document.getElementById('toggle-speed');
   const toggleStopEl = document.getElementById('toggle-stop');
+  const toggleWatchLaterEl = document.getElementById('toggle-watch-later');
   const toggleBarEl = document.getElementById('toggle-bar');
   const toggleShortsEl = document.getElementById('toggle-shorts');
   const togglePreviewsEl = document.getElementById('toggle-previews');
@@ -8502,6 +9107,7 @@ html[dark] .cadence-rule-plus {
   function renderToggles() {
     if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
     if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleWatchLaterEl) toggleWatchLaterEl.checked = settings.showWatchLaterRemoveAction !== false;
     if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
     if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
     if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
@@ -8509,13 +9115,14 @@ html[dark] .cadence-rule-plus {
 
   async function updateSetting(key, val) {
     settings[key] = val;
-    settings.settingsSchemaVersion = 5;
+    settings.settingsSchemaVersion = 6;
     await chrome.storage.local.set({ settings });
     showStatus(\`Updated \${key}: \${val ? 'Enabled' : 'Disabled'}\`);
   }
 
   if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
   if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
+  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
   if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
   if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
   if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
@@ -8828,7 +9435,10 @@ html[dark] .cadence-rule-plus {
       const parsed = JSON.parse(text);
 
       if (parsed && typeof parsed.settings === 'object') {
-        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 5 });
+        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 6 });
+        if (typeof settings.showWatchLaterRemoveAction !== 'boolean') {
+          settings.showWatchLaterRemoveAction = true;
+        }
         renderToggles();
       }
 

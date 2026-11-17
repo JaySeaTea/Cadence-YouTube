@@ -38,9 +38,10 @@
     showInPageControlBar: true,
     convertShortsToWatch: true,
     disableVideoPreviews: true,
+    showWatchLaterRemoveAction: true,
     showSpeedToast: true,
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 5,
+    settingsSchemaVersion: 6,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);

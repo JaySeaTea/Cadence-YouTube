@@ -26,6 +26,7 @@ export interface ExtensionSettings {
   showSpeedToast: boolean;
   convertShortsToWatch: boolean;
   disableVideoPreviews: boolean;
+  showWatchLaterRemoveAction: boolean;
   settingsSchemaVersion?: number;
 }
 

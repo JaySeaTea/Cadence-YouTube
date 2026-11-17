@@ -26,7 +26,8 @@
     showSpeedBar: true,
     convertShorts: true,
     disableVideoPreviews: true,
-    settingsSchemaVersion: 5
+    showWatchLaterRemoveAction: true,
+    settingsSchemaVersion: 6
   };
 
   const manifestVersion =
@@ -76,6 +77,7 @@
   // Toggles DOM
   const toggleSpeedEl = document.getElementById('toggle-speed');
   const toggleStopEl = document.getElementById('toggle-stop');
+  const toggleWatchLaterEl = document.getElementById('toggle-watch-later');
   const toggleBarEl = document.getElementById('toggle-bar');
   const toggleShortsEl = document.getElementById('toggle-shorts');
   const togglePreviewsEl = document.getElementById('toggle-previews');
@@ -127,6 +129,7 @@
   function renderToggles() {
     if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
     if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleWatchLaterEl) toggleWatchLaterEl.checked = settings.showWatchLaterRemoveAction !== false;
     if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
     if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
     if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
@@ -134,13 +137,14 @@
 
   async function updateSetting(key, val) {
     settings[key] = val;
-    settings.settingsSchemaVersion = 5;
+    settings.settingsSchemaVersion = 6;
     await chrome.storage.local.set({ settings });
     showStatus(`Updated ${key}: ${val ? 'Enabled' : 'Disabled'}`);
   }
 
   if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
   if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
+  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
   if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
   if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
   if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
@@ -419,7 +423,7 @@
   exportBtnEl.addEventListener('click', () => {
     const payload = JSON.stringify(
       {
-        version: manifestVersion || '1.6.1',
+        version: manifestVersion || '1.6.2',
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
         settings,
@@ -433,7 +437,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `cadence-backup-v${manifestVersion || '1.6.1'}.json`;
+    a.download = `cadence-backup-v${manifestVersion || '1.6.2'}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -453,7 +457,10 @@
       const parsed = JSON.parse(text);
 
       if (parsed && typeof parsed.settings === 'object') {
-        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 5 });
+        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 6 });
+        if (typeof settings.showWatchLaterRemoveAction !== 'boolean') {
+          settings.showWatchLaterRemoveAction = true;
+        }
         renderToggles();
       }
 

@@ -86,7 +86,13 @@ function normalizeSettingsSchema(
   if (rawVersion < 5) {
     merged.disableVideoPreviews =
       typeof raw?.disableVideoPreviews === 'boolean' ? raw.disableVideoPreviews : true;
-    merged.settingsSchemaVersion = 5;
+  }
+  if (rawVersion < 6) {
+    merged.showWatchLaterRemoveAction =
+      typeof raw?.showWatchLaterRemoveAction === 'boolean'
+        ? raw.showWatchLaterRemoveAction
+        : true;
+    merged.settingsSchemaVersion = 6;
   }
   return merged;
 }

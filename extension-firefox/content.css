@@ -703,10 +703,11 @@ html[dark] .cadence-rule-plus {
   bottom: 68px;
   z-index: 1200;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 8px 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -725,6 +726,11 @@ html[dark] .cadence-rule-plus {
   transform: translateY(0);
 }
 
+.cadence-stopped-text {
+  flex: 1 1 240px;
+  line-height: 1.35;
+}
+
 .cadence-stopped-saved {
   color: #34d399;
   font-weight: 700;
@@ -732,24 +738,42 @@ html[dark] .cadence-rule-plus {
 }
 
 .cadence-stopped-actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .cadence-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
-  padding: 5px 10px;
+  padding: 5px 9px;
   border-radius: 5px;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
 }
 
-.cadence-btn:hover {
+.cadence-btn[hidden] {
+  display: none;
+}
+
+.cadence-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.2);
+}
+
+.cadence-banner-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 
 .cadence-play-next-btn {
@@ -757,6 +781,53 @@ html[dark] .cadence-rule-plus {
   border-color: #dc2626;
 }
 
-.cadence-play-next-btn:hover {
+.cadence-play-next-btn:hover:not(:disabled) {
   background: #b91c1c;
+}
+
+.cadence-home-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.cadence-wl-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.cadence-wl-btn.is-removing {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.cadence-wl-btn.is-removed {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(52, 211, 153, 0.48);
+  color: #6ee7b7;
+  cursor: default;
+}
+
+.cadence-wl-btn.is-error {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(251, 191, 36, 0.52);
+  color: #fde68a;
+}
+
+.cadence-dismiss-btn {
+  padding: 5px 6px;
+  margin-left: 2px;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.cadence-dismiss-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.cadence-dismiss-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
 }
