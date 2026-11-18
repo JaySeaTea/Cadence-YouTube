@@ -1724,7 +1724,7 @@
           }
         </div>
 
-        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Channel Rules)">
+        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Cadence Options)">
           ${CADENCE_EMBLEM_SVG}
           <span class="cadence-brand-name">Cadence</span>
           <span class="cadence-brand-tagline">- YouTube at your speed</span>

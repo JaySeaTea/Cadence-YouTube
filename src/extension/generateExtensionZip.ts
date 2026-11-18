@@ -36,7 +36,7 @@ export function buildExtensionFiles(
     host_permissions: ['*://*.youtube.com/*'],
     action: {
       default_popup: 'popup.html',
-      default_title: 'Cadence for YouTube',
+      default_title: 'Cadence - YouTube at your speed',
       default_icon: {
         '16': 'icons/icon16.png',
         '32': 'icons/icon32.png',
@@ -5652,7 +5652,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         </div>
 
-        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Channel Rules)">
+        <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Cadence Options)">
           \${CADENCE_EMBLEM_SVG}
           <span class="cadence-brand-name">Cadence</span>
           <span class="cadence-brand-tagline">- YouTube at your speed</span>
@@ -7551,7 +7551,7 @@ html[dark] .cadence-rule-plus {
 <html lang="en" style="color-scheme: dark;">
   <head>
     <meta charset="UTF-8" />
-    <title>Cadence for YouTube</title>
+    <title>Cadence - YouTube at your speed</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
@@ -7559,55 +7559,64 @@ html[dark] .cadence-rule-plus {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         background: #0b0f19;
         color: #f1f5f9;
-        padding: 16px;
+        padding: 0;
       }
       .header {
         display: flex;
         align-items: center;
         justify-content: flex-start;
-        padding-bottom: 12px;
+        background: #111827;
+        padding: 13px 16px;
         border-bottom: 1px solid #1e293b;
       }
       .brand-wrap {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 7px;
       }
       .brand-emblem {
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         flex-shrink: 0;
       }
-      .brand { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
       .brand-tagline {
-        font-size: 12px;
-        font-weight: 500;
-        color: #94a3b8;
+        font-size: 12.5px;
+        font-weight: 600;
+        color: #cbd5e1;
+      }
+      .popup-main {
+        padding: 16px 16px 8px;
       }
       .version-meta {
-        font-size: 11px;
-        font-weight: 500;
-        color: #94a3b8;
+        font-size: 12px;
+        font-weight: 600;
+        color: #cbd5e1;
         font-variant-numeric: tabular-nums;
       }
       .link-btn {
         border: none;
         background: none;
-        color: #94a3b8;
-        font-size: 12px;
-        font-weight: 500;
+        color: #e2e8f0;
+        font-size: 12.5px;
+        font-weight: 600;
         cursor: pointer;
         text-decoration: underline;
         padding: 0;
       }
-      .link-btn:hover { color: #f8fafc; }
+      .link-btn:hover { color: #ffffff; }
       .now-playing-box {
         position: relative;
-        margin: 16px 0 4px;
+        margin: 2px 0 4px;
         padding: 15px 12px 12px;
-        border: 1.5px solid #dc2626;
+        border: 1.5px solid #334155;
         border-radius: 8px;
-        background: rgba(220, 38, 38, 0.04);
+        background: rgba(17, 24, 39, 0.55);
+        transition: border-color 0.15s ease, background-color 0.15s ease;
+      }
+      .now-playing-box.is-active {
+        border-color: #dc2626;
+        background: rgba(220, 38, 38, 0.05);
       }
       .now-playing-legend {
         position: absolute;
@@ -7618,25 +7627,31 @@ html[dark] .cadence-rule-plus {
         gap: 5px;
         padding: 0 6px;
         background: #0b0f19;
-        color: #f87171;
+        color: #64748b;
         font-size: 10px;
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
         line-height: 1.3;
+        transition: color 0.15s ease;
+      }
+      .now-playing-box.is-active .now-playing-legend {
+        color: #f87171;
       }
       .now-playing-dot {
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #dc2626;
+        background: #475569;
         flex-shrink: 0;
+        transition: background-color 0.15s ease;
+      }
+      .now-playing-box.is-active .now-playing-dot {
+        background: #dc2626;
       }
       .section {
-        padding: 12px 0;
-        border-bottom: 1px solid #1e293b;
+        padding: 12px 0 6px;
       }
-      .section:last-child { border-bottom: none; padding-bottom: 0; }
       .meta-row {
         display: flex;
         align-items: baseline;
@@ -7681,7 +7696,7 @@ html[dark] .cadence-rule-plus {
         margin-top: 10px;
         display: none;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
       }
       .preset-grid {
         display: grid;
@@ -7711,28 +7726,6 @@ html[dark] .cadence-rule-plus {
         display: block;
         font-variant-numeric: tabular-nums;
       }
-      .speed-grid {
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 5px;
-      }
-      .spd-btn {
-        padding: 6px 0;
-        border: 1px solid #334155;
-        background: #111827;
-        color: #e2e8f0;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
-        font-variant-numeric: tabular-nums;
-      }
-      .spd-btn:hover { background: #1e293b; }
-      .spd-btn.active {
-        background: #dc2626;
-        border-color: #dc2626;
-        color: #ffffff;
-      }
       .stepper-row {
         display: flex;
         align-items: center;
@@ -7758,7 +7751,6 @@ html[dark] .cadence-rule-plus {
       }
       .step-btn:hover { background: #1e293b; }
       .preset-btn.is-blocked:not(.active),
-      .spd-btn.is-blocked:not(.active),
       .step-btn.is-blocked {
         opacity: 0.45;
       }
@@ -7801,13 +7793,14 @@ html[dark] .cadence-rule-plus {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        border-bottom: none;
-        padding-bottom: 0;
+        background: #111827;
+        padding: 12px 16px;
+        border-top: 1px solid #1e293b;
       }
       .popup-coffee {
         text-decoration: none;
-        font-size: 13px;
-        opacity: 0.85;
+        font-size: 14px;
+        opacity: 0.9;
         transition: opacity 0.15s, transform 0.15s;
         display: inline-block;
         line-height: 1;
@@ -7831,70 +7824,65 @@ html[dark] .cadence-rule-plus {
       </div>
     </div>
 
-    <div class="now-playing-box" id="active-channel-box">
-      <span class="now-playing-legend"><span class="now-playing-dot" aria-hidden="true"></span>Now Playing</span>
-      <div class="meta-row">
-        <span class="kicker" id="channel-status">Active YouTube Tab</span>
-        <span class="speed-readout" id="active-speed-readout"></span>
-      </div>
-      <div class="channel-title" id="channel-name">Open a YouTube video</div>
-      <div class="channel-handle" id="channel-handle"></div>
-      <div class="popup-toast" id="popup-toast" role="status" aria-live="polite"></div>
-
-      <div class="controls-wrap" id="controls-wrap">
-        <div class="preset-grid" id="preset-buttons"></div>
-        <div class="speed-grid" id="speed-buttons">
-          <button class="spd-btn" data-speed="1">1.0×</button>
-          <button class="spd-btn" data-speed="1.25">1.25×</button>
-          <button class="spd-btn" data-speed="1.5">1.5×</button>
-          <button class="spd-btn" data-speed="1.75">1.75×</button>
-          <button class="spd-btn" data-speed="2">2.0×</button>
+    <div class="popup-main">
+      <div class="now-playing-box" id="active-channel-box">
+        <span class="now-playing-legend"><span class="now-playing-dot" aria-hidden="true"></span>Now Playing</span>
+        <div class="meta-row">
+          <span class="kicker" id="channel-status">Active YouTube Tab</span>
+          <span class="speed-readout" id="active-speed-readout"></span>
         </div>
-        <div class="stepper-row">
-          <span class="stepper-label">Channel Rule Fine Stepper</span>
-          <div class="stepper-controls">
-            <button type="button" class="step-btn" id="step-down">−0.05×</button>
-            <span class="step-val" id="stepper-value">1.0×</span>
-            <button type="button" class="step-btn" id="step-up">+0.05×</button>
+        <div class="channel-title" id="channel-name">Open a YouTube video</div>
+        <div class="channel-handle" id="channel-handle"></div>
+        <div class="popup-toast" id="popup-toast" role="status" aria-live="polite"></div>
+
+        <div class="controls-wrap" id="controls-wrap">
+          <div class="preset-grid" id="preset-buttons"></div>
+          <div class="stepper-row">
+            <span class="stepper-label">Channel Rule Fine Stepper</span>
+            <div class="stepper-controls">
+              <button type="button" class="step-btn" id="step-down">−0.05×</button>
+              <span class="step-val" id="stepper-value">1.0×</span>
+              <button type="button" class="step-btn" id="step-up">+0.05×</button>
+            </div>
           </div>
         </div>
       </div>
+
+      <div class="section">
+        <div class="row">
+          <div>
+            <div class="row-label">Stop Playback After Video Ends</div>
+            <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-stop" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">Convert Shorts to Standard Player</div>
+            <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-shorts" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">Disable Video Previews</div>
+            <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-previews" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
     </div>
 
-    <div class="section">
-      <div class="row">
-        <div>
-          <div class="row-label">Stop Playback After Video Ends</div>
-          <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="toggle-stop" />
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="row">
-        <div>
-          <div class="row-label">Convert Shorts to Standard Player</div>
-          <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="toggle-shorts" />
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="row">
-        <div>
-          <div class="row-label">Disable Video Previews</div>
-          <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="toggle-previews" />
-          <span class="slider"></span>
-        </label>
-      </div>
-    </div>
-
-    <div class="section footer-row">
+    <div class="footer-row">
       <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
       <div style="display:inline-flex; align-items:center; gap:8px;">
         <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
@@ -7950,6 +7938,7 @@ html[dark] .cadence-rule-plus {
   const toggleStop = document.getElementById('toggle-stop');
   const toggleShorts = document.getElementById('toggle-shorts');
   const togglePreviews = document.getElementById('toggle-previews');
+  const activeChannelBoxEl = document.getElementById('active-channel-box');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
   const channelNameEl = document.getElementById('channel-name');
@@ -7957,7 +7946,6 @@ html[dark] .cadence-rule-plus {
   const popupToastEl = document.getElementById('popup-toast');
   const controlsWrapEl = document.getElementById('controls-wrap');
   const presetGridEl = document.getElementById('preset-buttons');
-  const speedGridEl = document.getElementById('speed-buttons');
   const stepperValEl = document.getElementById('stepper-value');
   const stepDownBtn = document.getElementById('step-down');
   const stepUpBtn = document.getElementById('step-up');
@@ -8279,6 +8267,9 @@ html[dark] .cadence-rule-plus {
     }
   }
 
+  if (activeChannelBoxEl) {
+    activeChannelBoxEl.classList.add('is-active');
+  }
   controlsWrapEl.style.display = 'flex';
   channelNameEl.textContent = activeChannel.channelName;
   channelHandleEl.textContent = activeChannel.handle || activeChannel.channelId || '';
@@ -8349,21 +8340,6 @@ html[dark] .cadence-rule-plus {
         Math.abs(currentSpeed - pspd) < 0.02;
       const blocked = isAd || (isLive && isAtLiveHead && pspd > 1.01);
       btn.classList.toggle('active', Boolean(isSelected));
-      btn.classList.toggle('is-blocked', Boolean(blocked));
-      if (blocked) {
-        btn.setAttribute('aria-disabled', 'true');
-      } else {
-        btn.removeAttribute('aria-disabled');
-      }
-    });
-
-    speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
-      const val = Number(btn.getAttribute('data-speed'));
-      const blocked = isAd || (isLive && isAtLiveHead && val > 1.01);
-      btn.classList.toggle(
-        'active',
-        !isAd && sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
-      );
       btn.classList.toggle('is-blocked', Boolean(blocked));
       if (blocked) {
         btn.setAttribute('aria-disabled', 'true');
@@ -8527,14 +8503,6 @@ html[dark] .cadence-rule-plus {
     });
   });
 
-  speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const spd = Number(btn.getAttribute('data-speed'));
-      const matchedPreset = presets.find((p) => Math.abs(p.speed - spd) < 0.01);
-      assignSpeedFromPopup(spd, matchedPreset ? matchedPreset.id : 'custom');
-    });
-  });
-
   stepDownBtn.addEventListener('click', () => {
     assignSpeedFromPopup(Math.max(0.25, currentSpeed - 0.05), 'custom');
   });
@@ -8553,7 +8521,7 @@ html[dark] .cadence-rule-plus {
 <html lang="en" style="color-scheme: dark;">
   <head>
     <meta charset="UTF-8" />
-    <title>Cadence — Channel Rules &amp; Playback Settings</title>
+    <title>Cadence - YouTube at your speed · Options</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
@@ -8575,11 +8543,22 @@ html[dark] .cadence-rule-plus {
       }
       .title-row {
         display: flex;
-        align-items: baseline;
-        gap: 8px;
-        margin-bottom: 6px;
+        align-items: center;
+        gap: 9px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
       }
-      h1 { font-size: 24px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; }
+      .title-emblem {
+        width: 26px;
+        height: 26px;
+        flex-shrink: 0;
+      }
+      h1 { font-size: 25px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; line-height: 1.1; }
+      .title-tagline {
+        font-size: 16px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
       .version-meta {
         font-size: 13px;
         font-weight: 500;
@@ -8621,7 +8600,7 @@ html[dark] .cadence-rule-plus {
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
       .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
 
-      /* Toggle switch styles & grouped separation (#33) */
+      /* Toggle switch styles & grouped separation (#33, #37) */
       .options-group {
         background: #0b0f19;
         border: 1px solid #1e293b;
@@ -8645,19 +8624,6 @@ html[dark] .cadence-rule-plus {
         letter-spacing: 0.06em;
         text-transform: uppercase;
         color: #94a3b8;
-      }
-      .options-group-badge {
-        font-size: 10px;
-        font-weight: 600;
-        color: #cbd5e1;
-        background: #1e293b;
-        padding: 2px 7px;
-        border-radius: 4px;
-      }
-      .options-group-badge--popup {
-        color: #fca5a5;
-        background: rgba(220, 38, 38, 0.14);
-        border: 1px solid rgba(220, 38, 38, 0.35);
       }
       .toggle-row {
         display: flex;
@@ -8899,7 +8865,13 @@ html[dark] .cadence-rule-plus {
       <div class="top-header">
         <div>
           <div class="title-row">
-            <h1>Cadence for YouTube</h1>
+            <svg class="title-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
+              <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
+              <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+            </svg>
+            <h1>Cadence</h1>
+            <span class="title-tagline">- YouTube at your speed</span>
             <span id="ext-version" class="version-meta"></span>
           </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
@@ -8915,7 +8887,7 @@ html[dark] .cadence-rule-plus {
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
-      <!-- Panel 01: Playback & Feed Controls (#23, #33) -->
+      <!-- Panel 01: Playback & Feed Controls (#23, #33, #37) -->
       <div class="panel">
         <div class="panel-head">
           <h2>01. Playback &amp; Feed Controls</h2>
@@ -8925,7 +8897,6 @@ html[dark] .cadence-rule-plus {
         <div class="options-group">
           <div class="options-group-head">
             <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
-            <span class="options-group-badge options-group-badge--popup">Synced with Toolbar Popup</span>
           </div>
           <div class="toggle-row">
             <div class="toggle-info">
@@ -8962,7 +8933,6 @@ html[dark] .cadence-rule-plus {
         <div class="options-group">
           <div class="options-group-head">
             <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
-            <span class="options-group-badge">Options Page Only</span>
           </div>
           <div class="toggle-row">
             <div class="toggle-info">

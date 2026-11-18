@@ -41,6 +41,7 @@
   const toggleStop = document.getElementById('toggle-stop');
   const toggleShorts = document.getElementById('toggle-shorts');
   const togglePreviews = document.getElementById('toggle-previews');
+  const activeChannelBoxEl = document.getElementById('active-channel-box');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
   const channelNameEl = document.getElementById('channel-name');
@@ -48,7 +49,6 @@
   const popupToastEl = document.getElementById('popup-toast');
   const controlsWrapEl = document.getElementById('controls-wrap');
   const presetGridEl = document.getElementById('preset-buttons');
-  const speedGridEl = document.getElementById('speed-buttons');
   const stepperValEl = document.getElementById('stepper-value');
   const stepDownBtn = document.getElementById('step-down');
   const stepUpBtn = document.getElementById('step-up');
@@ -370,6 +370,9 @@
     }
   }
 
+  if (activeChannelBoxEl) {
+    activeChannelBoxEl.classList.add('is-active');
+  }
   controlsWrapEl.style.display = 'flex';
   channelNameEl.textContent = activeChannel.channelName;
   channelHandleEl.textContent = activeChannel.handle || activeChannel.channelId || '';
@@ -440,21 +443,6 @@
         Math.abs(currentSpeed - pspd) < 0.02;
       const blocked = isAd || (isLive && isAtLiveHead && pspd > 1.01);
       btn.classList.toggle('active', Boolean(isSelected));
-      btn.classList.toggle('is-blocked', Boolean(blocked));
-      if (blocked) {
-        btn.setAttribute('aria-disabled', 'true');
-      } else {
-        btn.removeAttribute('aria-disabled');
-      }
-    });
-
-    speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
-      const val = Number(btn.getAttribute('data-speed'));
-      const blocked = isAd || (isLive && isAtLiveHead && val > 1.01);
-      btn.classList.toggle(
-        'active',
-        !isAd && sessionOverrideSpeed === null && Math.abs(val - currentSpeed) < 0.015
-      );
       btn.classList.toggle('is-blocked', Boolean(blocked));
       if (blocked) {
         btn.setAttribute('aria-disabled', 'true');
@@ -615,14 +603,6 @@
       const pid = btn.getAttribute('data-preset-id');
       const spd = Number(btn.getAttribute('data-speed'));
       assignSpeedFromPopup(spd, pid);
-    });
-  });
-
-  speedGridEl.querySelectorAll('.spd-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const spd = Number(btn.getAttribute('data-speed'));
-      const matchedPreset = presets.find((p) => Math.abs(p.speed - spd) < 0.01);
-      assignSpeedFromPopup(spd, matchedPreset ? matchedPreset.id : 'custom');
     });
   });
 

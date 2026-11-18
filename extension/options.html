@@ -2,7 +2,7 @@
 <html lang="en" style="color-scheme: dark;">
   <head>
     <meta charset="UTF-8" />
-    <title>Cadence — Channel Rules &amp; Playback Settings</title>
+    <title>Cadence - YouTube at your speed · Options</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
@@ -24,11 +24,22 @@
       }
       .title-row {
         display: flex;
-        align-items: baseline;
-        gap: 8px;
-        margin-bottom: 6px;
+        align-items: center;
+        gap: 9px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
       }
-      h1 { font-size: 24px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; }
+      .title-emblem {
+        width: 26px;
+        height: 26px;
+        flex-shrink: 0;
+      }
+      h1 { font-size: 25px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; line-height: 1.1; }
+      .title-tagline {
+        font-size: 16px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
       .version-meta {
         font-size: 13px;
         font-weight: 500;
@@ -70,7 +81,7 @@
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
       .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
 
-      /* Toggle switch styles & grouped separation (#33) */
+      /* Toggle switch styles & grouped separation (#33, #37) */
       .options-group {
         background: #0b0f19;
         border: 1px solid #1e293b;
@@ -94,19 +105,6 @@
         letter-spacing: 0.06em;
         text-transform: uppercase;
         color: #94a3b8;
-      }
-      .options-group-badge {
-        font-size: 10px;
-        font-weight: 600;
-        color: #cbd5e1;
-        background: #1e293b;
-        padding: 2px 7px;
-        border-radius: 4px;
-      }
-      .options-group-badge--popup {
-        color: #fca5a5;
-        background: rgba(220, 38, 38, 0.14);
-        border: 1px solid rgba(220, 38, 38, 0.35);
       }
       .toggle-row {
         display: flex;
@@ -348,7 +346,13 @@
       <div class="top-header">
         <div>
           <div class="title-row">
-            <h1>Cadence for YouTube</h1>
+            <svg class="title-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
+              <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
+              <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+            </svg>
+            <h1>Cadence</h1>
+            <span class="title-tagline">- YouTube at your speed</span>
             <span id="ext-version" class="version-meta"></span>
           </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
@@ -364,7 +368,7 @@
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
-      <!-- Panel 01: Playback & Feed Controls (#23, #33) -->
+      <!-- Panel 01: Playback & Feed Controls (#23, #33, #37) -->
       <div class="panel">
         <div class="panel-head">
           <h2>01. Playback &amp; Feed Controls</h2>
@@ -374,7 +378,6 @@
         <div class="options-group">
           <div class="options-group-head">
             <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
-            <span class="options-group-badge options-group-badge--popup">Synced with Toolbar Popup</span>
           </div>
           <div class="toggle-row">
             <div class="toggle-info">
@@ -411,7 +414,6 @@
         <div class="options-group">
           <div class="options-group-head">
             <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
-            <span class="options-group-badge">Options Page Only</span>
           </div>
           <div class="toggle-row">
             <div class="toggle-info">

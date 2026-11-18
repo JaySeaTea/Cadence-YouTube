@@ -13,7 +13,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Cadence for YouTube",
+    "default_title": "Cadence - YouTube at your speed",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
