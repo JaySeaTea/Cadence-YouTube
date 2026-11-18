@@ -21,14 +21,64 @@
 ];
 
   const DEFAULT_SETTINGS = {
-    perChannelSpeed: true,
-    stopAfterVideo: true,
-    showSpeedBar: true,
-    convertShorts: true,
+    enabled: true,
+    perChannelSpeedEnabled: true,
+    stopAfterVideoEnds: true,
+    showInPageControlBar: true,
+    convertShortsToWatch: true,
     disableVideoPreviews: true,
     showWatchLaterRemoveAction: true,
+    showSpeedToast: true,
+    defaultSpeed: 1.0,
     settingsSchemaVersion: 6
   };
+
+  function normalizeOptionsSettings(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const merged = {
+      ...DEFAULT_SETTINGS,
+      ...src,
+      perChannelSpeedEnabled:
+        typeof src.perChannelSpeedEnabled === 'boolean'
+          ? src.perChannelSpeedEnabled
+          : typeof src.perChannelSpeed === 'boolean'
+            ? src.perChannelSpeed
+            : DEFAULT_SETTINGS.perChannelSpeedEnabled,
+      stopAfterVideoEnds:
+        typeof src.stopAfterVideoEnds === 'boolean'
+          ? src.stopAfterVideoEnds
+          : typeof src.stopAfterVideo === 'boolean'
+            ? src.stopAfterVideo
+            : DEFAULT_SETTINGS.stopAfterVideoEnds,
+      showInPageControlBar:
+        typeof src.showInPageControlBar === 'boolean'
+          ? src.showInPageControlBar
+          : typeof src.showSpeedBar === 'boolean'
+            ? src.showSpeedBar
+            : DEFAULT_SETTINGS.showInPageControlBar,
+      convertShortsToWatch:
+        typeof src.convertShortsToWatch === 'boolean'
+          ? src.convertShortsToWatch
+          : typeof src.convertShorts === 'boolean'
+            ? src.convertShorts
+            : DEFAULT_SETTINGS.convertShortsToWatch,
+      disableVideoPreviews:
+        typeof src.disableVideoPreviews === 'boolean'
+          ? src.disableVideoPreviews
+          : DEFAULT_SETTINGS.disableVideoPreviews,
+      showWatchLaterRemoveAction:
+        typeof src.showWatchLaterRemoveAction === 'boolean'
+          ? src.showWatchLaterRemoveAction
+          : DEFAULT_SETTINGS.showWatchLaterRemoveAction,
+      settingsSchemaVersion: 6,
+    };
+    delete merged.perChannelSpeed;
+    delete merged.stopAfterVideo;
+    delete merged.showSpeedBar;
+    delete merged.convertShorts;
+    delete merged.autoRememberManualSpeed;
+    return merged;
+  }
 
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
@@ -39,13 +89,26 @@
     versionEl.textContent = `· v${manifestVersion}`;
   }
 
-  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
-  let settings = Object.assign({}, DEFAULT_SETTINGS, stored.settings || {});
+  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
+  let settings = normalizeOptionsSettings(stored.settings);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : DEFAULT_PRESETS.map((p) => ({ ...p }));
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
+  let timeSavedSince =
+    typeof stored.timeSavedSince === 'number' &&
+    Number.isFinite(stored.timeSavedSince) &&
+    stored.timeSavedSince > 0
+      ? stored.timeSavedSince
+      : Date.now();
+  if (
+    typeof stored.timeSavedSince !== 'number' ||
+    !Number.isFinite(stored.timeSavedSince) ||
+    stored.timeSavedSince <= 0
+  ) {
+    chrome.storage.local.set({ timeSavedSince }).catch(() => {});
+  }
 
   // Filter & Pagination State (#26)
   let searchQuery = '';
@@ -106,6 +169,14 @@
     return `${m}m ${remS}s`;
   }
 
+  function formatSinceDate(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${mm}/${dd}/${yyyy}`;
+  }
+
   function normalizeHandle(raw, fallbackName = '') {
     const cleaned = String(raw || '').trim();
     if (cleaned) {
@@ -127,31 +198,40 @@
   }
 
   function renderToggles() {
-    if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
-    if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleStopEl) toggleStopEl.checked = Boolean(settings.stopAfterVideoEnds);
+    if (toggleShortsEl) toggleShortsEl.checked = settings.convertShortsToWatch !== false;
+    if (togglePreviewsEl) togglePreviewsEl.checked = settings.disableVideoPreviews !== false;
+    if (toggleSpeedEl) toggleSpeedEl.checked = Boolean(settings.perChannelSpeedEnabled);
+    if (toggleBarEl) toggleBarEl.checked = settings.showInPageControlBar !== false;
     if (toggleWatchLaterEl) toggleWatchLaterEl.checked = settings.showWatchLaterRemoveAction !== false;
-    if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
-    if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
-    if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
   }
+
+  const SETTING_STATUS_LABELS = {
+    stopAfterVideoEnds: 'Stop Playback After Video Ends',
+    convertShortsToWatch: 'Convert Shorts to Standard Player',
+    disableVideoPreviews: 'Disable Video Previews',
+    perChannelSpeedEnabled: 'Per-Channel Playback Speed',
+    showInPageControlBar: 'Show Speed Bar Below Video',
+    showWatchLaterRemoveAction: 'Show "Remove from Watch Later" on Video End',
+  };
 
   async function updateSetting(key, val) {
     settings[key] = val;
     settings.settingsSchemaVersion = 6;
     await chrome.storage.local.set({ settings });
-    showStatus(`Updated ${key}: ${val ? 'Enabled' : 'Disabled'}`);
+    showStatus(`Updated ${SETTING_STATUS_LABELS[key] || key}: ${val ? 'Enabled' : 'Disabled'}`);
   }
 
-  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
-  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
-  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
-  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
-  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
+  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideoEnds', toggleStopEl.checked));
+  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShortsToWatch', toggleShortsEl.checked));
   if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
+  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeedEnabled', toggleSpeedEl.checked));
+  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showInPageControlBar', toggleBarEl.checked));
+  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
 
   function renderTimeSaved() {
     if (statSavedValueEl) {
-      statSavedValueEl.textContent = `${formatFullSavedTime(totalTimeSavedSec)} saved`;
+      statSavedValueEl.innerHTML = `${formatFullSavedTime(totalTimeSavedSec)} saved <span class="stat-since">since ${formatSinceDate(timeSavedSince)}</span>`;
     }
   }
 
@@ -175,15 +255,16 @@
   btnConfirmForgetEl.addEventListener('click', async () => {
     if (inputConfirmForgetEl.value.trim() !== 'Forget Time Saved') return;
     totalTimeSavedSec = 0;
-    await chrome.storage.local.set({ totalTimeSavedSec: 0 });
+    timeSavedSince = Date.now();
+    await chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince });
     if (chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
-      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED' }, () => {});
+      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED', timeSavedSince }, () => {});
     }
     renderTimeSaved();
     resetConfirmBoxEl.classList.remove('visible');
     inputConfirmForgetEl.value = '';
     btnConfirmForgetEl.disabled = true;
-    showStatus('Lifetime time saved counter reset to 0s.');
+    showStatus(`Lifetime time saved counter reset to 0s (since ${formatSinceDate(timeSavedSince)}).`);
   });
 
   function syncPresetSelectLabels() {
@@ -426,6 +507,7 @@
         version: manifestVersion || '1.6.2',
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
+        timeSavedSince,
         settings,
         presets,
         rules
@@ -457,16 +539,21 @@
       const parsed = JSON.parse(text);
 
       if (parsed && typeof parsed.settings === 'object') {
-        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 6 });
-        if (typeof settings.showWatchLaterRemoveAction !== 'boolean') {
-          settings.showWatchLaterRemoveAction = true;
-        }
+        settings = normalizeOptionsSettings(Object.assign({}, settings, parsed.settings));
         renderToggles();
       }
 
       if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
         totalTimeSavedSec = Math.floor(parsed.totalTimeSavedSec);
-        renderTimeSaved();
+      }
+
+      if (
+        parsed &&
+        typeof parsed.timeSavedSince === 'number' &&
+        Number.isFinite(parsed.timeSavedSince) &&
+        parsed.timeSavedSince > 0
+      ) {
+        timeSavedSince = Math.floor(parsed.timeSavedSince);
       }
 
       const rawRules = Array.isArray(parsed)
@@ -512,7 +599,7 @@
         rules = mergeRuleLists(sanitizedRules, rules);
       }
 
-      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec });
+      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec, timeSavedSince });
       renderToggles();
       renderTimeSaved();
       renderPresets();
@@ -577,11 +664,19 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.settings && typeof changes.settings.newValue === 'object') {
-      settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue);
+      settings = normalizeOptionsSettings(changes.settings.newValue);
       renderToggles();
     }
     if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
       totalTimeSavedSec = changes.totalTimeSavedSec.newValue;
+      renderTimeSaved();
+    }
+    if (
+      changes.timeSavedSince &&
+      typeof changes.timeSavedSince.newValue === 'number' &&
+      changes.timeSavedSince.newValue > 0
+    ) {
+      timeSavedSince = changes.timeSavedSince.newValue;
       renderTimeSaved();
     }
     if (changes.presets && Array.isArray(changes.presets.newValue)) {

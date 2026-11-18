@@ -15,16 +15,26 @@
       .header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         padding-bottom: 12px;
         border-bottom: 1px solid #1e293b;
       }
       .brand-wrap {
         display: inline-flex;
-        align-items: baseline;
+        align-items: center;
         gap: 6px;
       }
-      .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand-emblem {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+      .brand { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand-tagline {
+        font-size: 12px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
       .version-meta {
         font-size: 11px;
         font-weight: 500;
@@ -39,8 +49,40 @@
         font-weight: 500;
         cursor: pointer;
         text-decoration: underline;
+        padding: 0;
       }
       .link-btn:hover { color: #f8fafc; }
+      .now-playing-box {
+        position: relative;
+        margin: 16px 0 4px;
+        padding: 15px 12px 12px;
+        border: 1.5px solid #dc2626;
+        border-radius: 8px;
+        background: rgba(220, 38, 38, 0.04);
+      }
+      .now-playing-legend {
+        position: absolute;
+        top: -8px;
+        left: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 0 6px;
+        background: #0b0f19;
+        color: #f87171;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        line-height: 1.3;
+      }
+      .now-playing-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #dc2626;
+        flex-shrink: 0;
+      }
       .section {
         padding: 12px 0;
         border-bottom: 1px solid #1e293b;
@@ -188,14 +230,31 @@
       }
       .row-label { font-size: 13px; font-weight: 500; color: #f1f5f9; }
       .row-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-      input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+      }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #334155; transition: .2s; border-radius: 24px;
+      }
+      .slider:before {
+        position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+        background-color: white; transition: .2s; border-radius: 50%;
+      }
+      input:checked + .slider { background-color: #dc2626; }
+      input:checked + .slider:before { transform: translateX(18px); }
       .footer-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
+        border-bottom: none;
+        padding-bottom: 0;
       }
-      .rule-count { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
-      .time-saved-highlight { color: #34d399; font-weight: 600; }
       .popup-coffee {
         text-decoration: none;
         font-size: 13px;
@@ -213,13 +272,18 @@
   <body>
     <div class="header">
       <div class="brand-wrap">
+        <svg class="brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
+          <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
+          <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+        </svg>
         <span class="brand">Cadence</span>
-        <span class="version-meta" id="ext-version"></span>
+        <span class="brand-tagline">- YouTube at your speed</span>
       </div>
-      <button id="open-options" class="link-btn">All Channel Rules</button>
     </div>
 
-    <div class="section" id="active-channel-box">
+    <div class="now-playing-box" id="active-channel-box">
+      <span class="now-playing-legend"><span class="now-playing-dot" aria-hidden="true"></span>Now Playing</span>
       <div class="meta-row">
         <span class="kicker" id="channel-status">Active YouTube Tab</span>
         <span class="speed-readout" id="active-speed-readout"></span>
@@ -251,43 +315,38 @@
     <div class="section">
       <div class="row">
         <div>
-          <div class="row-label">Per-Channel Playback Speed</div>
-          <div class="row-sub">Auto-apply saved speed on channel load</div>
-        </div>
-        <input type="checkbox" id="toggle-speed" />
-      </div>
-      <div class="row">
-        <div>
           <div class="row-label">Stop Playback After Video Ends</div>
           <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
         </div>
-        <input type="checkbox" id="toggle-stop" />
-      </div>
-      <div class="row">
-        <div>
-          <div class="row-label">Show Speed Bar Below Video</div>
-          <div class="row-sub">Full-width speed, skip &amp; rule deck above title</div>
-        </div>
-        <input type="checkbox" id="toggle-bar" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-stop" />
+          <span class="slider"></span>
+        </label>
       </div>
       <div class="row">
         <div>
           <div class="row-label">Convert Shorts to Standard Player</div>
           <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
         </div>
-        <input type="checkbox" id="toggle-shorts" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-shorts" />
+          <span class="slider"></span>
+        </label>
       </div>
       <div class="row">
         <div>
           <div class="row-label">Disable Video Previews</div>
           <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
         </div>
-        <input type="checkbox" id="toggle-previews" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-previews" />
+          <span class="slider"></span>
+        </label>
       </div>
     </div>
 
     <div class="section footer-row">
-      <span class="rule-count" id="saved-summary">0 channels configured</span>
+      <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
       <div style="display:inline-flex; align-items:center; gap:8px;">
         <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
         <span class="version-meta" id="footer-version"></span>

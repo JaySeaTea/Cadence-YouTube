@@ -162,7 +162,7 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
 ]);
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
+  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -209,6 +209,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (typeof existing.totalTimeSavedSec !== 'number') {
     nextPayload.totalTimeSavedSec = 0;
+  }
+
+  if (
+    typeof existing.timeSavedSince !== 'number' ||
+    !Number.isFinite(existing.timeSavedSince) ||
+    existing.timeSavedSince <= 0
+  ) {
+    nextPayload.timeSavedSince = Date.now();
   }
 
   if (!existing.presets) {
@@ -269,8 +277,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message && message.type === 'CADENCE_RESET_TIME_SAVED') {
-    chrome.storage.local.set({ totalTimeSavedSec: 0 }).then(() => {
-      sendResponse({ ok: true, totalTimeSavedSec: 0 });
+    const resetSince =
+      typeof message.timeSavedSince === 'number' &&
+      Number.isFinite(message.timeSavedSince) &&
+      message.timeSavedSince > 0
+        ? message.timeSavedSince
+        : Date.now();
+    chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince: resetSince }).then(() => {
+      sendResponse({ ok: true, totalTimeSavedSec: 0, timeSavedSince: resetSince });
     }).catch(() => {
       sendResponse({ ok: false });
     });
@@ -7550,16 +7564,26 @@ html[dark] .cadence-rule-plus {
       .header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
         padding-bottom: 12px;
         border-bottom: 1px solid #1e293b;
       }
       .brand-wrap {
         display: inline-flex;
-        align-items: baseline;
+        align-items: center;
         gap: 6px;
       }
-      .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand-emblem {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+      .brand { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand-tagline {
+        font-size: 12px;
+        font-weight: 500;
+        color: #94a3b8;
+      }
       .version-meta {
         font-size: 11px;
         font-weight: 500;
@@ -7574,8 +7598,40 @@ html[dark] .cadence-rule-plus {
         font-weight: 500;
         cursor: pointer;
         text-decoration: underline;
+        padding: 0;
       }
       .link-btn:hover { color: #f8fafc; }
+      .now-playing-box {
+        position: relative;
+        margin: 16px 0 4px;
+        padding: 15px 12px 12px;
+        border: 1.5px solid #dc2626;
+        border-radius: 8px;
+        background: rgba(220, 38, 38, 0.04);
+      }
+      .now-playing-legend {
+        position: absolute;
+        top: -8px;
+        left: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 0 6px;
+        background: #0b0f19;
+        color: #f87171;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        line-height: 1.3;
+      }
+      .now-playing-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #dc2626;
+        flex-shrink: 0;
+      }
       .section {
         padding: 12px 0;
         border-bottom: 1px solid #1e293b;
@@ -7723,14 +7779,31 @@ html[dark] .cadence-rule-plus {
       }
       .row-label { font-size: 13px; font-weight: 500; color: #f1f5f9; }
       .row-sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-      input[type="checkbox"] { width: 16px; height: 16px; accent-color: #dc2626; cursor: pointer; }
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 42px;
+        height: 24px;
+        flex-shrink: 0;
+      }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #334155; transition: .2s; border-radius: 24px;
+      }
+      .slider:before {
+        position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+        background-color: white; transition: .2s; border-radius: 50%;
+      }
+      input:checked + .slider { background-color: #dc2626; }
+      input:checked + .slider:before { transform: translateX(18px); }
       .footer-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
+        border-bottom: none;
+        padding-bottom: 0;
       }
-      .rule-count { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
-      .time-saved-highlight { color: #34d399; font-weight: 600; }
       .popup-coffee {
         text-decoration: none;
         font-size: 13px;
@@ -7748,13 +7821,18 @@ html[dark] .cadence-rule-plus {
   <body>
     <div class="header">
       <div class="brand-wrap">
+        <svg class="brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
+          <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
+          <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+        </svg>
         <span class="brand">Cadence</span>
-        <span class="version-meta" id="ext-version"></span>
+        <span class="brand-tagline">- YouTube at your speed</span>
       </div>
-      <button id="open-options" class="link-btn">All Channel Rules</button>
     </div>
 
-    <div class="section" id="active-channel-box">
+    <div class="now-playing-box" id="active-channel-box">
+      <span class="now-playing-legend"><span class="now-playing-dot" aria-hidden="true"></span>Now Playing</span>
       <div class="meta-row">
         <span class="kicker" id="channel-status">Active YouTube Tab</span>
         <span class="speed-readout" id="active-speed-readout"></span>
@@ -7786,43 +7864,38 @@ html[dark] .cadence-rule-plus {
     <div class="section">
       <div class="row">
         <div>
-          <div class="row-label">Per-Channel Playback Speed</div>
-          <div class="row-sub">Auto-apply saved speed on channel load</div>
-        </div>
-        <input type="checkbox" id="toggle-speed" />
-      </div>
-      <div class="row">
-        <div>
           <div class="row-label">Stop Playback After Video Ends</div>
           <div class="row-sub">Blocks Up Next, Watch Later &amp; Playlists</div>
         </div>
-        <input type="checkbox" id="toggle-stop" />
-      </div>
-      <div class="row">
-        <div>
-          <div class="row-label">Show Speed Bar Below Video</div>
-          <div class="row-sub">Full-width speed, skip &amp; rule deck above title</div>
-        </div>
-        <input type="checkbox" id="toggle-bar" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-stop" />
+          <span class="slider"></span>
+        </label>
       </div>
       <div class="row">
         <div>
           <div class="row-label">Convert Shorts to Standard Player</div>
           <div class="row-sub">Auto-redirect /shorts/ &amp; rewrite feed links</div>
         </div>
-        <input type="checkbox" id="toggle-shorts" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-shorts" />
+          <span class="slider"></span>
+        </label>
       </div>
       <div class="row">
         <div>
           <div class="row-label">Disable Video Previews</div>
           <div class="row-sub">Blocks hover previews on Home, Search &amp; Feeds</div>
         </div>
-        <input type="checkbox" id="toggle-previews" />
+        <label class="switch">
+          <input type="checkbox" id="toggle-previews" />
+          <span class="slider"></span>
+        </label>
       </div>
     </div>
 
     <div class="section footer-row">
-      <span class="rule-count" id="saved-summary">0 channels configured</span>
+      <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
       <div style="display:inline-flex; align-items:center; gap:8px;">
         <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
         <span class="version-meta" id="footer-version"></span>
@@ -7839,16 +7912,6 @@ html[dark] .cadence-rule-plus {
     return Number(val).toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1');
   }
 
-  function formatCompactDuration(rawSec) {
-    const safeSec = Math.max(0, Math.round(rawSec || 0));
-    if (safeSec < 60) return safeSec + 's';
-    const totalMins = Math.max(1, Math.round(safeSec / 60));
-    if (totalMins < 60) return totalMins + 'm';
-    const hrs = Math.floor(totalMins / 60);
-    const mins = totalMins % 60;
-    return mins > 0 ? hrs + 'h ' + mins + 'm' : hrs + 'h';
-  }
-
   function normalizeText(str) {
     return (str || '').trim().toLowerCase();
   }
@@ -7857,16 +7920,12 @@ html[dark] .cadence-rule-plus {
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
       : '';
-  const versionEl = document.getElementById('ext-version');
   const footerVersionEl = document.getElementById('footer-version');
-  if (versionEl && manifestVersion) {
-    versionEl.textContent = \`· v\${manifestVersion}\`;
-  }
   if (footerVersionEl && manifestVersion) {
     footerVersionEl.textContent = \`v\${manifestVersion}\`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets', 'totalTimeSavedSec']);
+  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
@@ -7880,7 +7939,6 @@ html[dark] .cadence-rule-plus {
     settingsSchemaVersion: 6,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
-  let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -7889,12 +7947,9 @@ html[dark] .cadence-rule-plus {
         { id: 'podcast', label: 'Podcast', speed: 2.0 },
       ];
 
-  const toggleSpeed = document.getElementById('toggle-speed');
   const toggleStop = document.getElementById('toggle-stop');
-  const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
   const togglePreviews = document.getElementById('toggle-previews');
-  const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
   const channelNameEl = document.getElementById('channel-name');
@@ -7918,9 +7973,9 @@ html[dark] .cadence-rule-plus {
     }, 2400);
   }
 
-  toggleSpeed.checked = Boolean(settings.perChannelSpeedEnabled);
-  toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
-  toggleBar.checked = settings.showInPageControlBar !== false;
+  if (toggleStop) {
+    toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
+  }
   if (toggleShorts) {
     toggleShorts.checked = settings.convertShortsToWatch !== false;
   }
@@ -7928,19 +7983,14 @@ html[dark] .cadence-rule-plus {
     togglePreviews.checked = settings.disableVideoPreviews !== false;
   }
 
-  function renderRuleCount() {
-    summaryEl.innerHTML = \`\${rules.length} saved channel \${rules.length === 1 ? 'rule' : 'rules'} · <span class="time-saved-highlight">\${formatCompactDuration(totalTimeSavedSec)} saved</span>\`;
-  }
-  renderRuleCount();
-
   async function updateSetting(patch) {
     Object.assign(settings, patch);
     await chrome.storage.local.set({ settings: { ...settings } });
   }
 
-  toggleSpeed.addEventListener('change', () => updateSetting({ perChannelSpeedEnabled: toggleSpeed.checked }));
-  toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
-  toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
+  if (toggleStop) {
+    toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
+  }
   if (toggleShorts) {
     toggleShorts.addEventListener('change', () =>
       updateSetting({ convertShortsToWatch: toggleShorts.checked })
@@ -7952,9 +8002,12 @@ html[dark] .cadence-rule-plus {
     );
   }
 
-  document.getElementById('open-options').addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
-  });
+  const openOptionsBtn = document.getElementById('open-options');
+  if (openOptionsBtn) {
+    openOptionsBtn.addEventListener('click', () => {
+      chrome.runtime.openOptionsPage();
+    });
+  }
 
   function findRuleForChannel(meta) {
     if (!meta) return null;
@@ -8406,7 +8459,6 @@ html[dark] .cadence-rule-plus {
     }
 
     await chrome.storage.local.set({ rules });
-    renderRuleCount();
     renderActiveSpeedUI();
 
     chrome.tabs
@@ -8569,7 +8621,44 @@ html[dark] .cadence-rule-plus {
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
       .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
 
-      /* Toggle switch styles */
+      /* Toggle switch styles & grouped separation (#33) */
+      .options-group {
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 4px 16px;
+      }
+      .options-group + .options-group {
+        margin-top: 14px;
+      }
+      .options-group-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 0 8px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .options-group-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #94a3b8;
+      }
+      .options-group-badge {
+        font-size: 10px;
+        font-weight: 600;
+        color: #cbd5e1;
+        background: #1e293b;
+        padding: 2px 7px;
+        border-radius: 4px;
+      }
+      .options-group-badge--popup {
+        color: #fca5a5;
+        background: rgba(220, 38, 38, 0.14);
+        border: 1px solid rgba(220, 38, 38, 0.35);
+      }
       .toggle-row {
         display: flex;
         align-items: center;
@@ -8578,7 +8667,7 @@ html[dark] .cadence-rule-plus {
         padding: 12px 0;
         border-top: 1px solid #1e293b;
       }
-      .toggle-row:first-of-type { border-top: none; }
+      .options-group-head + .toggle-row { border-top: none; }
       .toggle-info h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
       .toggle-info p { font-size: 12px; color: #94a3b8; margin-top: 2px; }
       .switch {
@@ -8613,6 +8702,7 @@ html[dark] .cadence-rule-plus {
         padding: 16px 20px;
       }
       .stat-val { font-size: 26px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
+      .stat-since { font-size: 14px; font-weight: 500; color: #94a3b8; margin-left: 6px; }
       .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
       .inline-confirm-box {
         margin-top: 14px;
@@ -8825,71 +8915,85 @@ html[dark] .cadence-rule-plus {
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
-      <!-- Panel 01: Playback & Feed Controls (#23) -->
+      <!-- Panel 01: Playback & Feed Controls (#23, #33) -->
       <div class="panel">
         <div class="panel-head">
           <h2>01. Playback &amp; Feed Controls</h2>
           <span class="count-label">Global player defaults</span>
         </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Per-Channel Playback Speed</h3>
-            <p>Remember and restore custom playback speeds for individual creators.</p>
+
+        <div class="options-group">
+          <div class="options-group-head">
+            <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
+            <span class="options-group-badge options-group-badge--popup">Synced with Toolbar Popup</span>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-speed" />
-            <span class="slider"></span>
-          </label>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Stop Playback After Video Ends</h3>
+              <p>Pause when current video completes and prevent autoplay queues, Watch Later, or playlist leaps.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-stop" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Convert Shorts to Standard Player</h3>
+              <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player and rewrite feed links.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-shorts" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Disable Video Previews</h3>
+              <p>Block autoplay hover previews on Home, Search, and Feeds while keeping channel trailers intact.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-previews" />
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Stop Playback After Video Ends</h3>
-            <p>Pause when current video completes and prevent autoplay queues or playlist leaps.</p>
+
+        <div class="options-group">
+          <div class="options-group-head">
+            <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
+            <span class="options-group-badge">Options Page Only</span>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-stop" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
-            <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Per-Channel Playback Speed</h3>
+              <p>Remember and restore custom playback speeds automatically for individual creators.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-speed" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-watch-later" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Show Speed Bar</h3>
-            <p>Mount the Cadence 3-row transport deck directly above the YouTube player title.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Show Speed Bar Below Video</h3>
+              <p>Mount the full-width Cadence 3-row speed, skip, and rule deck directly above the YouTube player title.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-bar" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-bar" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Convert Shorts to Regular Videos</h3>
-            <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
+              <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-watch-later" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-shorts" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Disable Video Previews</h3>
-            <p>Block autoplay hover previews on Home, Search, and Sidebar while keeping channel trailers intact.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-previews" />
-            <span class="slider"></span>
-          </label>
         </div>
       </div>
 
@@ -8994,14 +9098,64 @@ html[dark] .cadence-rule-plus {
   const DEFAULT_PRESETS = ${defaultPresetsJson};
 
   const DEFAULT_SETTINGS = {
-    perChannelSpeed: true,
-    stopAfterVideo: true,
-    showSpeedBar: true,
-    convertShorts: true,
+    enabled: true,
+    perChannelSpeedEnabled: true,
+    stopAfterVideoEnds: true,
+    showInPageControlBar: true,
+    convertShortsToWatch: true,
     disableVideoPreviews: true,
     showWatchLaterRemoveAction: true,
+    showSpeedToast: true,
+    defaultSpeed: 1.0,
     settingsSchemaVersion: 6
   };
+
+  function normalizeOptionsSettings(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const merged = {
+      ...DEFAULT_SETTINGS,
+      ...src,
+      perChannelSpeedEnabled:
+        typeof src.perChannelSpeedEnabled === 'boolean'
+          ? src.perChannelSpeedEnabled
+          : typeof src.perChannelSpeed === 'boolean'
+            ? src.perChannelSpeed
+            : DEFAULT_SETTINGS.perChannelSpeedEnabled,
+      stopAfterVideoEnds:
+        typeof src.stopAfterVideoEnds === 'boolean'
+          ? src.stopAfterVideoEnds
+          : typeof src.stopAfterVideo === 'boolean'
+            ? src.stopAfterVideo
+            : DEFAULT_SETTINGS.stopAfterVideoEnds,
+      showInPageControlBar:
+        typeof src.showInPageControlBar === 'boolean'
+          ? src.showInPageControlBar
+          : typeof src.showSpeedBar === 'boolean'
+            ? src.showSpeedBar
+            : DEFAULT_SETTINGS.showInPageControlBar,
+      convertShortsToWatch:
+        typeof src.convertShortsToWatch === 'boolean'
+          ? src.convertShortsToWatch
+          : typeof src.convertShorts === 'boolean'
+            ? src.convertShorts
+            : DEFAULT_SETTINGS.convertShortsToWatch,
+      disableVideoPreviews:
+        typeof src.disableVideoPreviews === 'boolean'
+          ? src.disableVideoPreviews
+          : DEFAULT_SETTINGS.disableVideoPreviews,
+      showWatchLaterRemoveAction:
+        typeof src.showWatchLaterRemoveAction === 'boolean'
+          ? src.showWatchLaterRemoveAction
+          : DEFAULT_SETTINGS.showWatchLaterRemoveAction,
+      settingsSchemaVersion: 6,
+    };
+    delete merged.perChannelSpeed;
+    delete merged.stopAfterVideo;
+    delete merged.showSpeedBar;
+    delete merged.convertShorts;
+    delete merged.autoRememberManualSpeed;
+    return merged;
+  }
 
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
@@ -9012,13 +9166,26 @@ html[dark] .cadence-rule-plus {
     versionEl.textContent = \`· v\${manifestVersion}\`;
   }
 
-  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
-  let settings = Object.assign({}, DEFAULT_SETTINGS, stored.settings || {});
+  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
+  let settings = normalizeOptionsSettings(stored.settings);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : DEFAULT_PRESETS.map((p) => ({ ...p }));
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
+  let timeSavedSince =
+    typeof stored.timeSavedSince === 'number' &&
+    Number.isFinite(stored.timeSavedSince) &&
+    stored.timeSavedSince > 0
+      ? stored.timeSavedSince
+      : Date.now();
+  if (
+    typeof stored.timeSavedSince !== 'number' ||
+    !Number.isFinite(stored.timeSavedSince) ||
+    stored.timeSavedSince <= 0
+  ) {
+    chrome.storage.local.set({ timeSavedSince }).catch(() => {});
+  }
 
   // Filter & Pagination State (#26)
   let searchQuery = '';
@@ -9079,6 +9246,14 @@ html[dark] .cadence-rule-plus {
     return \`\${m}m \${remS}s\`;
   }
 
+  function formatSinceDate(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return \`\${mm}/\${dd}/\${yyyy}\`;
+  }
+
   function normalizeHandle(raw, fallbackName = '') {
     const cleaned = String(raw || '').trim();
     if (cleaned) {
@@ -9100,31 +9275,40 @@ html[dark] .cadence-rule-plus {
   }
 
   function renderToggles() {
-    if (toggleSpeedEl) toggleSpeedEl.checked = !!settings.perChannelSpeed;
-    if (toggleStopEl) toggleStopEl.checked = !!settings.stopAfterVideo;
+    if (toggleStopEl) toggleStopEl.checked = Boolean(settings.stopAfterVideoEnds);
+    if (toggleShortsEl) toggleShortsEl.checked = settings.convertShortsToWatch !== false;
+    if (togglePreviewsEl) togglePreviewsEl.checked = settings.disableVideoPreviews !== false;
+    if (toggleSpeedEl) toggleSpeedEl.checked = Boolean(settings.perChannelSpeedEnabled);
+    if (toggleBarEl) toggleBarEl.checked = settings.showInPageControlBar !== false;
     if (toggleWatchLaterEl) toggleWatchLaterEl.checked = settings.showWatchLaterRemoveAction !== false;
-    if (toggleBarEl) toggleBarEl.checked = !!settings.showSpeedBar;
-    if (toggleShortsEl) toggleShortsEl.checked = !!settings.convertShorts;
-    if (togglePreviewsEl) togglePreviewsEl.checked = !!settings.disableVideoPreviews;
   }
+
+  const SETTING_STATUS_LABELS = {
+    stopAfterVideoEnds: 'Stop Playback After Video Ends',
+    convertShortsToWatch: 'Convert Shorts to Standard Player',
+    disableVideoPreviews: 'Disable Video Previews',
+    perChannelSpeedEnabled: 'Per-Channel Playback Speed',
+    showInPageControlBar: 'Show Speed Bar Below Video',
+    showWatchLaterRemoveAction: 'Show "Remove from Watch Later" on Video End',
+  };
 
   async function updateSetting(key, val) {
     settings[key] = val;
     settings.settingsSchemaVersion = 6;
     await chrome.storage.local.set({ settings });
-    showStatus(\`Updated \${key}: \${val ? 'Enabled' : 'Disabled'}\`);
+    showStatus(\`Updated \${SETTING_STATUS_LABELS[key] || key}: \${val ? 'Enabled' : 'Disabled'}\`);
   }
 
-  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeed', toggleSpeedEl.checked));
-  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideo', toggleStopEl.checked));
-  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
-  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showSpeedBar', toggleBarEl.checked));
-  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShorts', toggleShortsEl.checked));
+  if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideoEnds', toggleStopEl.checked));
+  if (toggleShortsEl) toggleShortsEl.addEventListener('change', () => updateSetting('convertShortsToWatch', toggleShortsEl.checked));
   if (togglePreviewsEl) togglePreviewsEl.addEventListener('change', () => updateSetting('disableVideoPreviews', togglePreviewsEl.checked));
+  if (toggleSpeedEl) toggleSpeedEl.addEventListener('change', () => updateSetting('perChannelSpeedEnabled', toggleSpeedEl.checked));
+  if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showInPageControlBar', toggleBarEl.checked));
+  if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
 
   function renderTimeSaved() {
     if (statSavedValueEl) {
-      statSavedValueEl.textContent = \`\${formatFullSavedTime(totalTimeSavedSec)} saved\`;
+      statSavedValueEl.innerHTML = \`\${formatFullSavedTime(totalTimeSavedSec)} saved <span class="stat-since">since \${formatSinceDate(timeSavedSince)}</span>\`;
     }
   }
 
@@ -9148,15 +9332,16 @@ html[dark] .cadence-rule-plus {
   btnConfirmForgetEl.addEventListener('click', async () => {
     if (inputConfirmForgetEl.value.trim() !== 'Forget Time Saved') return;
     totalTimeSavedSec = 0;
-    await chrome.storage.local.set({ totalTimeSavedSec: 0 });
+    timeSavedSince = Date.now();
+    await chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince });
     if (chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
-      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED' }, () => {});
+      chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED', timeSavedSince }, () => {});
     }
     renderTimeSaved();
     resetConfirmBoxEl.classList.remove('visible');
     inputConfirmForgetEl.value = '';
     btnConfirmForgetEl.disabled = true;
-    showStatus('Lifetime time saved counter reset to 0s.');
+    showStatus(\`Lifetime time saved counter reset to 0s (since \${formatSinceDate(timeSavedSince)}).\`);
   });
 
   function syncPresetSelectLabels() {
@@ -9399,6 +9584,7 @@ html[dark] .cadence-rule-plus {
         version: manifestVersion || '${EXTENSION_VERSION}',
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
+        timeSavedSince,
         settings,
         presets,
         rules
@@ -9430,16 +9616,21 @@ html[dark] .cadence-rule-plus {
       const parsed = JSON.parse(text);
 
       if (parsed && typeof parsed.settings === 'object') {
-        settings = Object.assign({}, settings, parsed.settings, { settingsSchemaVersion: 6 });
-        if (typeof settings.showWatchLaterRemoveAction !== 'boolean') {
-          settings.showWatchLaterRemoveAction = true;
-        }
+        settings = normalizeOptionsSettings(Object.assign({}, settings, parsed.settings));
         renderToggles();
       }
 
       if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
         totalTimeSavedSec = Math.floor(parsed.totalTimeSavedSec);
-        renderTimeSaved();
+      }
+
+      if (
+        parsed &&
+        typeof parsed.timeSavedSince === 'number' &&
+        Number.isFinite(parsed.timeSavedSince) &&
+        parsed.timeSavedSince > 0
+      ) {
+        timeSavedSince = Math.floor(parsed.timeSavedSince);
       }
 
       const rawRules = Array.isArray(parsed)
@@ -9485,7 +9676,7 @@ html[dark] .cadence-rule-plus {
         rules = mergeRuleLists(sanitizedRules, rules);
       }
 
-      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec });
+      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec, timeSavedSince });
       renderToggles();
       renderTimeSaved();
       renderPresets();
@@ -9550,11 +9741,19 @@ html[dark] .cadence-rule-plus {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.settings && typeof changes.settings.newValue === 'object') {
-      settings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue);
+      settings = normalizeOptionsSettings(changes.settings.newValue);
       renderToggles();
     }
     if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
       totalTimeSavedSec = changes.totalTimeSavedSec.newValue;
+      renderTimeSaved();
+    }
+    if (
+      changes.timeSavedSince &&
+      typeof changes.timeSavedSince.newValue === 'number' &&
+      changes.timeSavedSince.newValue > 0
+    ) {
+      timeSavedSince = changes.timeSavedSince.newValue;
       renderTimeSaved();
     }
     if (changes.presets && Array.isArray(changes.presets.newValue)) {

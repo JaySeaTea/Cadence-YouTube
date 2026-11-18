@@ -70,7 +70,44 @@
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
       .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
 
-      /* Toggle switch styles */
+      /* Toggle switch styles & grouped separation (#33) */
+      .options-group {
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 4px 16px;
+      }
+      .options-group + .options-group {
+        margin-top: 14px;
+      }
+      .options-group-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 0 8px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .options-group-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #94a3b8;
+      }
+      .options-group-badge {
+        font-size: 10px;
+        font-weight: 600;
+        color: #cbd5e1;
+        background: #1e293b;
+        padding: 2px 7px;
+        border-radius: 4px;
+      }
+      .options-group-badge--popup {
+        color: #fca5a5;
+        background: rgba(220, 38, 38, 0.14);
+        border: 1px solid rgba(220, 38, 38, 0.35);
+      }
       .toggle-row {
         display: flex;
         align-items: center;
@@ -79,7 +116,7 @@
         padding: 12px 0;
         border-top: 1px solid #1e293b;
       }
-      .toggle-row:first-of-type { border-top: none; }
+      .options-group-head + .toggle-row { border-top: none; }
       .toggle-info h3 { font-size: 13px; font-weight: 600; color: #f1f5f9; }
       .toggle-info p { font-size: 12px; color: #94a3b8; margin-top: 2px; }
       .switch {
@@ -114,6 +151,7 @@
         padding: 16px 20px;
       }
       .stat-val { font-size: 26px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
+      .stat-since { font-size: 14px; font-weight: 500; color: #94a3b8; margin-left: 6px; }
       .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
       .inline-confirm-box {
         margin-top: 14px;
@@ -326,71 +364,85 @@
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
-      <!-- Panel 01: Playback & Feed Controls (#23) -->
+      <!-- Panel 01: Playback & Feed Controls (#23, #33) -->
       <div class="panel">
         <div class="panel-head">
           <h2>01. Playback &amp; Feed Controls</h2>
           <span class="count-label">Global player defaults</span>
         </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Per-Channel Playback Speed</h3>
-            <p>Remember and restore custom playback speeds for individual creators.</p>
+
+        <div class="options-group">
+          <div class="options-group-head">
+            <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
+            <span class="options-group-badge options-group-badge--popup">Synced with Toolbar Popup</span>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-speed" />
-            <span class="slider"></span>
-          </label>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Stop Playback After Video Ends</h3>
+              <p>Pause when current video completes and prevent autoplay queues, Watch Later, or playlist leaps.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-stop" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Convert Shorts to Standard Player</h3>
+              <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player and rewrite feed links.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-shorts" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Disable Video Previews</h3>
+              <p>Block autoplay hover previews on Home, Search, and Feeds while keeping channel trailers intact.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-previews" />
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Stop Playback After Video Ends</h3>
-            <p>Pause when current video completes and prevent autoplay queues or playlist leaps.</p>
+
+        <div class="options-group">
+          <div class="options-group-head">
+            <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
+            <span class="options-group-badge">Options Page Only</span>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-stop" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
-            <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Per-Channel Playback Speed</h3>
+              <p>Remember and restore custom playback speeds automatically for individual creators.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-speed" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-watch-later" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Show Speed Bar</h3>
-            <p>Mount the Cadence 3-row transport deck directly above the YouTube player title.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Show Speed Bar Below Video</h3>
+              <p>Mount the full-width Cadence 3-row speed, skip, and rule deck directly above the YouTube player title.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-bar" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-bar" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Convert Shorts to Regular Videos</h3>
-            <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player.</p>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
+              <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="toggle-watch-later" />
+              <span class="slider"></span>
+            </label>
           </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-shorts" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="toggle-row">
-          <div class="toggle-info">
-            <h3>Disable Video Previews</h3>
-            <p>Block autoplay hover previews on Home, Search, and Sidebar while keeping channel trailers intact.</p>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="toggle-previews" />
-            <span class="slider"></span>
-          </label>
         </div>
       </div>
 

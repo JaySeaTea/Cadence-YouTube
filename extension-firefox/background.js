@@ -86,7 +86,7 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
 ]);
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec']);
+  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -133,6 +133,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (typeof existing.totalTimeSavedSec !== 'number') {
     nextPayload.totalTimeSavedSec = 0;
+  }
+
+  if (
+    typeof existing.timeSavedSince !== 'number' ||
+    !Number.isFinite(existing.timeSavedSince) ||
+    existing.timeSavedSince <= 0
+  ) {
+    nextPayload.timeSavedSince = Date.now();
   }
 
   if (!existing.presets) {
@@ -193,8 +201,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message && message.type === 'CADENCE_RESET_TIME_SAVED') {
-    chrome.storage.local.set({ totalTimeSavedSec: 0 }).then(() => {
-      sendResponse({ ok: true, totalTimeSavedSec: 0 });
+    const resetSince =
+      typeof message.timeSavedSince === 'number' &&
+      Number.isFinite(message.timeSavedSince) &&
+      message.timeSavedSince > 0
+        ? message.timeSavedSince
+        : Date.now();
+    chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince: resetSince }).then(() => {
+      sendResponse({ ok: true, totalTimeSavedSec: 0, timeSavedSince: resetSince });
     }).catch(() => {
       sendResponse({ ok: false });
     });

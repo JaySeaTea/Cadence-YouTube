@@ -3,16 +3,6 @@
     return Number(val).toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1');
   }
 
-  function formatCompactDuration(rawSec) {
-    const safeSec = Math.max(0, Math.round(rawSec || 0));
-    if (safeSec < 60) return safeSec + 's';
-    const totalMins = Math.max(1, Math.round(safeSec / 60));
-    if (totalMins < 60) return totalMins + 'm';
-    const hrs = Math.floor(totalMins / 60);
-    const mins = totalMins % 60;
-    return mins > 0 ? hrs + 'h ' + mins + 'm' : hrs + 'h';
-  }
-
   function normalizeText(str) {
     return (str || '').trim().toLowerCase();
   }
@@ -21,16 +11,12 @@
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
       : '';
-  const versionEl = document.getElementById('ext-version');
   const footerVersionEl = document.getElementById('footer-version');
-  if (versionEl && manifestVersion) {
-    versionEl.textContent = `· v${manifestVersion}`;
-  }
   if (footerVersionEl && manifestVersion) {
     footerVersionEl.textContent = `v${manifestVersion}`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets', 'totalTimeSavedSec']);
+  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
@@ -44,7 +30,6 @@
     settingsSchemaVersion: 6,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
-  let totalTimeSavedSec = Math.max(0, Number(stored.totalTimeSavedSec) || 0);
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -53,12 +38,9 @@
         { id: 'podcast', label: 'Podcast', speed: 2.0 },
       ];
 
-  const toggleSpeed = document.getElementById('toggle-speed');
   const toggleStop = document.getElementById('toggle-stop');
-  const toggleBar = document.getElementById('toggle-bar');
   const toggleShorts = document.getElementById('toggle-shorts');
   const togglePreviews = document.getElementById('toggle-previews');
-  const summaryEl = document.getElementById('saved-summary');
   const statusEl = document.getElementById('channel-status');
   const readoutEl = document.getElementById('active-speed-readout');
   const channelNameEl = document.getElementById('channel-name');
@@ -82,9 +64,9 @@
     }, 2400);
   }
 
-  toggleSpeed.checked = Boolean(settings.perChannelSpeedEnabled);
-  toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
-  toggleBar.checked = settings.showInPageControlBar !== false;
+  if (toggleStop) {
+    toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
+  }
   if (toggleShorts) {
     toggleShorts.checked = settings.convertShortsToWatch !== false;
   }
@@ -92,19 +74,14 @@
     togglePreviews.checked = settings.disableVideoPreviews !== false;
   }
 
-  function renderRuleCount() {
-    summaryEl.innerHTML = `${rules.length} saved channel ${rules.length === 1 ? 'rule' : 'rules'} · <span class="time-saved-highlight">${formatCompactDuration(totalTimeSavedSec)} saved</span>`;
-  }
-  renderRuleCount();
-
   async function updateSetting(patch) {
     Object.assign(settings, patch);
     await chrome.storage.local.set({ settings: { ...settings } });
   }
 
-  toggleSpeed.addEventListener('change', () => updateSetting({ perChannelSpeedEnabled: toggleSpeed.checked }));
-  toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
-  toggleBar.addEventListener('change', () => updateSetting({ showInPageControlBar: toggleBar.checked }));
+  if (toggleStop) {
+    toggleStop.addEventListener('change', () => updateSetting({ stopAfterVideoEnds: toggleStop.checked }));
+  }
   if (toggleShorts) {
     toggleShorts.addEventListener('change', () =>
       updateSetting({ convertShortsToWatch: toggleShorts.checked })
@@ -116,9 +93,12 @@
     );
   }
 
-  document.getElementById('open-options').addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
-  });
+  const openOptionsBtn = document.getElementById('open-options');
+  if (openOptionsBtn) {
+    openOptionsBtn.addEventListener('click', () => {
+      chrome.runtime.openOptionsPage();
+    });
+  }
 
   function findRuleForChannel(meta) {
     if (!meta) return null;
@@ -570,7 +550,6 @@
     }
 
     await chrome.storage.local.set({ rules });
-    renderRuleCount();
     renderActiveSpeedUI();
 
     chrome.tabs
