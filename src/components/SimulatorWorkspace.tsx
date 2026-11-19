@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  BookmarkMinus,
+  Check,
   FastForward,
+  Home,
   Lock,
   Pause,
   Play,
@@ -50,18 +53,18 @@ interface SimulatorWorkspaceProps {
 const CadenceEmblem: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
     <rect
-      x="1"
-      y="1"
-      width="18"
-      height="18"
-      rx="5"
+      x="0.75"
+      y="0.75"
+      width="18.5"
+      height="18.5"
+      rx="4.5"
       fill="#0F172A"
-      stroke="#DC2626"
-      strokeOpacity="0.6"
-      strokeWidth="1.2"
+      stroke="rgba(255,255,255,0.22)"
+      strokeWidth="1"
     />
-    <path d="M5.6 5.4L12.3 10L5.6 14.6V5.4Z" fill="#DC2626" />
-    <rect x="13.4" y="5.4" width="2.1" height="9.2" rx="0.9" fill="#F8FAFC" />
+    <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444" />
+    <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC" />
+    <path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626" />
   </svg>
 );
 
@@ -208,6 +211,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [unconvertedShortsActive, setUnconvertedShortsActive] = useState<boolean>(false);
   const [liveDvrEnabled, setLiveDvrEnabled] = useState<boolean>(true);
   const [nonDvrRuleClamped, setNonDvrRuleClamped] = useState<boolean>(false);
+  const [watchLaterRemoved, setWatchLaterRemoved] = useState<boolean>(false);
 
   const currentTimeRef = useRef<number>(1440);
   const liveEdgeRef = useRef<number>(3600);
@@ -407,6 +411,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     setBankedSavedSec(0);
 
     setUnconvertedShortsActive(keepShortsUnconverted);
+    setWatchLaterRemoved(false);
     setCurrentVideoIndex(index);
     syncAdRemaining(0);
     setSessionOverrideSpeed(null);
@@ -1850,7 +1855,15 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
                 {/* Cadence End-of-Video Hard-Stop Overlay */}
                 {stoppedByCadence && (
-                  <div className="absolute inset-x-5 bottom-16 z-20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-lg bg-slate-950/95 border border-slate-700 text-white">
+                  <div className="absolute inset-x-5 bottom-16 z-20 overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 pb-3.5 pt-4 rounded-lg bg-slate-950/95 border border-slate-700 text-white">
+                    <div
+                      aria-hidden="true"
+                      className="absolute top-0 left-0 right-0 h-[2.5px] pointer-events-none"
+                      style={{
+                        background:
+                          'linear-gradient(90deg, #dc2626 0%, rgba(220, 38, 38, 0.72) 45%, rgba(220, 38, 38, 0.16) 80%, rgba(220, 38, 38, 0) 100%)',
+                      }}
+                    />
                     <div>
                       <p className="text-sm font-semibold">
                         Playback stopped at end of video
@@ -1868,11 +1881,11 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         )}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={handleReplay}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/20 text-xs font-semibold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/20 bg-white/10 hover:bg-white/20 text-xs font-medium text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                         Replay
@@ -1880,11 +1893,49 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={handlePlayNextManual}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-xs font-semibold text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/20 bg-white/10 hover:bg-white/20 text-xs font-medium text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <SkipForward className="w-3.5 h-3.5" />
-                        Play Next Manually
+                        Play Next
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleEnterYouTubeHome}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-red-600 bg-red-600 hover:bg-red-700 hover:border-red-700 text-xs font-medium text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Home className="w-3.5 h-3.5" />
+                        YouTube Home
+                      </button>
+                      {playlistMode === 'watch_later' && settings.showWatchLaterRemoveAction && (
+                        <button
+                          type="button"
+                          disabled={watchLaterRemoved}
+                          onClick={() => {
+                            setWatchLaterRemoved(true);
+                            onAddLog(
+                              'Removed video from Watch Later',
+                              `Removed "${currentVideo.title}" directly from the end-of-video overlay`
+                            );
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                            watchLaterRemoved
+                              ? 'border border-emerald-400/50 bg-emerald-500/15 text-emerald-300 cursor-default'
+                              : 'border-[1.5px] border-rose-400/80 bg-slate-800/90 hover:bg-slate-700/95 hover:border-rose-300 text-rose-100 hover:text-white cursor-pointer'
+                          }`}
+                        >
+                          {watchLaterRemoved ? (
+                            <>
+                              <Check className="w-3.5 h-3.5" />
+                              Removed from Watch Later
+                            </>
+                          ) : (
+                            <>
+                              <BookmarkMinus className="w-3.5 h-3.5" />
+                              Remove from Watch Later
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2191,8 +2242,18 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                 {settings.enabled && settings.showInPageControlBar && !unconvertedShortsActive && (
                   <div
                     id="cadence-watch-bar"
-                    className="relative w-full px-3.5 py-2.5 rounded-xl bg-[#0B0F19] border border-slate-700/90"
+                    className="relative w-full px-3.5 pb-2.5 pt-3 rounded-xl bg-[#0B0F19] border border-slate-700/90"
                   >
+                    {/* Fading Cadence-Red Top Edge Accent Line */}
+                    <div
+                      aria-hidden="true"
+                      className="absolute top-0 left-0 right-0 h-[2.5px] rounded-t-xl pointer-events-none"
+                      style={{
+                        background:
+                          'linear-gradient(270deg, #dc2626 0%, rgba(220, 38, 38, 0.72) 32%, rgba(220, 38, 38, 0.14) 68%, rgba(220, 38, 38, 0) 100%)',
+                      }}
+                    />
+
                     {/* Floating Amber Toolbar Toast */}
                     {barToast && (
                       <div
@@ -2218,11 +2279,14 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         aria-hidden="true"
                         className="absolute -top-[9999px] left-0 invisible pointer-events-none select-none inline-flex items-center gap-1.5 px-1.5 py-0.5 whitespace-nowrap"
                       >
-                        <CadenceEmblem className="w-3.5 h-3.5 shrink-0" />
-                        <span className="text-[11px] font-bold tracking-tight font-display">
+                        <CadenceEmblem className="w-4 h-4 shrink-0" />
+                        <span className="text-[11px] font-bold tracking-[-0.015em] font-display">
                           Cadence
                         </span>
-                        <span className="text-[11px]">- YouTube at your speed</span>
+                        <span className="inline-block w-[1.5px] h-3 rounded-full mx-0.5 bg-red-600" />
+                        <span className="text-[10px] font-semibold tracking-[0.06em] italic">
+                          YOUTUBE AT YOUR SPEED
+                        </span>
                       </span>
 
                       <div ref={row1LeftRef} className="flex items-center gap-2 min-w-0">
@@ -2348,14 +2412,20 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-white/[0.06] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                         title="Cadence - YouTube at your speed · Click to manage Channel Rules"
                       >
-                        <CadenceEmblem className="w-3.5 h-3.5 shrink-0" />
-                        <span className="text-[11px] font-bold tracking-tight text-slate-200 font-display">
+                        <CadenceEmblem className="w-4 h-4 shrink-0" />
+                        <span className="text-[11px] font-bold tracking-[-0.015em] text-slate-50 font-display">
                           Cadence
                         </span>
                         {!collapseTagline && (
-                          <span className="text-[11px] text-slate-400">
-                            - YouTube at your speed
-                          </span>
+                          <>
+                            <span
+                              aria-hidden="true"
+                              className="inline-block w-[1.5px] h-3 rounded-full mx-0.5 bg-red-600 shrink-0"
+                            />
+                            <span className="text-[10px] font-semibold tracking-[0.06em] italic text-slate-400">
+                              YOUTUBE AT YOUR SPEED
+                            </span>
+                          </>
                         )}
                       </button>
                     </div>

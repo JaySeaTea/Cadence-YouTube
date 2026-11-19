@@ -13,6 +13,7 @@
       }
       .container { max-width: 900px; margin: 0 auto; }
       .top-header {
+        position: relative;
         display: flex;
         align-items: flex-end;
         justify-content: space-between;
@@ -20,25 +21,54 @@
         flex-wrap: wrap;
         padding-bottom: 20px;
         margin-bottom: 24px;
-        border-bottom: 1px solid #1e293b;
+      }
+      .top-header::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2.5px;
+        border-radius: 999px;
+        background: linear-gradient(
+          90deg,
+          #dc2626 0%,
+          rgba(220, 38, 38, 0.72) 45%,
+          rgba(220, 38, 38, 0.16) 80%,
+          rgba(220, 38, 38, 0) 100%
+        );
+        pointer-events: none;
       }
       .title-row {
         display: flex;
         align-items: center;
-        gap: 9px;
+        gap: 14px;
         flex-wrap: wrap;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
       }
       .title-emblem {
-        width: 26px;
-        height: 26px;
+        width: 44px;
+        height: 44px;
         flex-shrink: 0;
       }
-      h1 { font-size: 25px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; line-height: 1.1; }
+      .title-stack {
+        display: flex;
+        flex-direction: column;
+      }
+      .title-main-line {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      h1 { font-size: 27px; font-weight: 700; color: #f8fafc; letter-spacing: -0.02em; line-height: 1; }
       .title-tagline {
-        font-size: 16px;
-        font-weight: 500;
+        font-size: 11.5px;
+        font-weight: 600;
+        letter-spacing: 0.11em;
+        font-style: italic;
         color: #94a3b8;
+        margin-top: 6px;
       }
       .version-meta {
         font-size: 13px;
@@ -348,12 +378,17 @@
           <div class="title-row">
             <svg class="title-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
-              <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
-              <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+              <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444"/>
+              <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC"/>
+              <path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626"/>
             </svg>
-            <h1>Cadence</h1>
-            <span class="title-tagline">- YouTube at your speed</span>
-            <span id="ext-version" class="version-meta"></span>
+            <div class="title-stack">
+              <div class="title-main-line">
+                <h1>Cadence</h1>
+                <span id="ext-version" class="version-meta"></span>
+              </div>
+              <span class="title-tagline">YOUTUBE AT YOUR SPEED</span>
+            </div>
           </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
         </div>

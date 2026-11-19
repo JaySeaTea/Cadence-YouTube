@@ -504,7 +504,7 @@
   exportBtnEl.addEventListener('click', () => {
     const payload = JSON.stringify(
       {
-        version: manifestVersion || '1.6.2',
+        version: manifestVersion || '1.7.0',
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
         timeSavedSince,
@@ -519,7 +519,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `cadence-backup-v${manifestVersion || '1.6.2'}.json`;
+    a.download = `cadence-backup-v${manifestVersion || '1.7.0'}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();

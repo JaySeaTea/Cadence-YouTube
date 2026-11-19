@@ -4063,8 +4063,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const CADENCE_EMBLEM_SVG =
     '<svg class="cadence-brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
     '<rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>' +
-    '<path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>' +
-    '<rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>' +
+    '<path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444"/>' +
+    '<rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC"/>' +
+    '<path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626"/>' +
     '</svg>';
 
   const REPLAY_ICON_SVG =
@@ -5618,7 +5619,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       <span class="cadence-brand-sizer" aria-hidden="true">
         \${CADENCE_EMBLEM_SVG}
         <span class="cadence-brand-name">Cadence</span>
-        <span class="cadence-brand-tagline">- YouTube at your speed</span>
+        <span class="cadence-brand-sep"></span>
+        <span class="cadence-brand-tagline">YOUTUBE AT YOUR SPEED</span>
       </span>
 
       <div class="cadence-row-top">
@@ -5655,7 +5657,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Cadence Options)">
           \${CADENCE_EMBLEM_SVG}
           <span class="cadence-brand-name">Cadence</span>
-          <span class="cadence-brand-tagline">- YouTube at your speed</span>
+          <span class="cadence-brand-sep" aria-hidden="true"></span>
+          <span class="cadence-brand-tagline">YOUTUBE AT YOUR SPEED</span>
         </button>
       </div>
 
@@ -6714,19 +6717,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   const contentCss = `.cadence-watch-bar {
   position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 100%;
   box-sizing: border-box;
   margin: 4px 0 10px 0;
-  padding: 6px 10px;
+  padding: 7px 10px 6px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(15, 23, 42, 0.04);
   font-family: Roboto, Arial, sans-serif;
   font-size: 12px;
   color: inherit;
+}
+
+.cadence-watch-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  background: linear-gradient(
+    270deg,
+    #dc2626 0%,
+    rgba(220, 38, 38, 0.72) 32%,
+    rgba(220, 38, 38, 0.14) 68%,
+    rgba(220, 38, 38, 0) 100%
+  );
+  pointer-events: none;
 }
 
 html[dark] .cadence-watch-bar {
@@ -6853,29 +6874,48 @@ html[dark] .cadence-brand-btn:hover {
 }
 
 .cadence-brand-emblem {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 
 .cadence-brand-name {
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: #0f172a;
 }
 
 html[dark] .cadence-brand-name {
-  color: #e2e8f0;
+  color: #f8fafc;
 }
 
 .cadence-brand-btn:hover .cadence-brand-name {
   color: inherit;
 }
 
-.cadence-brand-tagline {
-  opacity: 0.82;
+.cadence-brand-sep {
+  display: inline-block;
+  width: 1.5px;
+  height: 12px;
+  border-radius: 999px;
+  background: #dc2626;
+  margin: 0 1px;
+  flex-shrink: 0;
 }
 
+.cadence-brand-tagline {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  font-style: italic;
+  color: #64748b;
+}
+
+html[dark] .cadence-brand-tagline {
+  color: #94a3b8;
+}
+
+.cadence-brand-btn.is-tagline-collapsed .cadence-brand-sep,
 .cadence-brand-btn.is-tagline-collapsed .cadence-brand-tagline {
   display: none;
 }
@@ -7416,12 +7456,13 @@ html[dark] .cadence-rule-plus {
   right: 20px;
   bottom: 68px;
   z-index: 1200;
+  overflow: hidden;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  padding: 10px 12px;
+  padding: 12px 12px 10px;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -7432,6 +7473,23 @@ html[dark] .cadence-rule-plus {
   pointer-events: none;
   transform: translateY(6px);
   transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.cadence-stopped-banner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  background: linear-gradient(
+    90deg,
+    #dc2626 0%,
+    rgba(220, 38, 38, 0.72) 45%,
+    rgba(220, 38, 38, 0.16) 80%,
+    rgba(220, 38, 38, 0) 100%
+  );
+  pointer-events: none;
 }
 
 .cadence-stopped-banner.cadence-visible {
@@ -7490,23 +7548,27 @@ html[dark] .cadence-rule-plus {
   flex-shrink: 0;
 }
 
-.cadence-play-next-btn {
+.cadence-home-btn {
   background: #dc2626;
   border-color: #dc2626;
+  color: #ffffff;
 }
 
-.cadence-play-next-btn:hover:not(:disabled) {
+.cadence-home-btn:hover:not(:disabled) {
   background: #b91c1c;
-}
-
-.cadence-home-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: #b91c1c;
 }
 
 .cadence-wl-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(30, 41, 59, 0.88);
+  border: 1.5px solid rgba(251, 113, 133, 0.82);
+  color: #ffe4e6;
+}
+
+.cadence-wl-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.94);
+  border-color: #fda4af;
+  color: #ffffff;
 }
 
 .cadence-wl-btn.is-removing {
@@ -7562,28 +7624,54 @@ html[dark] .cadence-rule-plus {
         padding: 0;
       }
       .header {
+        position: relative;
+        overflow: hidden;
         display: flex;
         align-items: center;
         justify-content: flex-start;
         background: #111827;
-        padding: 13px 16px;
+        padding: 14px 16px 12px;
         border-bottom: 1px solid #1e293b;
+      }
+      .header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2.5px;
+        background: linear-gradient(
+          90deg,
+          #dc2626 0%,
+          rgba(220, 38, 38, 0.72) 45%,
+          rgba(220, 38, 38, 0.16) 80%,
+          rgba(220, 38, 38, 0) 100%
+        );
+        pointer-events: none;
       }
       .brand-wrap {
         display: inline-flex;
         align-items: center;
-        gap: 7px;
+        gap: 10px;
       }
       .brand-emblem {
-        width: 18px;
-        height: 18px;
+        width: 32px;
+        height: 32px;
         flex-shrink: 0;
       }
-      .brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #f8fafc; }
+      .brand-stack {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.15;
+      }
+      .brand { font-size: 16px; font-weight: 700; letter-spacing: -0.015em; color: #f8fafc; }
       .brand-tagline {
-        font-size: 12.5px;
+        font-size: 10px;
         font-weight: 600;
-        color: #cbd5e1;
+        letter-spacing: 0.09em;
+        font-style: italic;
+        color: #94a3b8;
+        margin-top: 2px;
       }
       .popup-main {
         padding: 16px 16px 8px;
@@ -7816,11 +7904,14 @@ html[dark] .cadence-rule-plus {
       <div class="brand-wrap">
         <svg class="brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
-          <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
-          <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+          <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444"/>
+          <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC"/>
+          <path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626"/>
         </svg>
-        <span class="brand">Cadence</span>
-        <span class="brand-tagline">- YouTube at your speed</span>
+        <div class="brand-stack">
+          <span class="brand">Cadence</span>
+          <span class="brand-tagline">YOUTUBE AT YOUR SPEED</span>
+        </div>
       </div>
     </div>
 
@@ -8532,6 +8623,7 @@ html[dark] .cadence-rule-plus {
       }
       .container { max-width: 900px; margin: 0 auto; }
       .top-header {
+        position: relative;
         display: flex;
         align-items: flex-end;
         justify-content: space-between;
@@ -8539,25 +8631,54 @@ html[dark] .cadence-rule-plus {
         flex-wrap: wrap;
         padding-bottom: 20px;
         margin-bottom: 24px;
-        border-bottom: 1px solid #1e293b;
+      }
+      .top-header::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2.5px;
+        border-radius: 999px;
+        background: linear-gradient(
+          90deg,
+          #dc2626 0%,
+          rgba(220, 38, 38, 0.72) 45%,
+          rgba(220, 38, 38, 0.16) 80%,
+          rgba(220, 38, 38, 0) 100%
+        );
+        pointer-events: none;
       }
       .title-row {
         display: flex;
         align-items: center;
-        gap: 9px;
+        gap: 14px;
         flex-wrap: wrap;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
       }
       .title-emblem {
-        width: 26px;
-        height: 26px;
+        width: 44px;
+        height: 44px;
         flex-shrink: 0;
       }
-      h1 { font-size: 25px; font-weight: 700; color: #f8fafc; letter-spacing: -0.01em; line-height: 1.1; }
+      .title-stack {
+        display: flex;
+        flex-direction: column;
+      }
+      .title-main-line {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      h1 { font-size: 27px; font-weight: 700; color: #f8fafc; letter-spacing: -0.02em; line-height: 1; }
       .title-tagline {
-        font-size: 16px;
-        font-weight: 500;
+        font-size: 11.5px;
+        font-weight: 600;
+        letter-spacing: 0.11em;
+        font-style: italic;
         color: #94a3b8;
+        margin-top: 6px;
       }
       .version-meta {
         font-size: 13px;
@@ -8867,12 +8988,17 @@ html[dark] .cadence-rule-plus {
           <div class="title-row">
             <svg class="title-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>
-              <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>
-              <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>
+              <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444"/>
+              <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC"/>
+              <path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626"/>
             </svg>
-            <h1>Cadence</h1>
-            <span class="title-tagline">- YouTube at your speed</span>
-            <span id="ext-version" class="version-meta"></span>
+            <div class="title-stack">
+              <div class="title-main-line">
+                <h1>Cadence</h1>
+                <span id="ext-version" class="version-meta"></span>
+              </div>
+              <span class="title-tagline">YOUTUBE AT YOUR SPEED</span>
+            </div>
           </div>
           <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
         </div>
@@ -9836,22 +9962,43 @@ async function renderExtensionIconBlob(size: number): Promise<Blob> {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = '#DC2626';
-  const left = size * 0.24;
-  const top = size * 0.25;
-  const bottom = size * 0.75;
-  const midX = size * 0.6;
+  ctx.fillStyle = '#EF4444';
+  const left = size * 0.355;
+  const top = size * 0.205;
+  const bottom = size * 0.615;
+  const tipX = size * 0.715;
   ctx.beginPath();
   ctx.moveTo(left, top);
-  ctx.lineTo(midX, size * 0.5);
+  ctx.lineTo(tipX, size * 0.41);
   ctx.lineTo(left, bottom);
   ctx.closePath();
   ctx.fill();
 
+  const trackX = size * 0.175;
+  const trackY = size * 0.71;
+  const trackW = size * 0.65;
+  const trackH = Math.max(2, size * 0.12);
+  const trackR = trackH / 2;
+  const fillW = trackW * 0.45;
+
+  const drawPill = (x: number, y: number, w: number, h: number, r: number) => {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(x + r, y + h);
+    ctx.arc(x + r, y + r, r, Math.PI / 2, (Math.PI * 3) / 2);
+    ctx.closePath();
+  };
+
+  ctx.save();
+  drawPill(trackX, trackY, trackW, trackH, trackR);
   ctx.fillStyle = '#F8FAFC';
-  const barWidth = Math.max(2, Math.round(size * 0.11));
-  const barX = Math.round(size * 0.67);
-  ctx.fillRect(barX, Math.round(top), barWidth, Math.round(bottom - top));
+  ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = '#DC2626';
+  ctx.fillRect(trackX, trackY, fillW, trackH);
+  ctx.restore();
 
   return new Promise((resolve) => {
     canvas.toBlob((blob) => {

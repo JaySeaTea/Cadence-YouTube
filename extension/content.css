@@ -1,18 +1,36 @@
 .cadence-watch-bar {
   position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 100%;
   box-sizing: border-box;
   margin: 4px 0 10px 0;
-  padding: 6px 10px;
+  padding: 7px 10px 6px;
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(15, 23, 42, 0.04);
   font-family: Roboto, Arial, sans-serif;
   font-size: 12px;
   color: inherit;
+}
+
+.cadence-watch-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  background: linear-gradient(
+    270deg,
+    #dc2626 0%,
+    rgba(220, 38, 38, 0.72) 32%,
+    rgba(220, 38, 38, 0.14) 68%,
+    rgba(220, 38, 38, 0) 100%
+  );
+  pointer-events: none;
 }
 
 html[dark] .cadence-watch-bar {
@@ -139,29 +157,48 @@ html[dark] .cadence-brand-btn:hover {
 }
 
 .cadence-brand-emblem {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 
 .cadence-brand-name {
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: #0f172a;
 }
 
 html[dark] .cadence-brand-name {
-  color: #e2e8f0;
+  color: #f8fafc;
 }
 
 .cadence-brand-btn:hover .cadence-brand-name {
   color: inherit;
 }
 
-.cadence-brand-tagline {
-  opacity: 0.82;
+.cadence-brand-sep {
+  display: inline-block;
+  width: 1.5px;
+  height: 12px;
+  border-radius: 999px;
+  background: #dc2626;
+  margin: 0 1px;
+  flex-shrink: 0;
 }
 
+.cadence-brand-tagline {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  font-style: italic;
+  color: #64748b;
+}
+
+html[dark] .cadence-brand-tagline {
+  color: #94a3b8;
+}
+
+.cadence-brand-btn.is-tagline-collapsed .cadence-brand-sep,
 .cadence-brand-btn.is-tagline-collapsed .cadence-brand-tagline {
   display: none;
 }
@@ -702,12 +739,13 @@ html[dark] .cadence-rule-plus {
   right: 20px;
   bottom: 68px;
   z-index: 1200;
+  overflow: hidden;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  padding: 10px 12px;
+  padding: 12px 12px 10px;
   border-radius: 8px;
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -718,6 +756,23 @@ html[dark] .cadence-rule-plus {
   pointer-events: none;
   transform: translateY(6px);
   transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.cadence-stopped-banner::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  background: linear-gradient(
+    90deg,
+    #dc2626 0%,
+    rgba(220, 38, 38, 0.72) 45%,
+    rgba(220, 38, 38, 0.16) 80%,
+    rgba(220, 38, 38, 0) 100%
+  );
+  pointer-events: none;
 }
 
 .cadence-stopped-banner.cadence-visible {
@@ -776,23 +831,27 @@ html[dark] .cadence-rule-plus {
   flex-shrink: 0;
 }
 
-.cadence-play-next-btn {
+.cadence-home-btn {
   background: #dc2626;
   border-color: #dc2626;
+  color: #ffffff;
 }
 
-.cadence-play-next-btn:hover:not(:disabled) {
+.cadence-home-btn:hover:not(:disabled) {
   background: #b91c1c;
-}
-
-.cadence-home-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: #b91c1c;
 }
 
 .cadence-wl-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(30, 41, 59, 0.88);
+  border: 1.5px solid rgba(251, 113, 133, 0.82);
+  color: #ffe4e6;
+}
+
+.cadence-wl-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.94);
+  border-color: #fda4af;
+  color: #ffffff;
 }
 
 .cadence-wl-btn.is-removing {

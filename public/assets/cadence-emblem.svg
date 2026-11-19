@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
   <rect x="0" y="0" width="1024" height="1024" rx="225.28" ry="225.28" fill="#0F172A" />
-  <polygon points="245.76,256 614.4,512 245.76,768" fill="#DC2626" />
-  <rect x="686.08" y="256" width="113" height="512" fill="#F8FAFC" />
+  <polygon points="363.52,209.92 732.16,419.84 363.52,629.76" fill="#EF4444" />
+  <rect x="179.2" y="727.04" width="665.6" height="122.88" rx="61.44" fill="#F8FAFC" />
+  <path d="M 240.64 727.04 H 478.72 V 849.92 H 240.64 A 61.44 61.44 0 0 1 240.64 727.04 Z" fill="#DC2626" />
 </svg>

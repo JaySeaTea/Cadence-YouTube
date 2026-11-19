@@ -135,8 +135,9 @@
   const CADENCE_EMBLEM_SVG =
     '<svg class="cadence-brand-emblem" viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
     '<rect x="0.75" y="0.75" width="18.5" height="18.5" rx="4.5" fill="#0F172A" stroke="rgba(255,255,255,0.22)" stroke-width="1"/>' +
-    '<path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444"/>' +
-    '<rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC"/>' +
+    '<path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444"/>' +
+    '<rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC"/>' +
+    '<path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626"/>' +
     '</svg>';
 
   const REPLAY_ICON_SVG =
@@ -1690,7 +1691,8 @@
       <span class="cadence-brand-sizer" aria-hidden="true">
         ${CADENCE_EMBLEM_SVG}
         <span class="cadence-brand-name">Cadence</span>
-        <span class="cadence-brand-tagline">- YouTube at your speed</span>
+        <span class="cadence-brand-sep"></span>
+        <span class="cadence-brand-tagline">YOUTUBE AT YOUR SPEED</span>
       </span>
 
       <div class="cadence-row-top">
@@ -1727,7 +1729,8 @@
         <button type="button" class="cadence-brand-btn" title="Cadence - YouTube at your speed (Click to open All Cadence Options)">
           ${CADENCE_EMBLEM_SVG}
           <span class="cadence-brand-name">Cadence</span>
-          <span class="cadence-brand-tagline">- YouTube at your speed</span>
+          <span class="cadence-brand-sep" aria-hidden="true"></span>
+          <span class="cadence-brand-tagline">YOUTUBE AT YOUR SPEED</span>
         </button>
       </div>
 

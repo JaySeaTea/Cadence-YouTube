@@ -162,20 +162,27 @@ function buildEmblemSvgGroup(
     const x0 = centerX - boxSize / 2;
     const y0 = centerY - boxSize / 2;
     const rx = +(boxSize * 0.22).toFixed(1);
-    const left = +(x0 + boxSize * 0.24).toFixed(1);
-    const top = +(y0 + boxSize * 0.25).toFixed(1);
-    const bottom = +(y0 + boxSize * 0.75).toFixed(1);
-    const midX = +(x0 + boxSize * 0.6).toFixed(1);
-    const midY = +(y0 + boxSize * 0.5).toFixed(1);
-    const barX = +(x0 + boxSize * 0.67).toFixed(1);
-    const barW = Math.round(boxSize * 0.11);
-    const barH = +(bottom - top).toFixed(1);
+    const triLeft = +(x0 + boxSize * 0.355).toFixed(1);
+    const triTop = +(y0 + boxSize * 0.205).toFixed(1);
+    const triBottom = +(y0 + boxSize * 0.615).toFixed(1);
+    const triTipX = +(x0 + boxSize * 0.715).toFixed(1);
+    const triMidY = +(y0 + boxSize * 0.41).toFixed(1);
+
+    const trackX = +(x0 + boxSize * 0.175).toFixed(1);
+    const trackY = +(y0 + boxSize * 0.71).toFixed(1);
+    const trackW = +(boxSize * 0.65).toFixed(1);
+    const trackH = +(boxSize * 0.12).toFixed(1);
+    const trackR = +(trackH / 2).toFixed(1);
+    const fillRight = +(trackX + trackW * 0.45).toFixed(1);
+    const capEnd = +(trackX + trackR).toFixed(1);
+    const trackBottom = +(trackY + trackH).toFixed(1);
 
     return [
       `  <g filter="url(#emblemGlow)">`,
       `    <rect x="${x0}" y="${y0}" width="${boxSize}" height="${boxSize}" rx="${rx}" fill="#0F172A" stroke="#334155" stroke-width="3" />`,
-      `    <polygon points="${left},${top} ${midX},${midY} ${left},${bottom}" fill="url(#playRedGrad)" />`,
-      `    <rect x="${barX}" y="${top}" width="${barW}" height="${barH}" rx="4" fill="#F8FAFC" />`,
+      `    <polygon points="${triLeft},${triTop} ${triTipX},${triMidY} ${triLeft},${triBottom}" fill="url(#playRedGrad)" />`,
+      `    <rect x="${trackX}" y="${trackY}" width="${trackW}" height="${trackH}" rx="${trackR}" fill="#F8FAFC" />`,
+      `    <path d="M ${capEnd} ${trackY} H ${fillRight} V ${trackBottom} H ${capEnd} A ${trackR} ${trackR} 0 0 1 ${capEnd} ${trackY} Z" fill="#DC2626" />`,
       `  </g>`,
     ].join('\n');
   }
@@ -501,28 +508,38 @@ function drawEmblemOnCanvas(
     ctx.strokeStyle = 'rgba(71, 85, 105, 0.72)';
     ctx.stroke();
 
-    const left = x0 + boxSize * 0.24;
-    const top = y0 + boxSize * 0.25;
-    const bottom = y0 + boxSize * 0.75;
-    const midX = x0 + boxSize * 0.6;
-    const midY = y0 + boxSize * 0.5;
-    const barX = x0 + boxSize * 0.67;
-    const barW = boxSize * 0.11;
+    const triLeft = x0 + boxSize * 0.355;
+    const triTop = y0 + boxSize * 0.205;
+    const triBottom = y0 + boxSize * 0.615;
+    const triTipX = x0 + boxSize * 0.715;
+    const triMidY = y0 + boxSize * 0.41;
 
-    const triGrad = ctx.createLinearGradient(left, top, midX, bottom);
+    const triGrad = ctx.createLinearGradient(triLeft, triTop, triTipX, triBottom);
     triGrad.addColorStop(0, '#EF4444');
     triGrad.addColorStop(1, '#DC2626');
     ctx.beginPath();
-    ctx.moveTo(left, top);
-    ctx.lineTo(midX, midY);
-    ctx.lineTo(left, bottom);
+    ctx.moveTo(triLeft, triTop);
+    ctx.lineTo(triTipX, triMidY);
+    ctx.lineTo(triLeft, triBottom);
     ctx.closePath();
     ctx.fillStyle = triGrad;
     ctx.fill();
 
-    drawRoundedRectPath(ctx, barX, top, barW, bottom - top, 4 * scale);
+    const trackX = x0 + boxSize * 0.175;
+    const trackY = y0 + boxSize * 0.71;
+    const trackW = boxSize * 0.65;
+    const trackH = boxSize * 0.12;
+    const trackR = trackH / 2;
+
+    ctx.save();
+    drawRoundedRectPath(ctx, trackX, trackY, trackW, trackH, trackR);
     ctx.fillStyle = '#F8FAFC';
     ctx.fill();
+    ctx.clip();
+    ctx.fillStyle = '#DC2626';
+    ctx.fillRect(trackX, trackY, trackW * 0.45, trackH);
+    ctx.restore();
+
     ctx.restore();
     return;
   }

@@ -60,4 +60,4 @@ export interface ExtensionEventLog {
   detail: string;
 }
 
-export type ActiveTab = 'simulator' | 'layout' | 'rules' | 'code' | 'install';
+export type ActiveTab = 'simulator' | 'layout' | 'branding' | 'rules' | 'code' | 'install';

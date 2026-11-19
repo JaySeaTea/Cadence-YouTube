@@ -139,7 +139,7 @@ function buildDurationSizerText(text: string): string {
 }
 
 const CadenceEmblem: React.FC = () => (
-  <svg viewBox="0 0 20 20" aria-hidden="true" className="w-4 h-4 shrink-0">
+  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="w-4 h-4 shrink-0">
     <rect
       x="0.75"
       y="0.75"
@@ -150,8 +150,9 @@ const CadenceEmblem: React.FC = () => (
       stroke="rgba(255,255,255,0.22)"
       strokeWidth="1"
     />
-    <path d="M5.2 5.1L12.5 10L5.2 14.9V5.1Z" fill="#EF4444" />
-    <rect x="13.7" y="5.1" width="2" height="9.8" rx="0.8" fill="#F8FAFC" />
+    <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444" />
+    <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC" />
+    <path d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z" fill="#DC2626" />
   </svg>
 );
 
@@ -771,13 +772,19 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
         className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-slate-300/85 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer group"
       >
         <CadenceEmblem />
-        <span className="font-display font-semibold tracking-tight text-slate-200 group-hover:text-white">
+        <span className="font-display font-bold tracking-[-0.015em] text-slate-100 group-hover:text-white">
           Cadence
         </span>
         {!collapseTagline && (
-          <span className="text-slate-400 group-hover:text-slate-300">
-            - YouTube at your speed
-          </span>
+          <>
+            <span
+              aria-hidden="true"
+              className="inline-block w-[1.5px] h-3 rounded-full mx-0.5 bg-red-600 shrink-0"
+            />
+            <span className="text-[10px] font-semibold tracking-[0.06em] italic text-slate-400 group-hover:text-slate-300">
+              YOUTUBE AT YOUR SPEED
+            </span>
+          </>
         )}
       </button>
     );
@@ -796,8 +803,16 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
     return (
       <div
         ref={barContainerRef}
-        className="relative w-full rounded-lg bg-white/[0.08] border border-white/[0.14] px-2.5 py-1.5 space-y-1.5 text-xs text-slate-100"
+        className="relative overflow-hidden w-full rounded-lg bg-white/[0.08] border border-white/[0.14] px-2.5 pb-1.5 pt-2 space-y-1.5 text-xs text-slate-100"
       >
+        <div
+          aria-hidden="true"
+          className="absolute top-0 left-0 right-0 h-[2.5px] pointer-events-none"
+          style={{
+            background:
+              'linear-gradient(270deg, #dc2626 0%, rgba(220, 38, 38, 0.72) 32%, rgba(220, 38, 38, 0.14) 68%, rgba(220, 38, 38, 0) 100%)',
+          }}
+        />
         {renderToastOverlay()}
 
         {/* Hidden intrinsic sizer for exact full-tagline collision detection across fonts/zoom */}
@@ -807,8 +822,11 @@ export const ToolbarLayoutLab: React.FC<ToolbarLayoutLabProps> = ({
           className="absolute left-0 top-0 invisible pointer-events-none select-none inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap"
         >
           <CadenceEmblem />
-          <span className="font-display font-semibold tracking-tight">Cadence</span>
-          <span>- YouTube at your speed</span>
+          <span className="font-display font-bold tracking-[-0.015em]">Cadence</span>
+          <span className="inline-block w-[1.5px] h-3 rounded-full mx-0.5 bg-red-600" />
+          <span className="text-[10px] font-semibold tracking-[0.06em] italic">
+            YOUTUBE AT YOUR SPEED
+          </span>
         </span>
 
         {/* ROW 1: Speed Source + Real-Time Duration (Left) · Brand Signature (Right) */}

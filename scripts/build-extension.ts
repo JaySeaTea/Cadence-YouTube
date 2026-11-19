@@ -121,17 +121,38 @@ function insidePlayTriangle(
   return Math.abs(y - midY) <= halfHeight;
 }
 
+function insideCapsule(
+  x: number,
+  y: number,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number
+): boolean {
+  if (x < left || x > right || y < top || y > bottom) return false;
+  const r = (bottom - top) / 2;
+  const cy = top + r;
+  const cx = Math.max(left + r, Math.min(right - r, x));
+  const dx = x - cx;
+  const dy = y - cy;
+  return dx * dx + dy * dy <= r * r;
+}
+
 function renderCadenceIconPng(size: number): Buffer {
   const radius = size * 0.22;
-  const left = size * 0.24;
-  const top = size * 0.25;
-  const bottom = size * 0.75;
-  const midX = size * 0.6;
-  const midY = size * 0.5;
-  const barX = size * 0.67;
-  const barWidth = Math.max(2, Math.round(size * 0.11));
+  const triLeft = size * 0.355;
+  const triTop = size * 0.205;
+  const triBottom = size * 0.615;
+  const triTipX = size * 0.715;
+  const triMidY = size * 0.41;
 
-  // 4x4 supersampling for clean anti-aliased edges across 16px–128px icons
+  const trackLeft = size * 0.175;
+  const trackRight = size * 0.825;
+  const trackTop = size * 0.71;
+  const trackBottom = size * 0.83;
+  const fillRight = trackLeft + (trackRight - trackLeft) * 0.45;
+
+  // 4x4 supersampling for clean anti-aliased edges across 16px–1024px icons
   const samples = 4;
   const stride = 1 + size * 4;
   const rawScanlines = Buffer.alloc(size * stride);
@@ -155,17 +176,27 @@ function renderCadenceIconPng(size: number): Buffer {
             continue;
           }
 
-          if (x >= barX && x <= barX + barWidth && y >= top && y <= bottom) {
-            // Stop bar: #F8FAFC (248, 250, 252)
-            rSum += 248;
-            gSum += 250;
-            bSum += 252;
-            aSum += 255;
-          } else if (insidePlayTriangle(x, y, left, top, bottom, midX, midY)) {
-            // Play triangle: #DC2626 (220, 38, 38)
-            rSum += 220;
-            gSum += 38;
-            bSum += 38;
+          if (insideCapsule(x, y, trackLeft, trackRight, trackTop, trackBottom)) {
+            if (x <= fillRight) {
+              // 45% progress fill: #DC2626 (220, 38, 38)
+              rSum += 220;
+              gSum += 38;
+              bSum += 38;
+              aSum += 255;
+            } else {
+              // Track background: #F8FAFC (248, 250, 252)
+              rSum += 248;
+              gSum += 250;
+              bSum += 252;
+              aSum += 255;
+            }
+          } else if (
+            insidePlayTriangle(x, y, triLeft, triTop, triBottom, triTipX, triMidY)
+          ) {
+            // Play triangle: #EF4444 (239, 68, 68)
+            rSum += 239;
+            gSum += 68;
+            bSum += 68;
             aSum += 255;
           } else {
             // Rounded badge background: #0F172A (15, 23, 42)
@@ -222,20 +253,27 @@ const PUBLIC_ASSETS_OUT_DIR = path.join(process.cwd(), 'public', 'assets');
 function renderCadenceEmblemSvg(): string {
   const size = 1024;
   const radius = +(size * 0.22).toFixed(2); // 225.28
-  const left = +(size * 0.24).toFixed(2); // 245.76
-  const top = +(size * 0.25).toFixed(2); // 256
-  const bottom = +(size * 0.75).toFixed(2); // 768
-  const midX = +(size * 0.6).toFixed(2); // 614.4
-  const midY = +(size * 0.5).toFixed(2); // 512
-  const barX = +(size * 0.67).toFixed(2); // 686.08
-  const barWidth = Math.max(2, Math.round(size * 0.11)); // 113
-  const barHeight = +(bottom - top).toFixed(2); // 512
+  const triLeft = +(size * 0.355).toFixed(2); // 363.52
+  const triTop = +(size * 0.205).toFixed(2); // 209.92
+  const triBottom = +(size * 0.615).toFixed(2); // 629.76
+  const triTipX = +(size * 0.715).toFixed(2); // 732.16
+  const triMidY = +(size * 0.41).toFixed(2); // 419.84
+
+  const trackX = +(size * 0.175).toFixed(2); // 179.2
+  const trackY = +(size * 0.71).toFixed(2); // 727.04
+  const trackW = +(size * 0.65).toFixed(2); // 665.6
+  const trackH = +(size * 0.12).toFixed(2); // 122.88
+  const trackR = +(trackH / 2).toFixed(2); // 61.44
+  const fillRight = +(trackX + trackW * 0.45).toFixed(2); // 478.72
+  const capEnd = +(trackX + trackR).toFixed(2); // 240.64
+  const trackBottom = +(trackY + trackH).toFixed(2); // 849.92
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none">`,
     `  <rect x="0" y="0" width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#0F172A" />`,
-    `  <polygon points="${left},${top} ${midX},${midY} ${left},${bottom}" fill="#DC2626" />`,
-    `  <rect x="${barX}" y="${top}" width="${barWidth}" height="${barHeight}" fill="#F8FAFC" />`,
+    `  <polygon points="${triLeft},${triTop} ${triTipX},${triMidY} ${triLeft},${triBottom}" fill="#EF4444" />`,
+    `  <rect x="${trackX}" y="${trackY}" width="${trackW}" height="${trackH}" rx="${trackR}" fill="#F8FAFC" />`,
+    `  <path d="M ${capEnd} ${trackY} H ${fillRight} V ${trackBottom} H ${capEnd} A ${trackR} ${trackR} 0 0 1 ${capEnd} ${trackY} Z" fill="#DC2626" />`,
     `</svg>`,
     '',
   ].join('\n');

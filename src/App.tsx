@@ -24,6 +24,7 @@ import { ChannelRulesManager } from './components/ChannelRulesManager';
 import { ExtensionCodeViewer } from './components/ExtensionCodeViewer';
 import { InstallGuide } from './components/InstallGuide';
 import { ToolbarLayoutLab } from './components/ToolbarLayoutLab';
+import { BrandComparisonLab } from './components/BrandComparisonLab';
 import { ExternalLink } from 'lucide-react';
 
 const LEGACY_V1_KEYS = [
@@ -427,6 +428,7 @@ export default function App() {
   const navItems: { id: ActiveTab; label: string }[] = [
     { id: 'simulator', label: 'Live Simulator' },
     { id: 'layout', label: 'v1.4.0 Layout Lab' },
+    { id: 'branding', label: 'Brand Lab' },
     { id: 'rules', label: 'Channel Rules' },
     { id: 'code', label: 'Extension Files' },
     { id: 'install', label: 'Install Guide' },
@@ -437,16 +439,41 @@ export default function App() {
       {/* Strict 3-Zone Top Bar Contract */}
       <header className="bg-[#0F1624] border-b border-slate-800/90">
         <div className="max-w-[1320px] mx-auto flex items-center justify-between gap-8 px-6 py-4">
-          {/* Zone 1: Single text element wordmark */}
+          {/* Zone 1: Single-line brand mark + wordmark */}
           <a
             href="#simulator"
             onClick={(e) => {
               e.preventDefault();
               setActiveTab('simulator');
             }}
-            className="text-lg font-bold tracking-tight text-slate-100 font-display whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-slate-100 font-display whitespace-nowrap shrink-0"
           >
-            Cadence
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 20 20"
+              fill="none"
+              aria-hidden="true"
+              className="shrink-0"
+            >
+              <rect
+                x="0.75"
+                y="0.75"
+                width="18.5"
+                height="18.5"
+                rx="4.5"
+                fill="#0F172A"
+                stroke="rgba(255,255,255,0.22)"
+                strokeWidth="1"
+              />
+              <path d="M7.1 4.1L14.3 8.2L7.1 12.3V4.1Z" fill="#EF4444" />
+              <rect x="3.5" y="14.2" width="13" height="2.4" rx="1.2" fill="#F8FAFC" />
+              <path
+                d="M4.7 14.2H9.35V16.6H4.7A1.2 1.2 0 0 1 4.7 14.2Z"
+                fill="#DC2626"
+              />
+            </svg>
+            <span>Cadence</span>
           </a>
 
           {/* Zone 2: 4 clean single-line text navigation links */}
@@ -542,6 +569,8 @@ export default function App() {
         {activeTab === 'layout' && (
           <ToolbarLayoutLab onBackToSimulator={() => setActiveTab('simulator')} />
         )}
+
+        {activeTab === 'branding' && <BrandComparisonLab />}
 
         {activeTab === 'rules' && (
           <ChannelRulesManager
