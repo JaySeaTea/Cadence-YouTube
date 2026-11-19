@@ -37,9 +37,11 @@
   let isDestroyed = false;
 
   let state = {
-    settings: {"enabled":true,"perChannelSpeedEnabled":true,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"disableVideoPreviews":true,"showWatchLaterRemoveAction":true,"settingsSchemaVersion":6},
+    settings: {"enabled":true,"perChannelSpeedEnabled":true,"defaultSpeed":1,"stopAfterVideoEnds":true,"showInPageControlBar":true,"showSpeedToast":true,"convertShortsToWatch":true,"disableVideoPreviews":true,"showWatchLaterRemoveAction":true,"popupTimeSavedDisplay":"daily","barTimeSavedDisplay":"daily","settingsSchemaVersion":7},
     presets: [{"id":"music","label":"Music & Performance","description":"Preserves natural pitch, rhythm, and studio mix timing.","speed":1},{"id":"educational","label":"Educational & Explainer","description":"Brisk comprehension pace for tutorials, science, and essays.","speed":1.5},{"id":"podcast","label":"Podcast & Lecture","description":"High-efficiency cadence for long-form conversations and seminars.","speed":2}],
     rules: [],
+    totalTimeSavedSec: 0,
+    savedTimeByDay: {},
   };
 
   let currentChannel = null;
@@ -302,6 +304,37 @@
     const hrs = Math.floor(totalMins / 60);
     const mins = totalMins % 60;
     return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  }
+
+  function getLocalDateKey(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function computeGlobalBarSavedModel() {
+    const mode = (state.settings && state.settings.barTimeSavedDisplay) || 'daily';
+    if (mode === 'off') {
+      return { visible: false, text: '', title: '' };
+    }
+    if (mode === 'total') {
+      const totalSec = Math.max(0, Math.floor(Number(state.totalTimeSavedSec) || 0));
+      return {
+        visible: true,
+        text: `Saved ${formatCompactDuration(totalSec)}`,
+        title: 'Total lifetime time saved — configure in Options → Panel 02',
+      };
+    }
+    const todayKey = getLocalDateKey();
+    const byDay =
+      state.savedTimeByDay && typeof state.savedTimeByDay === 'object' ? state.savedTimeByDay : {};
+    const todaySec = Math.max(0, Math.floor(Number(byDay[todayKey]) || 0));
+    return {
+      visible: true,
+      text: `Saved ${formatCompactDuration(todaySec)} today`,
+      title: 'Daily time saved today — configure in Options → Panel 02',
+    };
   }
 
   function formatExactMinutesSeconds(rawSec) {
@@ -788,17 +821,51 @@
     brandBtn.classList.toggle('is-tagline-collapsed', shouldCollapse);
   }
 
+  function syncRow3SavedReadoutCollapse(bar) {
+    if (!bar) return;
+    const rowBot = bar.querySelector('.cadence-row-bot');
+    const fineGroup = bar.querySelector('.cadence-fine-group');
+    const ruleSlot = bar.querySelector('.cadence-rule-slot');
+    const globalWrap = bar.querySelector('.cadence-bar-global-saved-wrap');
+    const globalSizer = bar.querySelector('.cadence-global-saved-sizer');
+    if (!rowBot || !fineGroup || !ruleSlot) return;
+
+    const model = computeGlobalBarSavedModel();
+    if (!model.visible || !globalWrap) {
+      rowBot.classList.remove('is-global-saved-hidden');
+      return;
+    }
+
+    const availableWidth = rowBot.clientWidth;
+    if (availableWidth <= 0) return;
+
+    const leftWidth = Math.ceil(fineGroup.getBoundingClientRect().width);
+    const ruleWidth = Math.ceil(ruleSlot.getBoundingClientRect().width);
+    const sizerWidth = Math.ceil(
+      (globalSizer && globalSizer.getBoundingClientRect().width) || 110
+    );
+    const shouldHide = leftWidth + ruleWidth + sizerWidth + 24 > availableWidth;
+    rowBot.classList.toggle('is-global-saved-hidden', shouldHide);
+  }
+
   function ensureBarResizeObserver(bar) {
     disconnectBarResizeObserver();
     if (!bar || typeof ResizeObserver === 'undefined') return;
     barResizeObserver = new ResizeObserver(() => {
       syncRow1BrandCollapse(bar);
+      syncRow3SavedReadoutCollapse(bar);
     });
     barResizeObserver.observe(bar);
     const rowTop = bar.querySelector('.cadence-row-top');
     const leftEl = bar.querySelector('.cadence-row-top-left');
+    const rowBot = bar.querySelector('.cadence-row-bot');
+    const fineGroup = bar.querySelector('.cadence-fine-group');
+    const ruleSlot = bar.querySelector('.cadence-rule-slot');
     if (rowTop) barResizeObserver.observe(rowTop);
     if (leftEl) barResizeObserver.observe(leftEl);
+    if (rowBot) barResizeObserver.observe(rowBot);
+    if (fineGroup) barResizeObserver.observe(fineGroup);
+    if (ruleSlot) barResizeObserver.observe(ruleSlot);
   }
 
   function applyDurationModelToBar(bar, model) {
@@ -906,6 +973,37 @@
     savedEl.classList.toggle('is-slower', savedModel.tone === 'slower');
   }
 
+  function applyGlobalSavedTimeToBar(bar) {
+    if (!bar) return;
+    const globalWrap = bar.querySelector('.cadence-bar-global-saved-wrap');
+    const globalEl = bar.querySelector('.cadence-bar-global-saved');
+    const globalSizer = bar.querySelector('.cadence-global-saved-sizer');
+    if (!globalWrap || !globalEl) return;
+
+    const model = computeGlobalBarSavedModel();
+    if (!model.visible || !model.text) {
+      if (globalWrap.style.display !== 'none') {
+        globalWrap.style.display = 'none';
+      }
+      syncRow3SavedReadoutCollapse(bar);
+      return;
+    }
+
+    if (globalWrap.style.display !== 'inline-flex') {
+      globalWrap.style.display = 'inline-flex';
+    }
+    if (globalEl.textContent !== model.text) {
+      globalEl.textContent = model.text;
+    }
+    if (globalSizer && globalSizer.textContent !== model.text) {
+      globalSizer.textContent = model.text;
+    }
+    if (globalEl.title !== (model.title || '')) {
+      globalEl.title = model.title || '';
+    }
+    syncRow3SavedReadoutCollapse(bar);
+  }
+
   function computeBarUiModeSignature() {
     if (!currentChannel) return 'none';
     const adActive = isCurrentAdActive();
@@ -946,6 +1044,7 @@
     }
     applyDurationModelToBar(bar, computeDurationSlotModel());
     applySavedTimeModelToBar(bar, computeSavedTimeModel());
+    applyGlobalSavedTimeToBar(bar);
     syncRow1BrandCollapse(bar);
   }
 
@@ -1787,6 +1886,7 @@
       </div>
 
       <div class="cadence-row-bot">
+        <span class="cadence-global-saved-sizer" aria-hidden="true"></span>
         <div class="cadence-fine-group">
           <button type="button" data-step="-0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : ''}"${adActive ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : 'Decrease playback speed by 0.05× for this video session'}">−0.05</button>
           <button type="button" data-step="0.05" class="cadence-step-chip${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Increase playback speed by 0.05× for this video session'}">+0.05</button>
@@ -1794,8 +1894,14 @@
           <span class="cadence-saved-time" style="display:none;"></span>
         </div>
 
-        <div class="cadence-rule-slot">
-          ${ruleSlotHtml}
+        <div class="cadence-row-bot-right">
+          <span class="cadence-bar-global-saved-wrap" style="display:none;">
+            <span class="cadence-bar-global-saved"></span>
+            <span class="cadence-row3-sep" aria-hidden="true"></span>
+          </span>
+          <div class="cadence-rule-slot">
+            ${ruleSlotHtml}
+          </div>
         </div>
       </div>
     `;
@@ -1804,6 +1910,7 @@
       applyDurationModelToBar(bar, durationModel);
     }
     applySavedTimeModelToBar(bar, savedTimeModel);
+    applyGlobalSavedTimeToBar(bar);
 
     const brandBtn = bar.querySelector('.cadence-brand-btn');
     if (brandBtn) {
@@ -1968,6 +2075,7 @@
 
     ensureBarResizeObserver(bar);
     syncRow1BrandCollapse(bar);
+    syncRow3SavedReadoutCollapse(bar);
 
     if (barToastVisible) {
       positionBarToast();
@@ -2718,6 +2826,18 @@
         return;
       }
       if (area !== 'local') return;
+      let shouldUpdateBarOnly = false;
+      let shouldReapplyChannel = false;
+
+      if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+        state.totalTimeSavedSec = Math.max(0, Math.floor(changes.totalTimeSavedSec.newValue));
+        shouldUpdateBarOnly = true;
+      }
+      if (changes.savedTimeByDay && typeof changes.savedTimeByDay.newValue === 'object') {
+        state.savedTimeByDay = changes.savedTimeByDay.newValue || {};
+        shouldUpdateBarOnly = true;
+      }
+
       if (changes.settings) {
         state.settings = changes.settings.newValue;
         syncPreviewBlockerStyle();
@@ -2725,37 +2845,57 @@
         if (existingBanner) {
           syncStoppedBannerWatchLaterUi(existingBanner);
         }
+        shouldReapplyChannel = true;
       }
-      if (changes.presets) state.presets = changes.presets.newValue;
-      if (changes.rules) state.rules = changes.rules.newValue;
+      if (changes.presets) {
+        state.presets = changes.presets.newValue;
+        shouldReapplyChannel = true;
+      }
+      if (changes.rules) {
+        state.rules = changes.rules.newValue;
+        shouldReapplyChannel = true;
+      }
 
-      if (maybeRedirectShortsInContent()) return;
+      if (shouldReapplyChannel) {
+        if (maybeRedirectShortsInContent()) return;
 
-      postToBridge('CONFIG_UPDATE', {
-        enabled: state.settings.enabled,
-        perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
-        convertShortsToWatch: state.settings.convertShortsToWatch !== false,
-        disableVideoPreviews: state.settings.disableVideoPreviews !== false,
-        showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
-        hasSessionOverride: Boolean(
-          currentChannel && hasActiveSessionOverride(currentChannel.videoId)
-        ),
-        stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
-        defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
-        targetSpeed: activeSpeed,
-      });
-      applyForCurrentChannel(false);
+        postToBridge('CONFIG_UPDATE', {
+          enabled: state.settings.enabled,
+          perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+          convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+          disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+          showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
+          hasSessionOverride: Boolean(
+            currentChannel && hasActiveSessionOverride(currentChannel.videoId)
+          ),
+          stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
+          defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
+          targetSpeed: activeSpeed,
+        });
+        applyForCurrentChannel(false);
+      } else if (shouldUpdateBarOnly) {
+        const bar = document.getElementById('cadence-watch-bar');
+        if (bar) {
+          applyGlobalSavedTimeToBar(bar);
+        }
+      }
     });
   } catch (_) {
     teardownInstance();
     return;
   }
 
-  safeStorageGet(['settings', 'presets', 'rules']).then((stored) => {
+  safeStorageGet(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'savedTimeByDay']).then((stored) => {
     if (!stored || isDestroyed || !isExtensionContextValid()) return;
     if (stored.settings) state.settings = stored.settings;
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
+    if (typeof stored.totalTimeSavedSec === 'number') {
+      state.totalTimeSavedSec = Math.max(0, Math.floor(stored.totalTimeSavedSec));
+    }
+    if (stored.savedTimeByDay && typeof stored.savedTimeByDay === 'object') {
+      state.savedTimeByDay = stored.savedTimeByDay;
+    }
 
     syncPreviewBlockerStyle();
 

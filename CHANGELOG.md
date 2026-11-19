@@ -4,6 +4,19 @@ All notable changes to **Cadence — YouTube Speed Controller & Autoplay Stop** 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-11-19
+
+### Added
+- **Option A Historical Saved-Time Analytics (`savedTimeByDay`)**:
+  - Records accelerated playback savings into compact local calendar-day buckets (`YYYY-MM-DD -> seconds`, ~2–3 KB/year) across both Chrome MV3 and Firefox MV3 extensions as well as the interactive Workbench.
+  - **Collapsible 4-Panel Options Page (`01`–`04`)**: All panels open compactly collapsed with distinct header icons (`01` sliders, `02` clock, `03` gauge, `04` channel rules), **Expand All / Collapse All**, hidden collapsed summaries when expanded, green-formatted saved-time summaries in Panel `02`, and a merged Lifetime Total + 4-column neutral KPI band (`Today`, `This Week`, `This Month`, `Streak`).
+  - **Unified Interactive Chart Stage**: Single-column selector switching between **Weekly Breakdown (`Mon–Sun`)**, **4-Week Breakdown (`Mon–Sun` Calendar Weeks)**, **Long-Term Monthly Trend (`6M` / `12M`)**, and **12-Week Consistency & Weekday Pace**, complete with click drill-down (`Monthly Trend → 4-Week → Weekly`), breadcrumbs, neutral dropdown focus outline, and clean hover reset on mouse leave.
+- **Dual Saved-Time Readout Controls (`Total Time Saved` / `Daily Time Saved` / `Off`, defaulting to `Daily Time Saved`)**:
+  - **Toolbar Popup**: Moves `☕` Buy Me a Coffee and `v1.7.1` to the top-right header, while rendering the configurable `Saved Xm today` / `Saved Xh Ym` readout in the bottom-right footer.
+  - **Below-Video Watch Bar**: Keeps per-video `Saves Xm Ys` next to `Reset` on bottom-left and places the configurable global saved-time readout on bottom-right in front of the Channel Rule controls, automatically hiding it cleanly on narrow viewports via `ResizeObserver` so controls never wrap or collide.
+- **Safe Legacy Upgrade & Backup Compatibility**:
+  - Upgrading installs keep pre-existing `totalTimeSavedSec` and original `timeSavedSince` dates intact without dumping legacy hours into Today or fabricating past bars, clearly annotating prior totals via `"Includes X recorded prior to daily tracking."` while JSON export/import supports both daily-bucketed and older backups.
+
 ## [1.7.0] - 2026-11-18
 
 ### Changed

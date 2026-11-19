@@ -161,8 +161,41 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
   'UC2systemsCraft04',
 ]);
 
+function getLocalDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return \`\${y}-\${m}-\${d}\`;
+}
+
+function isValidDisplayMode(val) {
+  return val === 'total' || val === 'daily' || val === 'off';
+}
+
+function sanitizeSavedTimeByDay(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(k)) continue;
+    const sec = Math.floor(Number(v) || 0);
+    if (Number.isFinite(sec) && sec > 0) {
+      out[k] = sec;
+    }
+  }
+  return out;
+}
+
+let savedTimeWriteQueue = Promise.resolve();
+
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
+  const existing = await chrome.storage.local.get([
+    'settings',
+    'presets',
+    'rules',
+    'totalTimeSavedSec',
+    'timeSavedSince',
+    'savedTimeByDay',
+  ]);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -183,9 +216,15 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.showWatchLaterRemoveAction === 'boolean'
           ? cleanInitialSettings.showWatchLaterRemoveAction
           : true,
-      settingsSchemaVersion: 6,
+      popupTimeSavedDisplay: isValidDisplayMode(cleanInitialSettings.popupTimeSavedDisplay)
+        ? cleanInitialSettings.popupTimeSavedDisplay
+        : 'daily',
+      barTimeSavedDisplay: isValidDisplayMode(cleanInitialSettings.barTimeSavedDisplay)
+        ? cleanInitialSettings.barTimeSavedDisplay
+        : 'daily',
+      settingsSchemaVersion: 7,
     };
-  } else if (prevSchemaVersion < 6) {
+  } else if (prevSchemaVersion < 7) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -201,7 +240,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.showWatchLaterRemoveAction === 'boolean'
           ? existing.settings.showWatchLaterRemoveAction
           : true,
-      settingsSchemaVersion: 6,
+      popupTimeSavedDisplay: isValidDisplayMode(existing.settings.popupTimeSavedDisplay)
+        ? existing.settings.popupTimeSavedDisplay
+        : 'daily',
+      barTimeSavedDisplay: isValidDisplayMode(existing.settings.barTimeSavedDisplay)
+        ? existing.settings.barTimeSavedDisplay
+        : 'daily',
+      settingsSchemaVersion: 7,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;
@@ -217,6 +262,14 @@ chrome.runtime.onInstalled.addListener(async () => {
     existing.timeSavedSince <= 0
   ) {
     nextPayload.timeSavedSince = Date.now();
+  }
+
+  if (
+    !existing.savedTimeByDay ||
+    typeof existing.savedTimeByDay !== 'object' ||
+    Array.isArray(existing.savedTimeByDay)
+  ) {
+    nextPayload.savedTimeByDay = {};
   }
 
   if (!existing.presets) {
@@ -268,10 +321,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'CADENCE_ADD_TIME_SAVED') {
     const delta = Math.max(0, Math.floor(Number(message.deltaSec) || 0));
     if (delta > 0) {
-      chrome.storage.local.get(['totalTimeSavedSec']).then((data) => {
-        const current = Math.max(0, Number(data.totalTimeSavedSec) || 0);
-        chrome.storage.local.set({ totalTimeSavedSec: current + delta }).catch(() => {});
-      }).catch(() => {});
+      savedTimeWriteQueue = savedTimeWriteQueue
+        .then(async () => {
+          const data = await chrome.storage.local.get([
+            'totalTimeSavedSec',
+            'savedTimeByDay',
+            'timeSavedSince',
+          ]);
+          const current = Math.max(0, Math.floor(Number(data.totalTimeSavedSec) || 0));
+          const byDay = sanitizeSavedTimeByDay(data.savedTimeByDay);
+          const todayKey = getLocalDateKey();
+          byDay[todayKey] = (byDay[todayKey] || 0) + delta;
+          const patch = {
+            totalTimeSavedSec: current + delta,
+            savedTimeByDay: byDay,
+          };
+          if (
+            typeof data.timeSavedSince !== 'number' ||
+            !Number.isFinite(data.timeSavedSince) ||
+            data.timeSavedSince <= 0
+          ) {
+            patch.timeSavedSince = Date.now();
+          }
+          await chrome.storage.local.set(patch);
+        })
+        .catch(() => {});
     }
     sendResponse({ ok: true });
     return false;
@@ -283,11 +357,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.timeSavedSince > 0
         ? message.timeSavedSince
         : Date.now();
-    chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince: resetSince }).then(() => {
-      sendResponse({ ok: true, totalTimeSavedSec: 0, timeSavedSince: resetSince });
-    }).catch(() => {
-      sendResponse({ ok: false });
-    });
+    savedTimeWriteQueue = savedTimeWriteQueue
+      .then(() =>
+        chrome.storage.local.set({
+          totalTimeSavedSec: 0,
+          savedTimeByDay: {},
+          timeSavedSince: resetSince,
+        })
+      )
+      .then(() => {
+        sendResponse({
+          ok: true,
+          totalTimeSavedSec: 0,
+          savedTimeByDay: {},
+          timeSavedSince: resetSince,
+        });
+      })
+      .catch(() => {
+        sendResponse({ ok: false });
+      });
     return true; // async
   }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {
@@ -3968,6 +4056,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     settings: ${JSON.stringify(settings)},
     presets: ${JSON.stringify(presets)},
     rules: ${JSON.stringify(rules)},
+    totalTimeSavedSec: 0,
+    savedTimeByDay: {},
   };
 
   let currentChannel = null;
@@ -4230,6 +4320,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const hrs = Math.floor(totalMins / 60);
     const mins = totalMins % 60;
     return mins > 0 ? \`\${hrs}h \${mins}m\` : \`\${hrs}h\`;
+  }
+
+  function getLocalDateKey(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return \`\${y}-\${m}-\${d}\`;
+  }
+
+  function computeGlobalBarSavedModel() {
+    const mode = (state.settings && state.settings.barTimeSavedDisplay) || 'daily';
+    if (mode === 'off') {
+      return { visible: false, text: '', title: '' };
+    }
+    if (mode === 'total') {
+      const totalSec = Math.max(0, Math.floor(Number(state.totalTimeSavedSec) || 0));
+      return {
+        visible: true,
+        text: \`Saved \${formatCompactDuration(totalSec)}\`,
+        title: 'Total lifetime time saved — configure in Options → Panel 02',
+      };
+    }
+    const todayKey = getLocalDateKey();
+    const byDay =
+      state.savedTimeByDay && typeof state.savedTimeByDay === 'object' ? state.savedTimeByDay : {};
+    const todaySec = Math.max(0, Math.floor(Number(byDay[todayKey]) || 0));
+    return {
+      visible: true,
+      text: \`Saved \${formatCompactDuration(todaySec)} today\`,
+      title: 'Daily time saved today — configure in Options → Panel 02',
+    };
   }
 
   function formatExactMinutesSeconds(rawSec) {
@@ -4716,17 +4837,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     brandBtn.classList.toggle('is-tagline-collapsed', shouldCollapse);
   }
 
+  function syncRow3SavedReadoutCollapse(bar) {
+    if (!bar) return;
+    const rowBot = bar.querySelector('.cadence-row-bot');
+    const fineGroup = bar.querySelector('.cadence-fine-group');
+    const ruleSlot = bar.querySelector('.cadence-rule-slot');
+    const globalWrap = bar.querySelector('.cadence-bar-global-saved-wrap');
+    const globalSizer = bar.querySelector('.cadence-global-saved-sizer');
+    if (!rowBot || !fineGroup || !ruleSlot) return;
+
+    const model = computeGlobalBarSavedModel();
+    if (!model.visible || !globalWrap) {
+      rowBot.classList.remove('is-global-saved-hidden');
+      return;
+    }
+
+    const availableWidth = rowBot.clientWidth;
+    if (availableWidth <= 0) return;
+
+    const leftWidth = Math.ceil(fineGroup.getBoundingClientRect().width);
+    const ruleWidth = Math.ceil(ruleSlot.getBoundingClientRect().width);
+    const sizerWidth = Math.ceil(
+      (globalSizer && globalSizer.getBoundingClientRect().width) || 110
+    );
+    const shouldHide = leftWidth + ruleWidth + sizerWidth + 24 > availableWidth;
+    rowBot.classList.toggle('is-global-saved-hidden', shouldHide);
+  }
+
   function ensureBarResizeObserver(bar) {
     disconnectBarResizeObserver();
     if (!bar || typeof ResizeObserver === 'undefined') return;
     barResizeObserver = new ResizeObserver(() => {
       syncRow1BrandCollapse(bar);
+      syncRow3SavedReadoutCollapse(bar);
     });
     barResizeObserver.observe(bar);
     const rowTop = bar.querySelector('.cadence-row-top');
     const leftEl = bar.querySelector('.cadence-row-top-left');
+    const rowBot = bar.querySelector('.cadence-row-bot');
+    const fineGroup = bar.querySelector('.cadence-fine-group');
+    const ruleSlot = bar.querySelector('.cadence-rule-slot');
     if (rowTop) barResizeObserver.observe(rowTop);
     if (leftEl) barResizeObserver.observe(leftEl);
+    if (rowBot) barResizeObserver.observe(rowBot);
+    if (fineGroup) barResizeObserver.observe(fineGroup);
+    if (ruleSlot) barResizeObserver.observe(ruleSlot);
   }
 
   function applyDurationModelToBar(bar, model) {
@@ -4834,6 +4989,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     savedEl.classList.toggle('is-slower', savedModel.tone === 'slower');
   }
 
+  function applyGlobalSavedTimeToBar(bar) {
+    if (!bar) return;
+    const globalWrap = bar.querySelector('.cadence-bar-global-saved-wrap');
+    const globalEl = bar.querySelector('.cadence-bar-global-saved');
+    const globalSizer = bar.querySelector('.cadence-global-saved-sizer');
+    if (!globalWrap || !globalEl) return;
+
+    const model = computeGlobalBarSavedModel();
+    if (!model.visible || !model.text) {
+      if (globalWrap.style.display !== 'none') {
+        globalWrap.style.display = 'none';
+      }
+      syncRow3SavedReadoutCollapse(bar);
+      return;
+    }
+
+    if (globalWrap.style.display !== 'inline-flex') {
+      globalWrap.style.display = 'inline-flex';
+    }
+    if (globalEl.textContent !== model.text) {
+      globalEl.textContent = model.text;
+    }
+    if (globalSizer && globalSizer.textContent !== model.text) {
+      globalSizer.textContent = model.text;
+    }
+    if (globalEl.title !== (model.title || '')) {
+      globalEl.title = model.title || '';
+    }
+    syncRow3SavedReadoutCollapse(bar);
+  }
+
   function computeBarUiModeSignature() {
     if (!currentChannel) return 'none';
     const adActive = isCurrentAdActive();
@@ -4874,6 +5060,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     applyDurationModelToBar(bar, computeDurationSlotModel());
     applySavedTimeModelToBar(bar, computeSavedTimeModel());
+    applyGlobalSavedTimeToBar(bar);
     syncRow1BrandCollapse(bar);
   }
 
@@ -5715,6 +5902,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       </div>
 
       <div class="cadence-row-bot">
+        <span class="cadence-global-saved-sizer" aria-hidden="true"></span>
         <div class="cadence-fine-group">
           <button type="button" data-step="-0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : ''}"\${adActive ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : 'Decrease playback speed by 0.05× for this video session'}">−0.05</button>
           <button type="button" data-step="0.05" class="cadence-step-chip\${adActive ? ' is-ad-blocked' : isStepUpLiveBlocked ? ' is-live-blocked' : ''}"\${adActive || isStepUpLiveBlocked ? ' aria-disabled="true"' : ''} title="\${adActive ? adBlockedTooltip : isStepUpLiveBlocked ? liveBlockedTooltip : 'Increase playback speed by 0.05× for this video session'}">+0.05</button>
@@ -5722,8 +5910,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           <span class="cadence-saved-time" style="display:none;"></span>
         </div>
 
-        <div class="cadence-rule-slot">
-          \${ruleSlotHtml}
+        <div class="cadence-row-bot-right">
+          <span class="cadence-bar-global-saved-wrap" style="display:none;">
+            <span class="cadence-bar-global-saved"></span>
+            <span class="cadence-row3-sep" aria-hidden="true"></span>
+          </span>
+          <div class="cadence-rule-slot">
+            \${ruleSlotHtml}
+          </div>
         </div>
       </div>
     \`;
@@ -5732,6 +5926,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       applyDurationModelToBar(bar, durationModel);
     }
     applySavedTimeModelToBar(bar, savedTimeModel);
+    applyGlobalSavedTimeToBar(bar);
 
     const brandBtn = bar.querySelector('.cadence-brand-btn');
     if (brandBtn) {
@@ -5896,6 +6091,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     ensureBarResizeObserver(bar);
     syncRow1BrandCollapse(bar);
+    syncRow3SavedReadoutCollapse(bar);
 
     if (barToastVisible) {
       positionBarToast();
@@ -6646,6 +6842,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       if (area !== 'local') return;
+      let shouldUpdateBarOnly = false;
+      let shouldReapplyChannel = false;
+
+      if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+        state.totalTimeSavedSec = Math.max(0, Math.floor(changes.totalTimeSavedSec.newValue));
+        shouldUpdateBarOnly = true;
+      }
+      if (changes.savedTimeByDay && typeof changes.savedTimeByDay.newValue === 'object') {
+        state.savedTimeByDay = changes.savedTimeByDay.newValue || {};
+        shouldUpdateBarOnly = true;
+      }
+
       if (changes.settings) {
         state.settings = changes.settings.newValue;
         syncPreviewBlockerStyle();
@@ -6653,37 +6861,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (existingBanner) {
           syncStoppedBannerWatchLaterUi(existingBanner);
         }
+        shouldReapplyChannel = true;
       }
-      if (changes.presets) state.presets = changes.presets.newValue;
-      if (changes.rules) state.rules = changes.rules.newValue;
+      if (changes.presets) {
+        state.presets = changes.presets.newValue;
+        shouldReapplyChannel = true;
+      }
+      if (changes.rules) {
+        state.rules = changes.rules.newValue;
+        shouldReapplyChannel = true;
+      }
 
-      if (maybeRedirectShortsInContent()) return;
+      if (shouldReapplyChannel) {
+        if (maybeRedirectShortsInContent()) return;
 
-      postToBridge('CONFIG_UPDATE', {
-        enabled: state.settings.enabled,
-        perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
-        convertShortsToWatch: state.settings.convertShortsToWatch !== false,
-        disableVideoPreviews: state.settings.disableVideoPreviews !== false,
-        showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
-        hasSessionOverride: Boolean(
-          currentChannel && hasActiveSessionOverride(currentChannel.videoId)
-        ),
-        stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
-        defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
-        targetSpeed: activeSpeed,
-      });
-      applyForCurrentChannel(false);
+        postToBridge('CONFIG_UPDATE', {
+          enabled: state.settings.enabled,
+          perChannelSpeedEnabled: state.settings.perChannelSpeedEnabled,
+          convertShortsToWatch: state.settings.convertShortsToWatch !== false,
+          disableVideoPreviews: state.settings.disableVideoPreviews !== false,
+          showWatchLaterRemoveAction: state.settings.showWatchLaterRemoveAction !== false,
+          hasSessionOverride: Boolean(
+            currentChannel && hasActiveSessionOverride(currentChannel.videoId)
+          ),
+          stopAfterVideoEnds: state.settings.stopAfterVideoEnds,
+          defaultSpeed: Number(state.settings.defaultSpeed) || 1.0,
+          targetSpeed: activeSpeed,
+        });
+        applyForCurrentChannel(false);
+      } else if (shouldUpdateBarOnly) {
+        const bar = document.getElementById('cadence-watch-bar');
+        if (bar) {
+          applyGlobalSavedTimeToBar(bar);
+        }
+      }
     });
   } catch (_) {
     teardownInstance();
     return;
   }
 
-  safeStorageGet(['settings', 'presets', 'rules']).then((stored) => {
+  safeStorageGet(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'savedTimeByDay']).then((stored) => {
     if (!stored || isDestroyed || !isExtensionContextValid()) return;
     if (stored.settings) state.settings = stored.settings;
     if (stored.presets) state.presets = stored.presets;
     if (stored.rules) state.rules = stored.rules;
+    if (typeof stored.totalTimeSavedSec === 'number') {
+      state.totalTimeSavedSec = Math.max(0, Math.floor(stored.totalTimeSavedSec));
+    }
+    if (stored.savedTimeByDay && typeof stored.savedTimeByDay === 'object') {
+      state.savedTimeByDay = stored.savedTimeByDay;
+    }
 
     syncPreviewBlockerStyle();
 
@@ -6929,6 +7157,7 @@ html[dark] .cadence-brand-tagline {
 }
 
 .cadence-row-bot {
+  position: relative;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -6940,6 +7169,19 @@ html[dark] .cadence-brand-tagline {
 
 html[dark] .cadence-row-bot {
   border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.cadence-global-saved-sizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  white-space: nowrap;
+  padding-right: 16px;
 }
 
 .cadence-bar-buttons {
@@ -6954,6 +7196,52 @@ html[dark] .cadence-row-bot {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+
+.cadence-row-bot-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cadence-bar-global-saved-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cadence-bar-global-saved {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  font-style: normal;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #059669;
+}
+
+html[dark] .cadence-bar-global-saved {
+  color: #34d399;
+}
+
+.cadence-row3-sep {
+  width: 1px;
+  height: 11px;
+  background: rgba(148, 163, 184, 0.34);
+  flex-shrink: 0;
+}
+
+html[dark] .cadence-row3-sep {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.cadence-row-bot.is-global-saved-hidden .cadence-bar-global-saved-wrap {
+  display: none !important;
 }
 
 .cadence-bar-divider {
@@ -7257,7 +7545,6 @@ html[dark] .cadence-saved-time.is-saved {
 }
 
 .cadence-rule-slot {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -7628,7 +7915,8 @@ html[dark] .cadence-rule-plus {
         overflow: hidden;
         display: flex;
         align-items: center;
-        justify-content: flex-start;
+        justify-content: space-between;
+        gap: 10px;
         background: #111827;
         padding: 14px 16px 12px;
         border-bottom: 1px solid #1e293b;
@@ -7673,20 +7961,55 @@ html[dark] .cadence-rule-plus {
         color: #94a3b8;
         margin-top: 2px;
       }
+      .header-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
       .popup-main {
         padding: 16px 16px 8px;
       }
       .version-meta {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        color: #cbd5e1;
+        color: #94a3b8;
         font-variant-numeric: tabular-nums;
       }
+      .footer-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .footer-sep {
+        color: #475569;
+        font-size: 11px;
+      }
+      .footer-rules-meta {
+        font-size: 11px;
+        color: #64748b;
+        font-variant-numeric: tabular-nums;
+      }
+      .footer-saved-btn {
+        border: none;
+        background: none;
+        padding: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #34d399;
+        font-variant-numeric: tabular-nums;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: color 0.15s;
+      }
+      .footer-saved-btn:hover { color: #6ee7b7; }
       .link-btn {
         border: none;
         background: none;
         color: #e2e8f0;
-        font-size: 12.5px;
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
         text-decoration: underline;
@@ -7913,6 +8236,10 @@ html[dark] .cadence-rule-plus {
           <span class="brand-tagline">YOUTUBE AT YOUR SPEED</span>
         </div>
       </div>
+      <div class="header-actions">
+        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
+        <span class="version-meta" id="header-version"></span>
+      </div>
     </div>
 
     <div class="popup-main">
@@ -7974,11 +8301,12 @@ html[dark] .cadence-rule-plus {
     </div>
 
     <div class="footer-row">
-      <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
-      <div style="display:inline-flex; align-items:center; gap:8px;">
-        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
-        <span class="version-meta" id="footer-version"></span>
+      <div class="footer-left">
+        <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <span class="footer-rules-meta" id="footer-rules-count">0 rules</span>
       </div>
+      <button type="button" id="footer-saved-time" class="footer-saved-btn" style="display:none;"></button>
     </div>
 
     <script src="popup.js"></script>
@@ -7995,16 +8323,40 @@ html[dark] .cadence-rule-plus {
     return (str || '').trim().toLowerCase();
   }
 
+  function getLocalDateKey(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return \`\${y}-\${m}-\${d}\`;
+  }
+
+  function formatCompactSavedDuration(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec === 0) return '0s';
+    if (safeSec < 60) return \`\${safeSec}s\`;
+    const totalMins = Math.round(safeSec / 60);
+    if (totalMins < 60) return \`\${totalMins}m\`;
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? \`\${hrs}h \${mins}m\` : \`\${hrs}h\`;
+  }
+
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
       : '';
-  const footerVersionEl = document.getElementById('footer-version');
-  if (footerVersionEl && manifestVersion) {
-    footerVersionEl.textContent = \`v\${manifestVersion}\`;
+  const headerVersionEl = document.getElementById('header-version');
+  if (headerVersionEl && manifestVersion) {
+    headerVersionEl.textContent = \`v\${manifestVersion}\`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
+  const stored = await chrome.storage.local.get([
+    'settings',
+    'rules',
+    'presets',
+    'totalTimeSavedSec',
+    'savedTimeByDay',
+  ]);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
@@ -8014,10 +8366,17 @@ html[dark] .cadence-rule-plus {
     disableVideoPreviews: true,
     showWatchLaterRemoveAction: true,
     showSpeedToast: true,
+    popupTimeSavedDisplay: 'daily',
+    barTimeSavedDisplay: 'daily',
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 6,
+    settingsSchemaVersion: 7,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
+  let savedTimeByDay =
+    stored.savedTimeByDay && typeof stored.savedTimeByDay === 'object'
+      ? stored.savedTimeByDay
+      : {};
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -8040,7 +8399,32 @@ html[dark] .cadence-rule-plus {
   const stepperValEl = document.getElementById('stepper-value');
   const stepDownBtn = document.getElementById('step-down');
   const stepUpBtn = document.getElementById('step-up');
+  const footerRulesCountEl = document.getElementById('footer-rules-count');
+  const footerSavedBtnEl = document.getElementById('footer-saved-time');
   let popupToastTimer = null;
+
+  function renderFooterMeta() {
+    if (footerRulesCountEl) {
+      footerRulesCountEl.textContent = \`\${rules.length} \${rules.length === 1 ? 'rule' : 'rules'}\`;
+    }
+    if (!footerSavedBtnEl) return;
+    const mode = settings.popupTimeSavedDisplay || 'daily';
+    if (mode === 'off') {
+      footerSavedBtnEl.style.display = 'none';
+      return;
+    }
+    footerSavedBtnEl.style.display = 'inline-block';
+    if (mode === 'total') {
+      footerSavedBtnEl.textContent = \`Saved \${formatCompactSavedDuration(totalTimeSavedSec)}\`;
+      footerSavedBtnEl.title = 'Total lifetime time saved — Click to view analytics in Options';
+    } else {
+      const todaySec = Math.max(0, Math.floor(Number(savedTimeByDay[getLocalDateKey()]) || 0));
+      footerSavedBtnEl.textContent = \`Saved \${formatCompactSavedDuration(todaySec)} today\`;
+      footerSavedBtnEl.title = 'Daily time saved today — Click to view analytics in Options';
+    }
+  }
+
+  renderFooterMeta();
 
   function showPopupToast(message) {
     if (!popupToastEl) return;
@@ -8087,6 +8471,38 @@ html[dark] .cadence-rule-plus {
       chrome.runtime.openOptionsPage();
     });
   }
+  if (footerSavedBtnEl) {
+    footerSavedBtnEl.addEventListener('click', () => {
+      chrome.runtime.openOptionsPage();
+    });
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    let shouldRenderFooter = false;
+    if (changes.settings && typeof changes.settings.newValue === 'object') {
+      Object.assign(settings, changes.settings.newValue);
+      if (toggleStop) toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
+      if (toggleShorts) toggleShorts.checked = settings.convertShortsToWatch !== false;
+      if (togglePreviews) togglePreviews.checked = settings.disableVideoPreviews !== false;
+      shouldRenderFooter = true;
+    }
+    if (changes.rules && Array.isArray(changes.rules.newValue)) {
+      rules = changes.rules.newValue;
+      shouldRenderFooter = true;
+    }
+    if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+      totalTimeSavedSec = Math.max(0, Math.floor(changes.totalTimeSavedSec.newValue));
+      shouldRenderFooter = true;
+    }
+    if (changes.savedTimeByDay && typeof changes.savedTimeByDay.newValue === 'object') {
+      savedTimeByDay = changes.savedTimeByDay.newValue || {};
+      shouldRenderFooter = true;
+    }
+    if (shouldRenderFooter) {
+      renderFooterMeta();
+    }
+  });
 
   function findRuleForChannel(meta) {
     if (!meta) return null;
@@ -8704,24 +9120,93 @@ html[dark] .cadence-rule-plus {
         font-size: 13px;
       }
       .status-banner.visible { display: block; }
+
+      /* Collapsible Panel Chrome (v1.7.1) */
       .panel {
         background: #111827;
         border: 1px solid #1e293b;
         border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 24px;
+        margin-bottom: 16px;
+        overflow: hidden;
       }
-      .panel-head {
+      .panel-header-btn {
+        width: 100%;
         display: flex;
-        align-items: baseline;
+        align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 14px;
+        gap: 14px;
+        padding: 15px 20px;
+        background: transparent;
+        border: none;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
       }
+      .panel-header-btn:hover { background: rgba(30, 41, 59, 0.45); }
+      .panel-header-btn:focus-visible { outline: 2px solid #475569; outline-offset: -2px; }
+      .panel-header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+        flex: 1;
+      }
+      .panel-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .panel-icon svg { width: 16px; height: 16px; }
+      .panel-icon.icon-red { background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.28); color: #f87171; }
+      .panel-icon.icon-emerald { background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.28); color: #34d399; }
+      .panel-icon.icon-sky { background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.28); color: #38bdf8; }
+      .panel-icon.icon-amber { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.28); color: #fbbf24; }
+      .panel-title-wrap { min-width: 0; flex: 1; }
+      .panel-title-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
       h2 { font-size: 16px; font-weight: 600; color: #f8fafc; }
-      .count-label { font-size: 12px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+      .panel-sub { font-size: 12px; color: #64748b; }
+      .panel-summary {
+        margin-top: 3px;
+        font-size: 12px;
+        color: #94a3b8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-variant-numeric: tabular-nums;
+      }
+      .panel.is-expanded .panel-summary { display: none; }
+      .text-emerald { color: #34d399; font-weight: 600; }
+      .text-muted { color: #64748b; }
+      .panel-expand-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: 1px solid #1e293b;
+        background: #0b0f19;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 600;
+        flex-shrink: 0;
+        transition: color 0.15s, border-color 0.15s;
+      }
+      .panel-header-btn:hover .panel-expand-pill { color: #f8fafc; border-color: #334155; }
+      .panel-chevron { width: 14px; height: 14px; transition: transform 0.15s ease; }
+      .panel.is-expanded .panel-chevron { transform: rotate(180deg); }
+      .panel-body {
+        display: none;
+        padding: 18px 20px 20px;
+        border-top: 1px solid rgba(30, 41, 59, 0.85);
+      }
+      .panel.is-expanded .panel-body { display: block; }
 
-      /* Toggle switch styles & grouped separation (#33, #37) */
+      /* Toggle switch styles & grouped separation */
       .options-group {
         background: #0b0f19;
         border: 1px solid #1e293b;
@@ -8776,23 +9261,77 @@ html[dark] .cadence-rule-plus {
       input:checked + .slider { background-color: #dc2626; }
       input:checked + .slider:before { transform: translateX(18px); }
 
-      /* Lifetime stats & reset */
-      .stat-card {
+      /* Panel 02: Dual Readout Bar, Merged Option B Metric Band & Unified Chart Stage */
+      .readout-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px 16px;
+        padding-bottom: 14px;
+        margin-bottom: 14px;
+        border-bottom: 1px solid #1e293b;
+      }
+      .readout-menus-wrap {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 16px;
+      }
+      .readout-block { display: flex; flex-direction: column; gap: 6px; }
+      .readout-head {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 16px;
+        gap: 8px;
         flex-wrap: wrap;
+      }
+      .readout-label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #cbd5e1;
+      }
+      .readout-preview {
+        font-size: 11px;
+        color: #64748b;
+        font-variant-numeric: tabular-nums;
+      }
+      .readout-preview strong {
+        color: #cbd5e1;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-weight: 600;
+      }
+      .segmented-control {
+        display: inline-flex;
+        padding: 3px;
+        border-radius: 7px;
         background: #0b0f19;
         border: 1px solid #1e293b;
-        border-radius: 8px;
-        padding: 16px 20px;
+        gap: 2px;
       }
-      .stat-val { font-size: 26px; font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
-      .stat-since { font-size: 14px; font-weight: 500; color: #94a3b8; margin-left: 6px; }
-      .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+      .seg-btn {
+        border: 1px solid transparent;
+        background: transparent;
+        color: #94a3b8;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+      }
+      .seg-btn:hover { color: #f8fafc; }
+      .seg-btn.active {
+        background: #1e293b;
+        border-color: #475569;
+        color: #f8fafc;
+        font-weight: 600;
+      }
+
       .inline-confirm-box {
-        margin-top: 14px;
+        margin-bottom: 14px;
         padding: 14px;
         background: #181216;
         border: 1px solid #ef4444;
@@ -8802,6 +9341,379 @@ html[dark] .cadence-rule-plus {
       .inline-confirm-box.visible { display: block; }
       .confirm-prompt { font-size: 12px; color: #fca5a5; font-weight: 600; margin-bottom: 8px; }
       .confirm-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+      .metric-band {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+      }
+      @media (min-width: 720px) {
+        .metric-band { grid-template-columns: 235px minmax(0, 1fr); align-items: center; }
+      }
+      .hero-meta-kicker {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #94a3b8;
+      }
+      .stat-val {
+        font-size: 26px;
+        font-weight: 700;
+        color: #34d399;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.15;
+        margin-top: 2px;
+      }
+      .stat-since { font-size: 12px; font-weight: 500; color: #94a3b8; margin-top: 4px; }
+      .stat-sub { font-size: 11px; color: #64748b; margin-top: 2px; font-variant-numeric: tabular-nums; }
+      .stat-legacy-note {
+        font-size: 11px;
+        color: #fbbf24;
+        margin-top: 6px;
+        line-height: 1.35;
+      }
+
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        padding-top: 12px;
+        border-top: 1px solid #1e293b;
+      }
+      @media (min-width: 520px) {
+        .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      }
+      @media (min-width: 720px) {
+        .kpi-grid { padding-top: 0; padding-left: 16px; border-top: none; border-left: 1px solid #1e293b; }
+      }
+      .kpi-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #94a3b8;
+      }
+      .kpi-value {
+        font-size: 18px;
+        font-weight: 700;
+        color: #f8fafc;
+        font-variant-numeric: tabular-nums;
+        margin-top: 3px;
+      }
+      .kpi-sub { font-size: 11px; color: #64748b; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+      .chart-stage {
+        background: #0b0f19;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 14px 16px;
+      }
+      .chart-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px 14px;
+        margin-bottom: 12px;
+      }
+      .chart-title-block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .chart-select-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+      .chart-view-select {
+        appearance: none;
+        background: #111827;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        padding: 5px 28px 5px 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #f8fafc;
+        cursor: pointer;
+        outline: none;
+        transition: border-color 0.15s ease, background-color 0.15s ease;
+      }
+      .chart-view-select:hover { border-color: #475569; background: #1e293b; }
+      .chart-view-select:focus,
+      .chart-view-select:focus-visible { outline: none; border-color: #64748b; }
+      .chart-select-chevron {
+        position: absolute;
+        right: 8px;
+        width: 14px;
+        height: 14px;
+        color: #94a3b8;
+        pointer-events: none;
+      }
+      .chart-breadcrumb {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        color: #64748b;
+        flex-wrap: wrap;
+      }
+      .crumb-btn {
+        border: none;
+        background: none;
+        padding: 0;
+        color: #94a3b8;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .crumb-btn:hover { color: #f8fafc; text-decoration: underline; }
+      .crumb-current { color: #cbd5e1; font-weight: 600; }
+      .chart-controls-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .chart-hint-inline { font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums; }
+      .nav-capsule {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        background: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 6px;
+        padding: 2px;
+      }
+      .nav-step-btn {
+        border: none;
+        background: transparent;
+        color: #94a3b8;
+        padding: 3px 7px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .nav-step-btn:hover:not(:disabled) { color: #f8fafc; background: #1e293b; }
+      .nav-step-btn:disabled { opacity: 0.32; cursor: not-allowed; }
+      .nav-period-btn {
+        border: none;
+        background: transparent;
+        color: #cbd5e1;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        min-width: 76px;
+        text-align: center;
+        cursor: pointer;
+      }
+      .nav-period-btn:hover:not(:disabled) { color: #ffffff; background: #1e293b; }
+
+      .chart-range-sub {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 10px;
+        font-size: 11px;
+        color: #94a3b8;
+        font-variant-numeric: tabular-nums;
+      }
+      .empty-bucket-notice {
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        border-radius: 7px;
+        background: rgba(30, 41, 59, 0.5);
+        border: 1px solid #1e293b;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #cbd5e1;
+      }
+
+      /* Bar plot layout */
+      .bar-plot {
+        display: grid;
+        gap: 8px;
+        align-items: end;
+      }
+      .bar-col {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        background: transparent;
+        border: none;
+        padding: 0;
+        color: inherit;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      .bar-col.is-non-interactive { cursor: default; }
+      .bar-top-val {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+        color: #64748b;
+        white-space: nowrap;
+        min-height: 14px;
+        transition: color 0.12s;
+      }
+      .bar-track {
+        width: 100%;
+        height: 120px;
+        border-radius: 6px;
+        background: rgba(17, 24, 39, 0.72);
+        border: 1px solid rgba(30, 41, 59, 0.7);
+        display: flex;
+        align-items: flex-end;
+        padding: 4px;
+        transition: border-color 0.12s, background-color 0.12s;
+      }
+      .bar-col.is-hovered .bar-track {
+        border-color: rgba(100, 116, 139, 0.85);
+        background: rgba(30, 41, 59, 0.55);
+      }
+      .bar-col.is-hovered .bar-top-val { color: #f8fafc; }
+      .bar-fill {
+        width: 100%;
+        border-radius: 3px;
+        transition: height 0.25s ease, background-color 0.15s ease;
+      }
+      .bar-axis {
+        text-align: center;
+        line-height: 1.25;
+      }
+      .bar-axis-main {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        color: #94a3b8;
+        transition: color 0.12s;
+      }
+      .bar-axis-sub {
+        display: block;
+        font-size: 10px;
+        color: #64748b;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .bar-col.is-current-emerald .bar-axis-main { color: #34d399; }
+      .bar-col.is-current-sky .bar-axis-main { color: #38bdf8; }
+      .bar-col.is-current-amber .bar-axis-main { color: #fbbf24; }
+      .bar-col.is-hovered:not(.is-current-emerald):not(.is-current-sky):not(.is-current-amber) .bar-axis-main {
+        color: #f8fafc;
+      }
+
+      /* Consistency Heatmap + Weekday Pace */
+      .consistency-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      @media (min-width: 720px) {
+        .consistency-grid { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
+      }
+      .heatmap-wrap { overflow-x: auto; padding-bottom: 4px; }
+      .heatmap-inner { display: inline-flex; flex-direction: column; gap: 4px; min-width: max-content; }
+      .heatmap-months {
+        display: grid;
+        grid-template-columns: 28px repeat(12, 18px);
+        gap: 4px;
+        font-size: 10px;
+        color: #64748b;
+        margin-bottom: 2px;
+      }
+      .heatmap-row {
+        display: grid;
+        grid-template-columns: 28px repeat(12, 18px);
+        gap: 4px;
+        align-items: center;
+      }
+      .heatmap-day-label { font-size: 10px; color: #64748b; }
+      .heat-cell {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        border: 1px solid rgba(30, 41, 59, 0.65);
+        background: #111827;
+        cursor: pointer;
+        padding: 0;
+        transition: transform 0.1s;
+      }
+      .heat-cell:hover { transform: scale(1.1); }
+      .heat-cell.is-future { border-color: rgba(30, 41, 59, 0.35); background: rgba(17, 24, 39, 0.35); opacity: 0.4; cursor: default; }
+      .heat-cell.lvl-1 { background: rgba(6, 78, 59, 0.8); border-color: rgba(6, 95, 70, 0.9); }
+      .heat-cell.lvl-2 { background: rgba(4, 120, 87, 0.85); border-color: rgba(5, 150, 105, 0.9); }
+      .heat-cell.lvl-3 { background: rgba(16, 185, 129, 0.88); border-color: rgba(52, 211, 153, 0.9); }
+      .heat-cell.lvl-4 { background: #34d399; border-color: #6ee7b7; }
+      .heat-cell.is-today { box-shadow: 0 0 0 1px rgba(248, 250, 252, 0.85); }
+      .legend-scale { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: #64748b; }
+      .legend-box { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #1e293b; }
+
+      .rhythm-panel {
+        border-top: 1px solid #1e293b;
+        padding-top: 12px;
+      }
+      @media (min-width: 720px) {
+        .rhythm-panel { border-top: none; padding-top: 0; border-left: 1px solid #1e293b; padding-left: 16px; }
+      }
+      .rhythm-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #94a3b8;
+        margin-bottom: 8px;
+      }
+      .rhythm-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 4px;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      .rhythm-row.is-hovered { background: rgba(30, 41, 59, 0.7); }
+      .rhythm-day { width: 28px; color: #94a3b8; font-weight: 500; flex-shrink: 0; }
+      .rhythm-bar-bg {
+        flex: 1;
+        height: 8px;
+        border-radius: 4px;
+        background: #111827;
+        border: 1px solid rgba(30, 41, 59, 0.7);
+        overflow: hidden;
+      }
+      .rhythm-bar-fill { height: 100%; border-radius: 4px; background: rgba(56, 189, 248, 0.72); }
+      .rhythm-bar-fill.is-top { background: #34d399; }
+      .rhythm-val {
+        width: 58px;
+        text-align: right;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10.5px;
+        font-variant-numeric: tabular-nums;
+        color: #cbd5e1;
+      }
+
+      .chart-footer {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(30, 41, 59, 0.85);
+        font-size: 11.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .chart-footer-inspect { color: #cbd5e1; font-weight: 500; }
+      .chart-footer-muted { color: #64748b; }
+      .chart-footer-stats { color: #64748b; }
+      .chart-footer-stats strong { color: #e2e8f0; }
 
       /* Rows & inputs */
       .preset-row, .rule-row {
@@ -8825,7 +9737,7 @@ html[dark] .cadence-rule-plus {
       .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
       .add-form input[type="text"] { flex: 1; min-width: 180px; }
 
-      /* Filter & Pagination Controls (#26) */
+      /* Filter & Pagination Controls */
       .filter-toolbar {
         background: #0b0f19;
         border: 1px solid #1e293b;
@@ -8842,16 +9754,8 @@ html[dark] .cadence-rule-plus {
         flex-wrap: wrap;
         align-items: center;
       }
-      .filter-search-input {
-        flex: 1;
-        min-width: 220px;
-      }
-      .pill-group {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
+      .filter-search-input { flex: 1; min-width: 220px; }
+      .pill-group { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
       .pill-btn {
         background: #111827;
         color: #94a3b8;
@@ -8864,11 +9768,7 @@ html[dark] .cadence-rule-plus {
         transition: all 0.15s;
       }
       .pill-btn:hover { color: #f8fafc; border-color: #475569; }
-      .pill-btn.active {
-        background: #38bdf8;
-        color: #0b0f19;
-        border-color: #38bdf8;
-      }
+      .pill-btn.active { background: #38bdf8; color: #0b0f19; border-color: #38bdf8; }
       .filter-row-bottom {
         display: flex;
         align-items: center;
@@ -8905,12 +9805,7 @@ html[dark] .cadence-rule-plus {
         transition: all 0.15s;
       }
       .page-btn:hover:not(:disabled) { background: #1e293b; color: #fff; }
-      .page-btn.active {
-        background: #dc2626;
-        color: #fff;
-        border-color: #dc2626;
-        font-weight: 600;
-      }
+      .page-btn.active { background: #dc2626; color: #fff; border-color: #dc2626; font-weight: 600; }
       .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
       /* Buttons */
@@ -8974,11 +9869,7 @@ html[dark] .cadence-rule-plus {
         white-space: nowrap;
         transition: background 0.15s, transform 0.15s;
       }
-      .coffee-btn:hover {
-        background: #fbbf24;
-        color: #0b0f19;
-        transform: translateY(-1px);
-      }
+      .coffee-btn:hover { background: #fbbf24; color: #0b0f19; transform: translateY(-1px); }
     </style>
   </head>
   <body>
@@ -9000,9 +9891,10 @@ html[dark] .cadence-rule-plus {
               <span class="title-tagline">YOUTUBE AT YOUR SPEED</span>
             </div>
           </div>
-          <p class="sub">Configure category speed profiles, manage per-channel playback rules, or import and back up your personal subscriptions as JSON.</p>
+          <p class="sub">Configure category speed profiles, inspect your daily and monthly time saved analytics, manage per-channel rules, or back up your setup as JSON.</p>
         </div>
         <div class="toolbar-actions">
+          <button type="button" id="btn-toggle-expand-all" class="ghost">Expand All</button>
           <input type="file" id="import-json-input" accept="application/json,.json" style="display:none;" />
           <button type="button" id="btn-import-json" class="ghost">Import JSON</button>
           <button type="button" id="btn-export-json" class="ghost">Backup JSON</button>
@@ -9013,177 +9905,326 @@ html[dark] .cadence-rule-plus {
 
       <div id="status-banner" class="status-banner" role="status" aria-live="polite"></div>
 
-      <!-- Panel 01: Playback & Feed Controls (#23, #33, #37) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>01. Playback &amp; Feed Controls</h2>
-          <span class="count-label">Global player defaults</span>
-        </div>
+      <!-- Panel 01: Playback & Feed Controls -->
+      <section class="panel" data-panel="01">
+        <button type="button" class="panel-header-btn" data-panel-toggle="01" aria-expanded="false">
+          <span class="panel-header-left">
+            <span class="panel-icon icon-red" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+                <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+                <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+                <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+              </svg>
+            </span>
+            <span class="panel-title-wrap">
+              <span class="panel-title-row">
+                <h2>01. Playback &amp; Feed Controls</h2>
+                <span class="panel-sub">Global player defaults</span>
+              </span>
+              <span id="summary-01" class="panel-summary"></span>
+            </span>
+          </span>
+          <span class="panel-expand-pill">
+            <span class="panel-toggle-label">Expand</span>
+            <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </button>
+        <div class="panel-body">
+          <div class="options-group">
+            <div class="options-group-head">
+              <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Stop Playback After Video Ends</h3>
+                <p>Pause when current video completes and prevent autoplay queues, Watch Later, or playlist leaps.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-stop" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Convert Shorts to Standard Player</h3>
+                <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player and rewrite feed links.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-shorts" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Disable Video Previews</h3>
+                <p>Block autoplay hover previews on Home, Search, and Feeds while keeping channel trailers intact.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-previews" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
 
-        <div class="options-group">
-          <div class="options-group-head">
-            <span class="options-group-title">Quick Playback &amp; Feed Toggles</span>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Stop Playback After Video Ends</h3>
-              <p>Pause when current video completes and prevent autoplay queues, Watch Later, or playlist leaps.</p>
+          <div class="options-group">
+            <div class="options-group-head">
+              <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-stop" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Convert Shorts to Standard Player</h3>
-              <p>Automatically redirect vertical Shorts into YouTube's full-featured desktop player and rewrite feed links.</p>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Per-Channel Playback Speed</h3>
+                <p>Remember and restore custom playback speeds automatically for individual creators.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-speed" />
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-shorts" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Disable Video Previews</h3>
-              <p>Block autoplay hover previews on Home, Search, and Feeds while keeping channel trailers intact.</p>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Show Speed Bar Below Video</h3>
+                <p>Mount the full-width Cadence 3-row speed, skip, and rule deck directly above the YouTube player title.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-bar" />
+                <span class="slider"></span>
+              </label>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-previews" />
-              <span class="slider"></span>
-            </label>
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
+                <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-watch-later" />
+                <span class="slider"></span>
+              </label>
+            </div>
           </div>
         </div>
+      </section>
 
-        <div class="options-group">
-          <div class="options-group-head">
-            <span class="options-group-title">Core Cadence &amp; End-of-Video Controls</span>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Per-Channel Playback Speed</h3>
-              <p>Remember and restore custom playback speeds automatically for individual creators.</p>
+      <!-- Panel 02: Lifetime Time Saved & Analytics -->
+      <section class="panel" data-panel="02">
+        <button type="button" class="panel-header-btn" data-panel-toggle="02" aria-expanded="false">
+          <span class="panel-header-left">
+            <span class="panel-icon icon-emerald" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </span>
+            <span class="panel-title-wrap">
+              <span class="panel-title-row">
+                <h2>02. Lifetime Time Saved</h2>
+                <span class="panel-sub">Accelerated playback analytics &amp; readout</span>
+              </span>
+              <span id="summary-02" class="panel-summary"></span>
+            </span>
+          </span>
+          <span class="panel-expand-pill">
+            <span class="panel-toggle-label">Expand</span>
+            <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </button>
+        <div class="panel-body">
+          <div class="readout-toolbar">
+            <div class="readout-menus-wrap">
+              <div class="readout-block">
+                <div class="readout-head">
+                  <span class="readout-label">Toolbar Popup Readout</span>
+                  <span id="preview-popup-readout" class="readout-preview"></span>
+                </div>
+                <div class="segmented-control" id="popup-mode-controls" role="group" aria-label="Toolbar Popup Readout">
+                  <button type="button" class="seg-btn" data-popup-mode="total">Total Time Saved</button>
+                  <button type="button" class="seg-btn" data-popup-mode="daily">Daily Time Saved</button>
+                  <button type="button" class="seg-btn" data-popup-mode="off">Off</button>
+                </div>
+              </div>
+              <div class="readout-block">
+                <div class="readout-head">
+                  <span class="readout-label">Below-Video Bar Readout</span>
+                  <span id="preview-bar-readout" class="readout-preview"></span>
+                </div>
+                <div class="segmented-control" id="bar-mode-controls" role="group" aria-label="Below-Video Bar Readout">
+                  <button type="button" class="seg-btn" data-bar-mode="total">Total Time Saved</button>
+                  <button type="button" class="seg-btn" data-bar-mode="daily">Daily Time Saved</button>
+                  <button type="button" class="seg-btn" data-bar-mode="off">Off</button>
+                </div>
+              </div>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-speed" />
-              <span class="slider"></span>
-            </label>
+            <button type="button" id="btn-open-reset" class="row-remove">Reset Counter</button>
           </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Show Speed Bar Below Video</h3>
-              <p>Mount the full-width Cadence 3-row speed, skip, and rule deck directly above the YouTube player title.</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-bar" />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <h3>Show &ldquo;Remove from Watch Later&rdquo; on Video End</h3>
-              <p>Check your logged-in Watch Later playlist when a video ends so you can remove it directly from the player pop-up.</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="toggle-watch-later" />
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
 
-      <!-- Panel 02: Lifetime Time Saved (#24) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>02. Lifetime Time Saved</h2>
-          <span class="count-label">Accelerated playback tracking</span>
-        </div>
-        <div class="stat-card">
-          <div>
-            <div id="stat-saved-value" class="stat-val">0s saved</div>
-            <div class="stat-sub">Accrues in real time whenever watching videos faster than 1.0×.</div>
+          <div id="reset-confirm-box" class="inline-confirm-box">
+            <div class="confirm-prompt">Type "Forget Time Saved" to confirm resetting all lifetime and daily history:</div>
+            <div class="confirm-row">
+              <input type="text" id="input-confirm-forget" placeholder="Forget Time Saved" style="flex:1;min-width:200px;" autocomplete="off" />
+              <button type="button" id="btn-confirm-forget" class="danger-btn" disabled>Confirm Reset</button>
+              <button type="button" id="btn-cancel-forget" class="ghost">Cancel</button>
+            </div>
           </div>
-          <button type="button" id="btn-open-reset" class="row-remove">Reset Counter</button>
-        </div>
-        <div id="reset-confirm-box" class="inline-confirm-box">
-          <div class="confirm-prompt">Type "Forget Time Saved" to confirm resetting your lifetime stats:</div>
-          <div class="confirm-row">
-            <input type="text" id="input-confirm-forget" placeholder="Forget Time Saved" style="flex:1;min-width:200px;" autocomplete="off" />
-            <button type="button" id="btn-confirm-forget" class="danger-btn" disabled>Confirm Reset</button>
-            <button type="button" id="btn-cancel-forget" class="ghost">Cancel</button>
+
+          <div class="metric-band">
+            <div>
+              <div class="hero-meta-kicker">Lifetime Time Saved</div>
+              <div id="stat-saved-value" class="stat-val">0s</div>
+              <div id="stat-since-line" class="stat-since">Since —</div>
+              <div id="stat-store-line" class="stat-sub">0 tracked days - 0.1 KB local store</div>
+              <div id="stat-legacy-line" class="stat-legacy-note" style="display:none;"></div>
+            </div>
+            <div class="kpi-grid">
+              <div>
+                <div class="kpi-label">Today</div>
+                <div id="kpi-today-val" class="kpi-value">0s</div>
+                <div id="kpi-today-sub" class="kpi-sub">Active session</div>
+              </div>
+              <div>
+                <div class="kpi-label">This Week</div>
+                <div id="kpi-week-val" class="kpi-value">0s</div>
+                <div id="kpi-week-sub" class="kpi-sub">Avg 0s / day</div>
+              </div>
+              <div>
+                <div class="kpi-label">This Month</div>
+                <div id="kpi-month-val" class="kpi-value">0s</div>
+                <div id="kpi-month-sub" class="kpi-sub">0 active days</div>
+              </div>
+              <div>
+                <div class="kpi-label">Streak</div>
+                <div id="kpi-streak-val" class="kpi-value">0d</div>
+                <div id="kpi-streak-sub" class="kpi-sub">Best day —</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="chart-stage" class="chart-stage">
+            <div class="chart-header">
+              <div class="chart-title-block">
+                <div class="chart-select-wrap">
+                  <select id="select-chart-view" class="chart-view-select" aria-label="Select Saved Time Graph">
+                    <option value="weekly">Weekly Breakdown (Mon–Sun)</option>
+                    <option value="four_week">4-Week History (Mon–Sun Weeks)</option>
+                    <option value="monthly_trend">Long-Term Monthly Trend</option>
+                    <option value="consistency">12-Week Rhythm &amp; Weekday Pace</option>
+                  </select>
+                  <svg class="chart-select-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+                <div id="chart-breadcrumb" class="chart-breadcrumb"></div>
+              </div>
+              <div id="chart-controls-right" class="chart-controls-right"></div>
+            </div>
+            <div id="chart-sub-row" class="chart-range-sub"></div>
+            <div id="chart-empty-notice" class="empty-bucket-notice" style="display:none;"></div>
+            <div id="chart-body"></div>
+            <div id="chart-footer" class="chart-footer"></div>
           </div>
         </div>
-      </div>
+      </section>
 
       <!-- Panel 03: Category Speed Profiles -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>03. Category Speed Profiles</h2>
-          <span class="count-label">Applies to linked channels</span>
+      <section class="panel" data-panel="03">
+        <button type="button" class="panel-header-btn" data-panel-toggle="03" aria-expanded="false">
+          <span class="panel-header-left">
+            <span class="panel-icon icon-sky" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>
+              </svg>
+            </span>
+            <span class="panel-title-wrap">
+              <span class="panel-title-row">
+                <h2>03. Category Speed Profiles</h2>
+                <span class="panel-sub">Applies to linked channels</span>
+              </span>
+              <span id="summary-03" class="panel-summary"></span>
+            </span>
+          </span>
+          <span class="panel-expand-pill">
+            <span class="panel-toggle-label">Expand</span>
+            <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </button>
+        <div class="panel-body">
+          <div id="presets-list"></div>
         </div>
-        <div id="presets-list"></div>
-      </div>
+      </section>
 
-      <!-- Panel 04: Saved Channel Speed Rules (#26) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h2>04. Saved Channel Speed Rules</h2>
-          <span id="rules-count" class="count-label">0 saved</span>
-        </div>
-        <form id="add-rule-form" class="add-form">
-          <input type="text" id="input-name" placeholder="Channel name (e.g. Veritasium)" required />
-          <input type="text" id="input-handle" placeholder="@handle (optional)" />
-          <select id="input-preset">
-            <option value="music">Music (1.0×)</option>
-            <option value="educational" selected>Educational (1.5×)</option>
-            <option value="podcast">Podcast / Lecture (2.0×)</option>
-            <option value="custom">Custom Speed</option>
-          </select>
-          <input type="number" id="input-speed" step="0.05" min="0.25" max="4" value="1.5" style="width: 88px;" />
-          <button type="submit" class="primary">Save Channel</button>
-        </form>
+      <!-- Panel 04: Saved Channel Speed Rules -->
+      <section class="panel" data-panel="04">
+        <button type="button" class="panel-header-btn" data-panel-toggle="04" aria-expanded="false">
+          <span class="panel-header-left">
+            <span class="panel-icon icon-amber" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+                <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+              </svg>
+            </span>
+            <span class="panel-title-wrap">
+              <span class="panel-title-row">
+                <h2>04. Saved Channel Speed Rules</h2>
+                <span id="rules-count" class="panel-sub">0 saved</span>
+              </span>
+              <span id="summary-04" class="panel-summary"></span>
+            </span>
+          </span>
+          <span class="panel-expand-pill">
+            <span class="panel-toggle-label">Expand</span>
+            <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </button>
+        <div class="panel-body">
+          <form id="add-rule-form" class="add-form">
+            <input type="text" id="input-name" placeholder="Channel name (e.g. Veritasium)" required />
+            <input type="text" id="input-handle" placeholder="@handle (optional)" />
+            <select id="input-preset">
+              <option value="music">Music (1.0×)</option>
+              <option value="educational" selected>Educational (1.5×)</option>
+              <option value="podcast">Podcast / Lecture (2.0×)</option>
+              <option value="custom">Custom Speed</option>
+            </select>
+            <input type="number" id="input-speed" step="0.05" min="0.25" max="4" value="1.5" style="width: 88px;" />
+            <button type="submit" class="primary">Save Channel</button>
+          </form>
 
-        <!-- Search, Category Filters, Sort, and Page Size (#26) -->
-        <div class="filter-toolbar">
-          <div class="filter-row-top">
-            <input type="text" id="input-rule-search" class="filter-search-input" placeholder="Search channel name or @handle..." />
-            <div class="pill-group" id="category-pills">
-              <button type="button" class="pill-btn active" data-category="all">All</button>
-              <button type="button" class="pill-btn" data-category="educational">Educational</button>
-              <button type="button" class="pill-btn" data-category="podcast">Podcast</button>
-              <button type="button" class="pill-btn" data-category="music">Music</button>
-              <button type="button" class="pill-btn" data-category="custom">Custom</button>
+          <div class="filter-toolbar">
+            <div class="filter-row-top">
+              <input type="text" id="input-rule-search" class="filter-search-input" placeholder="Search channel name or @handle..." />
+              <div class="pill-group" id="category-pills">
+                <button type="button" class="pill-btn active" data-category="all">All</button>
+                <button type="button" class="pill-btn" data-category="educational">Educational</button>
+                <button type="button" class="pill-btn" data-category="podcast">Podcast</button>
+                <button type="button" class="pill-btn" data-category="music">Music</button>
+                <button type="button" class="pill-btn" data-category="custom">Custom</button>
+              </div>
+            </div>
+            <div class="filter-row-bottom">
+              <div class="sort-controls">
+                <label for="select-sort">Sort by:</label>
+                <select id="select-sort">
+                  <option value="recent">Recently updated</option>
+                  <option value="name">Channel Name A–Z</option>
+                  <option value="speed">Speed (Highest to Lowest)</option>
+                </select>
+              </div>
+              <div class="sort-controls">
+                <label for="select-page-size">Show:</label>
+                <select id="select-page-size">
+                  <option value="10" selected>10 per page</option>
+                  <option value="25">25 per page</option>
+                  <option value="50">50 per page</option>
+                  <option value="all">All rules</option>
+                </select>
+              </div>
             </div>
           </div>
-          <div class="filter-row-bottom">
-            <div class="sort-controls">
-              <label for="select-sort">Sort by:</label>
-              <select id="select-sort">
-                <option value="recent">Recently updated</option>
-                <option value="name">Channel Name A–Z</option>
-                <option value="speed">Speed (Highest to Lowest)</option>
-              </select>
-            </div>
-            <div class="sort-controls">
-              <label for="select-page-size">Show:</label>
-              <select id="select-page-size">
-                <option value="10" selected>10 per page</option>
-                <option value="25">25 per page</option>
-                <option value="50">50 per page</option>
-                <option value="all">All rules</option>
-              </select>
-            </div>
+
+          <div id="rules-list"></div>
+
+          <div id="pagination-bar" class="pagination-bar">
+            <span id="rules-range">Showing 0–0 of 0 rules</span>
+            <div class="page-btn-group" id="page-buttons"></div>
           </div>
         </div>
-
-        <div id="rules-list"></div>
-
-        <div id="pagination-bar" class="pagination-bar">
-          <span id="rules-range">Showing 0–0 of 0 rules</span>
-          <div class="page-btn-group" id="page-buttons"></div>
-        </div>
-      </div>
+      </section>
     </div>
     <script src="options.js"></script>
   </body>
@@ -9192,6 +10233,8 @@ html[dark] .cadence-rule-plus {
 
   const optionsJs = `(async () => {
   const DEFAULT_PRESETS = ${defaultPresetsJson};
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const WEEKDAY_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   const DEFAULT_SETTINGS = {
     enabled: true,
@@ -9202,12 +10245,32 @@ html[dark] .cadence-rule-plus {
     disableVideoPreviews: true,
     showWatchLaterRemoveAction: true,
     showSpeedToast: true,
+    popupTimeSavedDisplay: 'daily',
+    barTimeSavedDisplay: 'daily',
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 6
+    settingsSchemaVersion: 7
   };
+
+  function isValidDisplayMode(val) {
+    return val === 'total' || val === 'daily' || val === 'off';
+  }
+
+  function sanitizeSavedTimeByDay(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    for (const [k, v] of Object.entries(raw)) {
+      if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(k)) continue;
+      const sec = Math.floor(Number(v) || 0);
+      if (Number.isFinite(sec) && sec > 0) {
+        out[k] = sec;
+      }
+    }
+    return out;
+  }
 
   function normalizeOptionsSettings(raw) {
     const src = raw && typeof raw === 'object' ? raw : {};
+    const prevSchema = Number(src.settingsSchemaVersion) || 1;
     const merged = {
       ...DEFAULT_SETTINGS,
       ...src,
@@ -9243,7 +10306,15 @@ html[dark] .cadence-rule-plus {
         typeof src.showWatchLaterRemoveAction === 'boolean'
           ? src.showWatchLaterRemoveAction
           : DEFAULT_SETTINGS.showWatchLaterRemoveAction,
-      settingsSchemaVersion: 6,
+      popupTimeSavedDisplay:
+        prevSchema >= 7 && isValidDisplayMode(src.popupTimeSavedDisplay)
+          ? src.popupTimeSavedDisplay
+          : 'daily',
+      barTimeSavedDisplay:
+        prevSchema >= 7 && isValidDisplayMode(src.barTimeSavedDisplay)
+          ? src.barTimeSavedDisplay
+          : 'daily',
+      settingsSchemaVersion: 7,
     };
     delete merged.perChannelSpeed;
     delete merged.stopAfterVideo;
@@ -9262,35 +10333,62 @@ html[dark] .cadence-rule-plus {
     versionEl.textContent = \`· v\${manifestVersion}\`;
   }
 
-  let stored = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
+  let stored = await chrome.storage.local.get([
+    'settings',
+    'presets',
+    'rules',
+    'totalTimeSavedSec',
+    'timeSavedSince',
+    'savedTimeByDay',
+  ]);
   let settings = normalizeOptionsSettings(stored.settings);
   let presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : DEFAULT_PRESETS.map((p) => ({ ...p }));
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
   let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
+  let savedTimeByDay = sanitizeSavedTimeByDay(stored.savedTimeByDay);
   let timeSavedSince =
     typeof stored.timeSavedSince === 'number' &&
     Number.isFinite(stored.timeSavedSince) &&
     stored.timeSavedSince > 0
       ? stored.timeSavedSince
       : Date.now();
+
   if (
-    typeof stored.timeSavedSince !== 'number' ||
-    !Number.isFinite(stored.timeSavedSince) ||
-    stored.timeSavedSince <= 0
+    !stored.savedTimeByDay ||
+    typeof stored.savedTimeByDay !== 'object' ||
+    !stored.settings ||
+    Number(stored.settings.settingsSchemaVersion) < 7
   ) {
-    chrome.storage.local.set({ timeSavedSince }).catch(() => {});
+    chrome.storage.local
+      .set({ settings, savedTimeByDay, timeSavedSince })
+      .catch(() => {});
   }
 
-  // Filter & Pagination State (#26)
+  // Filter & Pagination State
   let searchQuery = '';
   let filterCategory = 'all';
   let sortBy = 'recent';
   let pageSize = 10;
   let currentPage = 1;
 
+  // Analytics & Panel Expansion State (All 4 start collapsed)
+  const expandedPanels = { '01': false, '02': false, '03': false, '04': false };
+  let chartView = 'weekly';
+  let weekOffset = 0;
+  let endWeekOffset = 0;
+  let trendMonths = 6;
+  let drillMonthLabel = null;
+  let drillWeekLabel = null;
+  let activeBarHoverIndex = null;
+  let currentBarMetaList = [];
+  let currentBarDefaultFooterHtml = '';
+  let heatmapMetaMap = {};
+  let hoveredHeatDateKey = null;
+
   // DOM elements
+  const expandAllBtnEl = document.getElementById('btn-toggle-expand-all');
   const presetsEl = document.getElementById('presets-list');
   const rulesEl = document.getElementById('rules-list');
   const rulesCountEl = document.getElementById('rules-count');
@@ -9310,7 +10408,11 @@ html[dark] .cadence-rule-plus {
   const resetBtnEl = document.getElementById('btn-reset-presets');
   const statusBannerEl = document.getElementById('status-banner');
 
-  // Toggles DOM
+  const summary01El = document.getElementById('summary-01');
+  const summary02El = document.getElementById('summary-02');
+  const summary03El = document.getElementById('summary-03');
+  const summary04El = document.getElementById('summary-04');
+
   const toggleSpeedEl = document.getElementById('toggle-speed');
   const toggleStopEl = document.getElementById('toggle-stop');
   const toggleWatchLaterEl = document.getElementById('toggle-watch-later');
@@ -9318,36 +10420,441 @@ html[dark] .cadence-rule-plus {
   const toggleShortsEl = document.getElementById('toggle-shorts');
   const togglePreviewsEl = document.getElementById('toggle-previews');
 
-  // Lifetime stats DOM
-  const statSavedValueEl = document.getElementById('stat-saved-value');
+  // Panel 02 DOM
+  const popupModeControlsEl = document.getElementById('popup-mode-controls');
+  const barModeControlsEl = document.getElementById('bar-mode-controls');
+  const previewPopupEl = document.getElementById('preview-popup-readout');
+  const previewBarEl = document.getElementById('preview-bar-readout');
   const btnOpenResetEl = document.getElementById('btn-open-reset');
   const resetConfirmBoxEl = document.getElementById('reset-confirm-box');
   const inputConfirmForgetEl = document.getElementById('input-confirm-forget');
   const btnConfirmForgetEl = document.getElementById('btn-confirm-forget');
   const btnCancelForgetEl = document.getElementById('btn-cancel-forget');
 
+  const statSavedValueEl = document.getElementById('stat-saved-value');
+  const statSinceLineEl = document.getElementById('stat-since-line');
+  const statStoreLineEl = document.getElementById('stat-store-line');
+  const statLegacyLineEl = document.getElementById('stat-legacy-line');
+  const kpiTodayValEl = document.getElementById('kpi-today-val');
+  const kpiTodaySubEl = document.getElementById('kpi-today-sub');
+  const kpiWeekValEl = document.getElementById('kpi-week-val');
+  const kpiWeekSubEl = document.getElementById('kpi-week-sub');
+  const kpiMonthValEl = document.getElementById('kpi-month-val');
+  const kpiMonthSubEl = document.getElementById('kpi-month-sub');
+  const kpiStreakValEl = document.getElementById('kpi-streak-val');
+  const kpiStreakSubEl = document.getElementById('kpi-streak-sub');
+
+  const chartStageEl = document.getElementById('chart-stage');
+  const selectChartViewEl = document.getElementById('select-chart-view');
+  const chartBreadcrumbEl = document.getElementById('chart-breadcrumb');
+  const chartControlsRightEl = document.getElementById('chart-controls-right');
+  const chartSubRowEl = document.getElementById('chart-sub-row');
+  const chartEmptyNoticeEl = document.getElementById('chart-empty-notice');
+  const chartBodyEl = document.getElementById('chart-body');
+  const chartFooterEl = document.getElementById('chart-footer');
+
   let statusTimer = null;
+
+  // Date & Duration helpers (DST-safe Mon–Sun Alignment 1)
+  function formatLocalDateKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return \`\${y}-\${m}-\${d}\`;
+  }
+
+  function parseLocalDateKey(key) {
+    const parts = String(key || '').split('-').map((n) => parseInt(n, 10));
+    if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return new Date();
+    return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+  }
+
+  function atLocalMidnight(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+  }
+
+  function addLocalDays(date, days) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days, 0, 0, 0, 0);
+  }
+
+  function getMondayBasedDayIndex(date) {
+    return (date.getDay() + 6) % 7;
+  }
+
+  function getStartOfMondayWeek(date) {
+    return addLocalDays(atLocalMidnight(date), -getMondayBasedDayIndex(date));
+  }
+
+  function diffLocalCalendarDays(dateA, dateB) {
+    const utcA = Date.UTC(dateA.getFullYear(), dateA.getMonth(), dateA.getDate());
+    const utcB = Date.UTC(dateB.getFullYear(), dateB.getMonth(), dateB.getDate());
+    return Math.round((utcB - utcA) / 86400000);
+  }
+
+  function diffLocalCalendarWeeks(mondayA, mondayB) {
+    return Math.round(diffLocalCalendarDays(mondayA, mondayB) / 7);
+  }
 
   function formatSpeed(val) {
     return Number(val).toFixed(2).replace(/\\.00$/, '.0').replace(/(\\.\\d)0$/, '$1');
   }
 
   function formatFullSavedTime(sec) {
-    const s = Math.max(0, Math.floor(sec || 0));
-    if (s < 60) return \`\${s}s\`;
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const remS = s % 60;
-    if (h > 0) return \`\${h}h \${m}m \${remS}s\`;
-    return \`\${m}m \${remS}s\`;
+    const safe = Math.max(0, Math.floor(sec || 0));
+    const hrs = Math.floor(safe / 3600);
+    const mins = Math.floor((safe % 3600) / 60);
+    const remS = safe % 60;
+    if (hrs > 0) return \`\${hrs}h \${mins}m \${remS}s\`;
+    if (mins > 0) return \`\${mins}m \${remS}s\`;
+    return \`\${remS}s\`;
   }
 
-  function formatSinceDate(ts) {
-    const d = new Date(Number(ts) || Date.now());
+  function formatCompactSavedTime(sec) {
+    const safe = Math.max(0, Math.round(sec || 0));
+    if (safe === 0) return '0s';
+    if (safe < 60) return \`\${safe}s\`;
+    const totalMins = Math.round(safe / 60);
+    if (totalMins < 60) return \`\${totalMins}m\`;
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? \`\${hrs}h \${mins}m\` : \`\${hrs}h\`;
+  }
+
+  function formatDateMMDDYYYY(d) {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     const yyyy = d.getFullYear();
     return \`\${mm}/\${dd}/\${yyyy}\`;
+  }
+
+  function getTrackingStartDateFormatted() {
+    const positiveKeys = Object.entries(savedTimeByDay)
+      .filter(([, val]) => Number(val) > 0)
+      .map(([k]) => k)
+      .sort();
+    let candidate = positiveKeys.length > 0 ? parseLocalDateKey(positiveKeys[0]) : null;
+    if (typeof timeSavedSince === 'number' && Number.isFinite(timeSavedSince) && timeSavedSince > 0) {
+      const sinceDate = atLocalMidnight(new Date(timeSavedSince));
+      if (!candidate || sinceDate.getTime() < candidate.getTime()) {
+        candidate = sinceDate;
+      }
+    }
+    return formatDateMMDDYYYY(candidate || new Date());
+  }
+
+  function sumSavedTimeMap(byDay) {
+    let sum = 0;
+    for (const val of Object.values(byDay || {})) {
+      const n = Number(val);
+      if (Number.isFinite(n) && n > 0) sum += Math.floor(n);
+    }
+    return sum;
+  }
+
+  function getTodaySavedSec(now = new Date()) {
+    const key = formatLocalDateKey(now);
+    return Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+  }
+
+  function estimateStorageBytes(byDay) {
+    const txt = JSON.stringify({ savedTimeByDay: byDay || {} });
+    try {
+      return new Blob([txt]).size;
+    } catch (_) {
+      return txt.length;
+    }
+  }
+
+  function getWeekDailySeries(offset = 0, now = new Date()) {
+    const todayMid = atLocalMidnight(now);
+    const todayKey = formatLocalDateKey(todayMid);
+    const currentWeekStart = getStartOfMondayWeek(todayMid);
+    const weekStart = addLocalDays(currentWeekStart, offset * 7);
+    const weekEnd = addLocalDays(weekStart, 6);
+    const points = [];
+    let totalSec = 0;
+    let elapsedDaysInWeek = 0;
+    let activeDays = 0;
+
+    for (let i = 0; i < 7; i++) {
+      const d = addLocalDays(weekStart, i);
+      const key = formatLocalDateKey(d);
+      const isFuture = d.getTime() > todayMid.getTime();
+      const sec = isFuture ? 0 : Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+      if (!isFuture) {
+        elapsedDaysInWeek += 1;
+        totalSec += sec;
+        if (sec > 0) activeDays += 1;
+      }
+      points.push({
+        dateKey: key,
+        dayShort: WEEKDAY_MON_FIRST[i],
+        dateLabel: \`\${MONTH_SHORT[d.getMonth()]} \${d.getDate()}\`,
+        fullDateLabel: \`\${WEEKDAY_MON_FIRST[i]}, \${MONTH_SHORT[d.getMonth()]} \${d.getDate()}\`,
+        seconds: sec,
+        isToday: key === todayKey,
+        isFuture,
+      });
+    }
+
+    const startStr = \`\${MONTH_SHORT[weekStart.getMonth()]} \${weekStart.getDate()}\`;
+    const endStr =
+      weekStart.getMonth() === weekEnd.getMonth()
+        ? \`\${weekEnd.getDate()}, \${weekEnd.getFullYear()}\`
+        : \`\${MONTH_SHORT[weekEnd.getMonth()]} \${weekEnd.getDate()}, \${weekEnd.getFullYear()}\`;
+
+    return {
+      points,
+      rangeLabel: \`\${startStr} – \${endStr}\`,
+      totalSec,
+      dailyAvgSec: elapsedDaysInWeek > 0 ? Math.round(totalSec / elapsedDaysInWeek) : 0,
+      activeDays,
+      isCurrentWeek: offset === 0,
+    };
+  }
+
+  function getAlignedFourWeekSeries(endOffset = 0, now = new Date()) {
+    const todayMid = atLocalMidnight(now);
+    const currentWeekStart = getStartOfMondayWeek(todayMid);
+    const points = [];
+    let totalSec = 0;
+    let totalActiveDays = 0;
+
+    for (let i = 0; i < 4; i++) {
+      const offset = endOffset - (3 - i);
+      const start = addLocalDays(currentWeekStart, offset * 7);
+      const end = addLocalDays(start, 6);
+      let weekSec = 0;
+      let weekActive = 0;
+      for (let dOffset = 0; dOffset < 7; dOffset++) {
+        const d = addLocalDays(start, dOffset);
+        if (d.getTime() <= todayMid.getTime()) {
+          const key = formatLocalDateKey(d);
+          const sec = Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+          weekSec += sec;
+          if (sec > 0) weekActive += 1;
+        }
+      }
+      const rangeLabel =
+        start.getMonth() === end.getMonth()
+          ? \`\${MONTH_SHORT[start.getMonth()]} \${start.getDate()}–\${end.getDate()}\`
+          : \`\${MONTH_SHORT[start.getMonth()]} \${start.getDate()}–\${MONTH_SHORT[end.getMonth()]} \${end.getDate()}\`;
+
+      points.push({
+        weekIndex: i + 1,
+        label: \`Wk \${i + 1}\`,
+        rangeLabel,
+        seconds: weekSec,
+        activeDays: weekActive,
+        weekOffsetFromCurrent: offset,
+        isCurrentWeek: offset === 0,
+      });
+      totalSec += weekSec;
+      totalActiveDays += weekActive;
+    }
+
+    const windowStart = addLocalDays(currentWeekStart, (endOffset - 3) * 7);
+    const windowEnd = addLocalDays(currentWeekStart, endOffset * 7 + 6);
+    const startStr = \`\${MONTH_SHORT[windowStart.getMonth()]} \${windowStart.getDate()}\`;
+    const endStr = \`\${MONTH_SHORT[windowEnd.getMonth()]} \${windowEnd.getDate()}, \${windowEnd.getFullYear()}\`;
+
+    return {
+      points,
+      monthLabel: \`\${startStr} – \${endStr}\`,
+      totalSec,
+      weeklyAvgSec: Math.round(totalSec / 4),
+      activeDays: totalActiveDays,
+      isCurrentMonth: endOffset === 0,
+    };
+  }
+
+  function getEndWeekOffsetForMonth(monthKey, now = new Date()) {
+    const parts = String(monthKey || '').split('-');
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    if (Number.isNaN(y) || Number.isNaN(m)) return 0;
+    if (y === now.getFullYear() && m === now.getMonth()) return 0;
+    const currentWeekStart = getStartOfMondayWeek(atLocalMidnight(now));
+    const lastDayOfTargetMonth = new Date(y, m + 1, 0, 0, 0, 0, 0);
+    const targetWeekStart = getStartOfMondayWeek(lastDayOfTargetMonth);
+    return Math.min(0, diffLocalCalendarWeeks(currentWeekStart, targetWeekStart));
+  }
+
+  function getMultiMonthSeries(monthCount = 6, now = new Date()) {
+    const safeCount = Math.max(1, monthCount);
+    const raw = [];
+    for (let offset = -(safeCount - 1); offset <= 0; offset++) {
+      const start = new Date(now.getFullYear(), now.getMonth() + offset, 1, 0, 0, 0, 0);
+      const y = start.getFullYear();
+      const m = start.getMonth();
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      let secTotal = 0;
+      let activeDays = 0;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const key = \`\${y}-\${String(m + 1).padStart(2, '0')}-\${String(day).padStart(2, '0')}\`;
+        const sec = Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+        secTotal += sec;
+        if (sec > 0) activeDays += 1;
+      }
+      raw.push({
+        monthKey: \`\${y}-\${String(m + 1).padStart(2, '0')}\`,
+        shortLabel: MONTH_SHORT[m],
+        fullLabel: \`\${MONTH_SHORT[m]} \${y}\`,
+        seconds: secTotal,
+        activeDays,
+      });
+    }
+    return raw.map((item, idx) => {
+      if (idx === 0 || raw[idx - 1].seconds <= 0) {
+        return { ...item, deltaPercent: null };
+      }
+      const prev = raw[idx - 1].seconds;
+      return { ...item, deltaPercent: Math.round(((item.seconds - prev) / prev) * 100) };
+    });
+  }
+
+  function getCurrentMonthKpiSummary(now = new Date()) {
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    let totalSec = 0;
+    let activeDays = 0;
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(y, m, day, 0, 0, 0, 0);
+      if (d.getTime() > atLocalMidnight(now).getTime()) break;
+      const key = formatLocalDateKey(d);
+      const sec = Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+      totalSec += sec;
+      if (sec > 0) activeDays += 1;
+    }
+    return { totalSec, activeDays };
+  }
+
+  function getDayOfWeekRhythm(lookbackDays = 90, now = new Date()) {
+    const todayMid = atLocalMidnight(now);
+    const sums = new Array(7).fill(0);
+    const counts = new Array(7).fill(0);
+    for (let offset = 0; offset < lookbackDays; offset++) {
+      const d = addLocalDays(todayMid, -offset);
+      const key = formatLocalDateKey(d);
+      const idx = getMondayBasedDayIndex(d);
+      sums[idx] += Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+      counts[idx] += 1;
+    }
+    return WEEKDAY_MON_FIRST.map((label, dayIndex) => ({
+      dayIndex,
+      label,
+      totalSec: sums[dayIndex],
+      avgSec: counts[dayIndex] > 0 ? Math.round(sums[dayIndex] / counts[dayIndex]) : 0,
+    }));
+  }
+
+  function getActivityHeatmapGrid(numWeeks = 12, now = new Date()) {
+    const todayMid = atLocalMidnight(now);
+    const todayKey = formatLocalDateKey(todayMid);
+    const currentWeekStart = getStartOfMondayWeek(todayMid);
+    const gridStart = addLocalDays(currentWeekStart, -(numWeeks - 1) * 7);
+
+    let maxDaySec = 0;
+    for (let w = 0; w < numWeeks; w++) {
+      for (let r = 0; r < 7; r++) {
+        const d = addLocalDays(gridStart, w * 7 + r);
+        if (d.getTime() > todayMid.getTime()) continue;
+        const sec = Math.max(0, Math.floor(Number(savedTimeByDay[formatLocalDateKey(d)]) || 0));
+        if (sec > maxDaySec) maxDaySec = sec;
+      }
+    }
+
+    const weeks = [];
+    const weekMonthLabels = [];
+    let prevLabeledMonth = -1;
+    for (let w = 0; w < numWeeks; w++) {
+      const col = [];
+      const colStartDate = addLocalDays(gridStart, w * 7);
+      const colMonth = colStartDate.getMonth();
+      if (colMonth !== prevLabeledMonth) {
+        weekMonthLabels.push(MONTH_SHORT[colMonth]);
+        prevLabeledMonth = colMonth;
+      } else {
+        weekMonthLabels.push('');
+      }
+      for (let r = 0; r < 7; r++) {
+        const d = addLocalDays(gridStart, w * 7 + r);
+        const key = formatLocalDateKey(d);
+        const isFuture = d.getTime() > todayMid.getTime();
+        const sec = isFuture ? 0 : Math.max(0, Math.floor(Number(savedTimeByDay[key]) || 0));
+        let level = 0;
+        if (!isFuture && sec > 0 && maxDaySec > 0) {
+          const ratio = sec / maxDaySec;
+          if (ratio >= 0.72) level = 4;
+          else if (ratio >= 0.46) level = 3;
+          else if (ratio >= 0.22) level = 2;
+          else level = 1;
+        }
+        col.push({
+          dateKey: key,
+          label: \`\${MONTH_SHORT[d.getMonth()]} \${d.getDate()}, \${d.getFullYear()}\`,
+          seconds: sec,
+          level,
+          isToday: key === todayKey,
+          isFuture,
+        });
+      }
+      weeks.push(col);
+    }
+
+    const allEntries = Object.entries(savedTimeByDay)
+      .map(([dateKey, val]) => ({ dateKey, seconds: Math.max(0, Math.floor(Number(val) || 0)) }))
+      .filter((entry) => entry.seconds > 0)
+      .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+
+    let bestDay = null;
+    for (const entry of allEntries) {
+      if (!bestDay || entry.seconds > bestDay.seconds) {
+        const d = parseLocalDateKey(entry.dateKey);
+        bestDay = {
+          dateKey: entry.dateKey,
+          label: \`\${MONTH_SHORT[d.getMonth()]} \${d.getDate()}\`,
+          seconds: entry.seconds,
+        };
+      }
+    }
+
+    let currentStreakDays = 0;
+    for (let back = 0; back < 3650; back++) {
+      const d = addLocalDays(todayMid, -back);
+      const sec = Math.max(0, Math.floor(Number(savedTimeByDay[formatLocalDateKey(d)]) || 0));
+      if (sec > 0) {
+        currentStreakDays += 1;
+      } else if (back === 0) {
+        continue;
+      } else {
+        break;
+      }
+    }
+
+    let longestStreakDays = 0;
+    let running = 0;
+    let prevTime = null;
+    for (const entry of allEntries) {
+      const t = parseLocalDateKey(entry.dateKey).getTime();
+      if (prevTime !== null && Math.round((t - prevTime) / 86400000) === 1) {
+        running += 1;
+      } else {
+        running = 1;
+      }
+      if (running > longestStreakDays) longestStreakDays = running;
+      prevTime = t;
+    }
+
+    return {
+      weeks,
+      weekMonthLabels,
+      currentStreakDays,
+      longestStreakDays,
+      bestDay,
+      totalActiveDays: allEntries.length,
+    };
   }
 
   function normalizeHandle(raw, fallbackName = '') {
@@ -9370,6 +10877,94 @@ html[dark] .cadence-rule-plus {
     }, 3600);
   }
 
+  // Panel collapse / expand controls
+  function syncPanelDom(panelId) {
+    const sectionEl = document.querySelector(\`section.panel[data-panel="\${panelId}"]\`);
+    const btnEl = document.querySelector(\`button[data-panel-toggle="\${panelId}"]\`);
+    if (!sectionEl || !btnEl) return;
+    const isExpanded = Boolean(expandedPanels[panelId]);
+    sectionEl.classList.toggle('is-expanded', isExpanded);
+    btnEl.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    const lblEl = btnEl.querySelector('.panel-toggle-label');
+    if (lblEl) lblEl.textContent = isExpanded ? 'Collapse' : 'Expand';
+  }
+
+  function syncExpandAllBtn() {
+    if (!expandAllBtnEl) return;
+    const allExpanded = Object.values(expandedPanels).every(Boolean);
+    expandAllBtnEl.textContent = allExpanded ? 'Collapse All' : 'Expand All';
+  }
+
+  document.querySelectorAll('button[data-panel-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pid = btn.getAttribute('data-panel-toggle');
+      if (!pid) return;
+      expandedPanels[pid] = !expandedPanels[pid];
+      syncPanelDom(pid);
+      syncExpandAllBtn();
+    });
+  });
+
+  if (expandAllBtnEl) {
+    expandAllBtnEl.addEventListener('click', () => {
+      const allExpanded = Object.values(expandedPanels).every(Boolean);
+      const next = !allExpanded;
+      Object.keys(expandedPanels).forEach((pid) => {
+        expandedPanels[pid] = next;
+        syncPanelDom(pid);
+      });
+      syncExpandAllBtn();
+    });
+  }
+
+  Object.keys(expandedPanels).forEach(syncPanelDom);
+  syncExpandAllBtn();
+
+  function renderCollapsedSummaries() {
+    if (summary01El) {
+      const enabledCount = [
+        Boolean(settings.stopAfterVideoEnds),
+        settings.convertShortsToWatch !== false,
+        settings.disableVideoPreviews !== false,
+        Boolean(settings.perChannelSpeedEnabled),
+        settings.showInPageControlBar !== false,
+        settings.showWatchLaterRemoveAction !== false,
+      ].filter(Boolean).length;
+      const stopTxt = settings.stopAfterVideoEnds ? 'On' : 'Off';
+      const barTxt = settings.showInPageControlBar !== false ? 'Shown' : 'Hidden';
+      summary01El.textContent = \`\${enabledCount}/6 features active · Stop after end: \${stopTxt} · Control bar: \${barTxt}\`;
+    }
+
+    if (summary02El) {
+      const totalStr = formatCompactSavedTime(totalTimeSavedSec);
+      const todayStr = formatCompactSavedTime(getTodaySavedSec());
+      const pMode = settings.popupTimeSavedDisplay || 'daily';
+      const bMode = settings.barTimeSavedDisplay || 'daily';
+      const pLabel = pMode === 'total' ? 'Total' : pMode === 'daily' ? 'Daily' : 'Off';
+      const bLabel = bMode === 'total' ? 'Total' : bMode === 'daily' ? 'Daily' : 'Off';
+      summary02El.innerHTML = \`<span class="text-emerald">\${totalStr}</span> total · <span class="text-emerald">\${todayStr}</span> today · Popup: \${pLabel} · Bar: \${bLabel}\`;
+    }
+
+    if (summary03El) {
+      summary03El.textContent = presets
+        .map((p) => \`\${p.id === 'podcast' ? 'Podcast' : p.label} \${formatSpeed(p.speed)}×\`)
+        .join(' · ');
+    }
+
+    if (summary04El) {
+      if (rules.length === 0) {
+        summary04El.textContent = 'No channel rules saved yet — add or import JSON rules';
+      } else {
+        const preview = rules
+          .slice(0, 3)
+          .map((r) => \`\${r.channelName} (\${formatSpeed(resolveSpeed(r))}×)\`)
+          .join(', ');
+        const extra = rules.length > 3 ? \` +\${rules.length - 3} more\` : '';
+        summary04El.textContent = \`\${rules.length} \${rules.length === 1 ? 'channel' : 'channels'} · \${preview}\${extra}\`;
+      }
+    }
+  }
+
   function renderToggles() {
     if (toggleStopEl) toggleStopEl.checked = Boolean(settings.stopAfterVideoEnds);
     if (toggleShortsEl) toggleShortsEl.checked = settings.convertShortsToWatch !== false;
@@ -9377,6 +10972,7 @@ html[dark] .cadence-rule-plus {
     if (toggleSpeedEl) toggleSpeedEl.checked = Boolean(settings.perChannelSpeedEnabled);
     if (toggleBarEl) toggleBarEl.checked = settings.showInPageControlBar !== false;
     if (toggleWatchLaterEl) toggleWatchLaterEl.checked = settings.showWatchLaterRemoveAction !== false;
+    renderCollapsedSummaries();
   }
 
   const SETTING_STATUS_LABELS = {
@@ -9386,13 +10982,17 @@ html[dark] .cadence-rule-plus {
     perChannelSpeedEnabled: 'Per-Channel Playback Speed',
     showInPageControlBar: 'Show Speed Bar Below Video',
     showWatchLaterRemoveAction: 'Show "Remove from Watch Later" on Video End',
+    popupTimeSavedDisplay: 'Toolbar Popup Readout',
+    barTimeSavedDisplay: 'Below-Video Bar Readout',
   };
 
   async function updateSetting(key, val) {
     settings[key] = val;
-    settings.settingsSchemaVersion = 6;
+    settings.settingsSchemaVersion = 7;
     await chrome.storage.local.set({ settings });
-    showStatus(\`Updated \${SETTING_STATUS_LABELS[key] || key}: \${val ? 'Enabled' : 'Disabled'}\`);
+    renderToggles();
+    renderTimeSavedAnalytics();
+    showStatus(\`Updated \${SETTING_STATUS_LABELS[key] || key}: \${typeof val === 'boolean' ? (val ? 'Enabled' : 'Disabled') : val}\`);
   }
 
   if (toggleStopEl) toggleStopEl.addEventListener('change', () => updateSetting('stopAfterVideoEnds', toggleStopEl.checked));
@@ -9402,10 +11002,511 @@ html[dark] .cadence-rule-plus {
   if (toggleBarEl) toggleBarEl.addEventListener('change', () => updateSetting('showInPageControlBar', toggleBarEl.checked));
   if (toggleWatchLaterEl) toggleWatchLaterEl.addEventListener('change', () => updateSetting('showWatchLaterRemoveAction', toggleWatchLaterEl.checked));
 
-  function renderTimeSaved() {
-    if (statSavedValueEl) {
-      statSavedValueEl.innerHTML = \`\${formatFullSavedTime(totalTimeSavedSec)} saved <span class="stat-since">since \${formatSinceDate(timeSavedSince)}</span>\`;
+  if (popupModeControlsEl) {
+    popupModeControlsEl.querySelectorAll('button[data-popup-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-popup-mode');
+        if (isValidDisplayMode(mode)) updateSetting('popupTimeSavedDisplay', mode);
+      });
+    });
+  }
+
+  if (barModeControlsEl) {
+    barModeControlsEl.querySelectorAll('button[data-bar-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-bar-mode');
+        if (isValidDisplayMode(mode)) updateSetting('barTimeSavedDisplay', mode);
+      });
+    });
+  }
+
+  function setBarFooterHighlight(idx) {
+    activeBarHoverIndex = idx;
+    if (!chartBodyEl) return;
+    chartBodyEl.querySelectorAll('.bar-col[data-bar-index]').forEach((colEl) => {
+      const cIdx = Number(colEl.getAttribute('data-bar-index'));
+      colEl.classList.toggle('is-hovered', idx !== null && cIdx === idx);
+    });
+    if (!chartFooterEl) return;
+    const inspectEl = chartFooterEl.querySelector('#chart-footer-inspect');
+    if (!inspectEl) return;
+    if (idx !== null && currentBarMetaList[idx]) {
+      inspectEl.className = 'chart-footer-inspect';
+      inspectEl.textContent = currentBarMetaList[idx].footerText;
+    } else {
+      inspectEl.className = 'chart-footer-muted';
+      inspectEl.textContent = currentBarDefaultFooterHtml;
     }
+  }
+
+  function bindBarHoverHandlers(defaultFooterText) {
+    currentBarDefaultFooterHtml = defaultFooterText;
+    activeBarHoverIndex = null;
+    if (!chartBodyEl) return;
+    chartBodyEl.querySelectorAll('.bar-col[data-bar-index]').forEach((colEl) => {
+      const idx = Number(colEl.getAttribute('data-bar-index'));
+      colEl.addEventListener('mouseenter', () => setBarFooterHighlight(idx));
+      colEl.addEventListener('focus', () => setBarFooterHighlight(idx));
+      colEl.addEventListener('mouseleave', () => setBarFooterHighlight(null));
+      colEl.addEventListener('blur', () => setBarFooterHighlight(null));
+      colEl.addEventListener('click', () => {
+        const item = currentBarMetaList[idx];
+        if (item && typeof item.onClick === 'function') item.onClick();
+      });
+    });
+  }
+
+  if (chartStageEl) {
+    chartStageEl.addEventListener('mouseleave', () => {
+      if (chartView !== 'consistency') {
+        setBarFooterHighlight(null);
+      } else {
+        hoveredHeatDateKey = null;
+        const inspectEl = chartFooterEl ? chartFooterEl.querySelector('#chart-footer-inspect') : null;
+        if (inspectEl) {
+          inspectEl.className = 'chart-footer-muted';
+          inspectEl.textContent = 'Hover any day square for date total · Click a bar in Trend or 4-Week History to drill down';
+        }
+        chartStageEl.querySelectorAll('.rhythm-row.is-hovered').forEach((r) => r.classList.remove('is-hovered'));
+      }
+    });
+  }
+
+  function renderChartStage() {
+    if (!chartBodyEl || !chartFooterEl || !chartControlsRightEl || !chartSubRowEl || !chartBreadcrumbEl) return;
+    const now = new Date();
+    const todaySec = getTodaySavedSec(now);
+    const attributedTotalSec = sumSavedTimeMap(savedTimeByDay);
+    const unattributedPriorSec = Math.max(0, totalTimeSavedSec - attributedTotalSec);
+
+    if (selectChartViewEl && selectChartViewEl.value !== chartView) {
+      selectChartViewEl.value = chartView;
+    }
+
+    if (chartEmptyNoticeEl) {
+      if (attributedTotalSec === 0) {
+        chartEmptyNoticeEl.style.display = 'block';
+        chartEmptyNoticeEl.textContent = unattributedPriorSec > 0
+          ? \`Daily breakdown starts collecting from today (\${formatCompactSavedTime(unattributedPriorSec)} was recorded prior to v1.7.1 without per-day buckets, so earlier days appear blank instead of guessing past dates).\`
+          : 'No daily playback acceleration recorded yet. Speed up any YouTube video (>1.0×) and your daily, weekly, and monthly bars will populate automatically.';
+      } else {
+        chartEmptyNoticeEl.style.display = 'none';
+      }
+    }
+
+    // Breadcrumbs
+    let crumbsHtml = '';
+    if (chartView === 'four_week' && drillMonthLabel) {
+      crumbsHtml = \`
+        <button type="button" class="crumb-btn" data-crumb="trend">Monthly Trend</button>
+        <span>›</span>
+        <span class="crumb-current">\${drillMonthLabel}</span>
+      \`;
+    } else if (chartView === 'weekly' && drillWeekLabel) {
+      crumbsHtml = drillMonthLabel
+        ? \`
+          <button type="button" class="crumb-btn" data-crumb="trend">Monthly Trend</button>
+          <span>›</span>
+          <button type="button" class="crumb-btn" data-crumb="four_week">\${drillMonthLabel}</button>
+          <span>›</span>
+          <span class="crumb-current">\${drillWeekLabel}</span>
+        \`
+        : \`
+          <button type="button" class="crumb-btn" data-crumb="four_week">4-Week History</button>
+          <span>›</span>
+          <span class="crumb-current">\${drillWeekLabel}</span>
+        \`;
+    }
+    chartBreadcrumbEl.innerHTML = crumbsHtml;
+    chartBreadcrumbEl.querySelectorAll('button[data-crumb]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dest = btn.getAttribute('data-crumb');
+        if (dest === 'trend') {
+          chartView = 'monthly_trend';
+          drillMonthLabel = null;
+          drillWeekLabel = null;
+        } else if (dest === 'four_week') {
+          chartView = 'four_week';
+          drillWeekLabel = null;
+        }
+        renderChartStage();
+      });
+    });
+
+    if (chartView === 'weekly') {
+      const summary = getWeekDailySeries(weekOffset, now);
+      const maxSec = Math.max(1, ...summary.points.map((p) => p.seconds));
+      chartControlsRightEl.innerHTML = \`
+        <span class="chart-hint-inline">\${summary.rangeLabel}</span>
+        <div class="nav-capsule">
+          <button type="button" class="nav-step-btn" id="btn-prev-week" title="Previous week">&lt;</button>
+          <button type="button" class="nav-period-btn" id="btn-curr-week" \${weekOffset === 0 ? 'disabled' : ''}>\${weekOffset === 0 ? 'This Week' : 'Current'}</button>
+          <button type="button" class="nav-step-btn" id="btn-next-week" \${weekOffset >= 0 ? 'disabled' : ''} title="Next week">&gt;</button>
+        </div>
+      \`;
+      chartSubRowEl.innerHTML = \`<span>7 daily bars · Mon–Sun</span><span>\${summary.activeDays}/7 active days</span>\`;
+
+      currentBarMetaList = summary.points.map((pt) => ({
+        footerText: pt.isFuture
+          ? \`\${pt.fullDateLabel} — Upcoming\`
+          : \`\${pt.fullDateLabel} — \${formatFullSavedTime(pt.seconds)} saved\${pt.isToday ? ' · Today' : ''}\`,
+        onClick: null,
+      }));
+
+      chartBodyEl.innerHTML = \`
+        <div class="bar-plot" style="grid-template-columns: repeat(7, minmax(0, 1fr));">
+          \${summary.points.map((pt, idx) => {
+            const pct = pt.seconds > 0 ? Math.max(8, Math.round((pt.seconds / maxSec) * 100)) : 4;
+            const fillColor = pt.isToday
+              ? 'rgba(52, 211, 153, 0.92)'
+              : pt.seconds > 0
+                ? 'rgba(52, 211, 153, 0.72)'
+                : pt.isFuture
+                  ? 'rgba(30, 41, 59, 0.45)'
+                  : 'rgba(51, 65, 85, 0.65)';
+            return \`
+              <button type="button" class="bar-col is-non-interactive \${pt.isToday ? 'is-current-emerald' : ''}" data-bar-index="\${idx}" aria-label="\${pt.fullDateLabel}: \${formatCompactSavedTime(pt.seconds)}">
+                <span class="bar-top-val">\${pt.seconds > 0 ? formatCompactSavedTime(pt.seconds) : '—'}</span>
+                <span class="bar-track"><span class="bar-fill" style="height:\${pct}%;background:\${fillColor};"></span></span>
+                <span class="bar-axis">
+                  <span class="bar-axis-main">\${pt.dayShort}</span>
+                  <span class="bar-axis-sub">\${pt.dateLabel}</span>
+                </span>
+              </button>
+            \`;
+          }).join('')}
+        </div>
+      \`;
+
+      chartFooterEl.innerHTML = \`
+        <span id="chart-footer-inspect" class="chart-footer-muted">Hover any bar for exact day breakdown</span>
+        <span class="chart-footer-stats">Week total: <strong>\${formatFullSavedTime(summary.totalSec)}</strong> · Daily avg: <strong>\${formatCompactSavedTime(summary.dailyAvgSec)}</strong></span>
+      \`;
+      bindBarHoverHandlers('Hover any bar for exact day breakdown');
+
+      const prevBtn = document.getElementById('btn-prev-week');
+      const currBtn = document.getElementById('btn-curr-week');
+      const nextBtn = document.getElementById('btn-next-week');
+      if (prevBtn) prevBtn.addEventListener('click', () => { weekOffset -= 1; drillWeekLabel = null; renderChartStage(); });
+      if (currBtn) currBtn.addEventListener('click', () => { weekOffset = 0; drillMonthLabel = null; drillWeekLabel = null; renderChartStage(); });
+      if (nextBtn) nextBtn.addEventListener('click', () => { if (weekOffset < 0) { weekOffset += 1; drillWeekLabel = null; renderChartStage(); } });
+    } else if (chartView === 'four_week') {
+      const summary = getAlignedFourWeekSeries(endWeekOffset, now);
+      const maxSec = Math.max(1, ...summary.points.map((p) => p.seconds));
+      chartControlsRightEl.innerHTML = \`
+        <span class="chart-hint-inline">\${summary.monthLabel}</span>
+        <div class="nav-capsule">
+          <button type="button" class="nav-step-btn" id="btn-prev-4wk" title="Earlier 4 weeks">&lt;</button>
+          <button type="button" class="nav-period-btn" id="btn-curr-4wk" \${endWeekOffset === 0 ? 'disabled' : ''}>\${endWeekOffset === 0 ? 'Last 4 Wks' : 'Latest 4 Wks'}</button>
+          <button type="button" class="nav-step-btn" id="btn-next-4wk" \${endWeekOffset >= 0 ? 'disabled' : ''} title="Later 4 weeks">&gt;</button>
+        </div>
+      \`;
+      chartSubRowEl.innerHTML = \`<span>4 consecutive Mon–Sun calendar weeks · Click any bar to inspect its 7 days</span><span>\${summary.activeDays} active days</span>\`;
+
+      currentBarMetaList = summary.points.map((wk) => ({
+        footerText: \`\${wk.label} (\${wk.rangeLabel}) — \${formatFullSavedTime(wk.seconds)} across \${wk.activeDays} \${wk.activeDays === 1 ? 'day' : 'days'} · Click to inspect days\`,
+        onClick: () => {
+          weekOffset = typeof wk.weekOffsetFromCurrent === 'number' ? wk.weekOffsetFromCurrent : 0;
+          drillWeekLabel = \`\${wk.label} (\${wk.rangeLabel})\`;
+          chartView = 'weekly';
+          renderChartStage();
+        },
+      }));
+
+      chartBodyEl.innerHTML = \`
+        <div class="bar-plot" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+          \${summary.points.map((wk, idx) => {
+            const pct = wk.seconds > 0 ? Math.max(10, Math.round((wk.seconds / maxSec) * 100)) : 5;
+            const fillColor = wk.isCurrentWeek
+              ? 'rgba(56, 189, 248, 0.92)'
+              : wk.seconds > 0
+                ? 'rgba(56, 189, 248, 0.72)'
+                : 'rgba(51, 65, 85, 0.65)';
+            return \`
+              <button type="button" class="bar-col \${wk.isCurrentWeek ? 'is-current-sky' : ''}" data-bar-index="\${idx}" aria-label="\${wk.label} (\${wk.rangeLabel}): \${formatCompactSavedTime(wk.seconds)}">
+                <span class="bar-top-val">\${wk.seconds > 0 ? formatCompactSavedTime(wk.seconds) : '—'}</span>
+                <span class="bar-track"><span class="bar-fill" style="height:\${pct}%;background:\${fillColor};"></span></span>
+                <span class="bar-axis">
+                  <span class="bar-axis-main">\${wk.label}</span>
+                  <span class="bar-axis-sub">\${wk.rangeLabel}</span>
+                </span>
+              </button>
+            \`;
+          }).join('')}
+        </div>
+      \`;
+
+      chartFooterEl.innerHTML = \`
+        <span id="chart-footer-inspect" class="chart-footer-muted">Hover or click any week bar to drill down into daily bars</span>
+        <span class="chart-footer-stats">4-week total: <strong>\${formatFullSavedTime(summary.totalSec)}</strong> · Avg: <strong>\${formatCompactSavedTime(summary.weeklyAvgSec)}/wk</strong></span>
+      \`;
+      bindBarHoverHandlers('Hover or click any week bar to drill down into daily bars');
+
+      const prev4Btn = document.getElementById('btn-prev-4wk');
+      const curr4Btn = document.getElementById('btn-curr-4wk');
+      const next4Btn = document.getElementById('btn-next-4wk');
+      if (prev4Btn) prev4Btn.addEventListener('click', () => { endWeekOffset -= 4; drillMonthLabel = null; renderChartStage(); });
+      if (curr4Btn) curr4Btn.addEventListener('click', () => { endWeekOffset = 0; drillMonthLabel = null; renderChartStage(); });
+      if (next4Btn) next4Btn.addEventListener('click', () => { if (endWeekOffset < 0) { endWeekOffset = Math.min(0, endWeekOffset + 4); drillMonthLabel = null; renderChartStage(); } });
+    } else if (chartView === 'monthly_trend') {
+      const series = getMultiMonthSeries(trendMonths, now);
+      const maxSec = Math.max(1, ...series.map((m) => m.seconds));
+      const totalWindowSec = series.reduce((acc, m) => acc + m.seconds, 0);
+      chartControlsRightEl.innerHTML = \`
+        <span class="chart-hint-inline">Click any month bar to drill down</span>
+        <div class="segmented-control">
+          <button type="button" class="seg-btn \${trendMonths === 6 ? 'active' : ''}" id="btn-trend-6m">6M</button>
+          <button type="button" class="seg-btn \${trendMonths === 12 ? 'active' : ''}" id="btn-trend-12m">12M</button>
+        </div>
+      \`;
+      chartSubRowEl.innerHTML = \`<span>Last \${trendMonths} calendar months</span><span>\${formatFullSavedTime(totalWindowSec)} window total</span>\`;
+
+      currentBarMetaList = series.map((m) => {
+        const deltaText = m.deltaPercent !== null ? \` (\${m.deltaPercent >= 0 ? '+' : ''}\${m.deltaPercent}% vs prev mo)\` : '';
+        return {
+          footerText: \`\${m.fullLabel} — \${formatFullSavedTime(m.seconds)} across \${m.activeDays} days\${deltaText} · Click for 4-week view\`,
+          onClick: () => {
+            endWeekOffset = getEndWeekOffsetForMonth(m.monthKey, now);
+            drillMonthLabel = m.fullLabel;
+            drillWeekLabel = null;
+            chartView = 'four_week';
+            renderChartStage();
+          },
+        };
+      });
+
+      chartBodyEl.innerHTML = \`
+        <div class="bar-plot" style="grid-template-columns: repeat(\${series.length}, minmax(0, 1fr));">
+          \${series.map((m, idx) => {
+            const pct = m.seconds > 0 ? Math.max(8, Math.round((m.seconds / maxSec) * 100)) : 4;
+            const isCurr = idx === series.length - 1;
+            const fillColor = isCurr
+              ? 'rgba(251, 191, 36, 0.92)'
+              : m.seconds > 0
+                ? 'rgba(251, 191, 36, 0.62)'
+                : 'rgba(51, 65, 85, 0.65)';
+            return \`
+              <button type="button" class="bar-col \${isCurr ? 'is-current-amber' : ''}" data-bar-index="\${idx}" aria-label="\${m.fullLabel}: \${formatCompactSavedTime(m.seconds)}">
+                <span class="bar-top-val">\${m.seconds > 0 ? formatCompactSavedTime(m.seconds) : '—'}</span>
+                <span class="bar-track"><span class="bar-fill" style="height:\${pct}%;background:\${fillColor};"></span></span>
+                <span class="bar-axis">
+                  <span class="bar-axis-main">\${m.shortLabel}</span>
+                </span>
+              </button>
+            \`;
+          }).join('')}
+        </div>
+      \`;
+
+      chartFooterEl.innerHTML = \`
+        <span id="chart-footer-inspect" class="chart-footer-muted">Click any month bar to open its 4-week breakdown</span>
+        <span class="chart-footer-stats">\${trendMonths}-month total: <strong>\${formatFullSavedTime(totalWindowSec)}</strong></span>
+      \`;
+      bindBarHoverHandlers('Click any month bar to open its 4-week breakdown');
+
+      const btn6 = document.getElementById('btn-trend-6m');
+      const btn12 = document.getElementById('btn-trend-12m');
+      if (btn6) btn6.addEventListener('click', () => { trendMonths = 6; renderChartStage(); });
+      if (btn12) btn12.addEventListener('click', () => { trendMonths = 12; renderChartStage(); });
+    } else {
+      // Consistency: 12-week Heatmap + 90-day Weekday Pace
+      const heatmap = getActivityHeatmapGrid(12, now);
+      const rhythm = getDayOfWeekRhythm(90, now);
+      const maxRhythmAvg = Math.max(1, ...rhythm.map((d) => d.avgSec));
+      const peakRhythmDay = rhythm.reduce((best, cur) => (cur.avgSec > best.avgSec ? cur : best), rhythm[0]);
+
+      chartControlsRightEl.innerHTML = \`
+        <span class="legend-scale">
+          <span>Less</span>
+          <span class="legend-box" style="background:#111827;"></span>
+          <span class="legend-box" style="background:rgba(6,78,59,0.8);"></span>
+          <span class="legend-box" style="background:rgba(4,120,87,0.85);"></span>
+          <span class="legend-box" style="background:rgba(16,185,129,0.88);"></span>
+          <span class="legend-box" style="background:#34d399;"></span>
+          <span>More</span>
+        </span>
+      \`;
+      chartSubRowEl.innerHTML = \`
+        <span>12-week daily heatmap (Mon–Sun rows) + 90-day weekday averages</span>
+        <span>Current streak: \${heatmap.currentStreakDays}d · Longest: \${heatmap.longestStreakDays}d</span>
+      \`;
+
+      heatmapMetaMap = {};
+      for (let w = 0; w < heatmap.weeks.length; w++) {
+        for (let r = 0; r < 7; r++) {
+          const cell = heatmap.weeks[w][r];
+          heatmapMetaMap[cell.dateKey] = cell;
+        }
+      }
+
+      const monthRowHtml = \`
+        <div class="heatmap-months">
+          <span></span>
+          \${heatmap.weekMonthLabels.map((lbl) => \`<span>\${lbl}</span>\`).join('')}
+        </div>
+      \`;
+
+      const rowIndices = [0, 1, 2, 3, 4, 5, 6];
+      const heatRowsHtml = rowIndices.map((r) => \`
+        <div class="heatmap-row">
+          <span class="heatmap-day-label">\${r % 2 === 0 ? WEEKDAY_MON_FIRST[r] : ''}</span>
+          \${heatmap.weeks.map((weekCol) => {
+            const c = weekCol[r];
+            const classes = [
+              'heat-cell',
+              c.isFuture ? 'is-future' : \`lvl-\${c.level}\`,
+              c.isToday ? 'is-today' : '',
+            ].filter(Boolean).join(' ');
+            return \`<button type="button" class="\${classes}" data-heat-key="\${c.dateKey}" aria-label="\${c.label}: \${formatCompactSavedTime(c.seconds)}"></button>\`;
+          }).join('')}
+        </div>
+      \`).join('');
+
+      const rhythmHtml = rhythm.map((d) => {
+        const pct = d.avgSec > 0 ? Math.max(4, Math.round((d.avgSec / maxRhythmAvg) * 100)) : 0;
+        const isTop = d.dayIndex === peakRhythmDay.dayIndex && d.avgSec > 0;
+        return \`
+          <div class="rhythm-row" data-rhythm-day="\${d.dayIndex}">
+            <span class="rhythm-day">\${d.label}</span>
+            <div class="rhythm-bar-bg"><div class="rhythm-bar-fill \${isTop ? 'is-top' : ''}" style="width:\${pct}%;"></div></div>
+            <span class="rhythm-val">\${formatCompactSavedTime(d.avgSec)} / day</span>
+          </div>
+        \`;
+      }).join('');
+
+      chartBodyEl.innerHTML = \`
+        <div class="consistency-grid">
+          <div class="heatmap-wrap">
+            <div class="heatmap-inner">
+              \${monthRowHtml}
+              \${heatRowsHtml}
+            </div>
+          </div>
+          <div class="rhythm-panel">
+            <div class="rhythm-heading">
+              <span>90-Day Weekday Averages</span>
+              <span>Peak: <strong style="color:#34d399;">\${peakRhythmDay.avgSec > 0 ? peakRhythmDay.label : '—'}</strong></span>
+            </div>
+            \${rhythmHtml}
+          </div>
+        </div>
+      \`;
+
+      chartFooterEl.innerHTML = \`
+        <span id="chart-footer-inspect" class="chart-footer-muted">Hover any day square for date total · Hover weekday rows to compare</span>
+        <span class="chart-footer-stats">\${heatmap.bestDay ? \`Best day: <strong>\${heatmap.bestDay.label}</strong> (\${formatCompactSavedTime(heatmap.bestDay.seconds)})\` : 'No active days yet'}</span>
+      \`;
+
+      const inspectEl = chartFooterEl.querySelector('#chart-footer-inspect');
+      chartBodyEl.querySelectorAll('button[data-heat-key]').forEach((btn) => {
+        btn.addEventListener('mouseenter', () => {
+          const k = btn.getAttribute('data-heat-key');
+          const cell = heatmapMetaMap[k];
+          if (!cell || !inspectEl) return;
+          hoveredHeatDateKey = k;
+          const d = parseLocalDateKey(k);
+          const dow = getMondayBasedDayIndex(d);
+          chartBodyEl.querySelectorAll('.rhythm-row').forEach((rEl) => {
+            rEl.classList.toggle('is-hovered', Number(rEl.getAttribute('data-rhythm-day')) === dow);
+          });
+          inspectEl.className = 'chart-footer-inspect';
+          inspectEl.textContent = cell.isFuture
+            ? \`\${cell.label} — Upcoming\`
+            : \`\${cell.label} — \${formatFullSavedTime(cell.seconds)} saved\${cell.isToday ? ' · Today' : ''}\`;
+        });
+        btn.addEventListener('mouseleave', () => {
+          hoveredHeatDateKey = null;
+          chartBodyEl.querySelectorAll('.rhythm-row.is-hovered').forEach((rEl) => rEl.classList.remove('is-hovered'));
+          if (inspectEl) {
+            inspectEl.className = 'chart-footer-muted';
+            inspectEl.textContent = 'Hover any day square for date total · Hover weekday rows to compare';
+          }
+        });
+      });
+    }
+  }
+
+  function renderTimeSavedAnalytics() {
+    const now = new Date();
+    const popupMode = settings.popupTimeSavedDisplay || 'daily';
+    const barMode = settings.barTimeSavedDisplay || 'daily';
+    const todaySec = getTodaySavedSec(now);
+    const attributedTotalSec = sumSavedTimeMap(savedTimeByDay);
+    const unattributedPriorSec = Math.max(0, totalTimeSavedSec - attributedTotalSec);
+
+    if (popupModeControlsEl) {
+      popupModeControlsEl.querySelectorAll('button[data-popup-mode]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-popup-mode') === popupMode);
+      });
+    }
+    if (barModeControlsEl) {
+      barModeControlsEl.querySelectorAll('button[data-bar-mode]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-bar-mode') === barMode);
+      });
+    }
+    if (previewPopupEl) {
+      previewPopupEl.innerHTML =
+        popupMode === 'off'
+          ? 'Hidden'
+          : popupMode === 'total'
+            ? \`Bottom-right: <strong>Saved \${formatCompactSavedTime(totalTimeSavedSec)}</strong>\`
+            : \`Bottom-right: <strong>Saved \${formatCompactSavedTime(todaySec)} today</strong>\`;
+    }
+    if (previewBarEl) {
+      previewBarEl.innerHTML =
+        barMode === 'off'
+          ? 'Hidden'
+          : barMode === 'total'
+            ? \`Before Rule: <strong>Saved \${formatCompactSavedTime(totalTimeSavedSec)}</strong>\`
+            : \`Before Rule: <strong>Saved \${formatCompactSavedTime(todaySec)} today</strong>\`;
+    }
+
+    const heatmap = getActivityHeatmapGrid(12, now);
+    const currentWeek = getWeekDailySeries(0, now);
+    const currentMonth = getCurrentMonthKpiSummary(now);
+    const bytes = estimateStorageBytes(savedTimeByDay);
+    const kb = Math.max(0.1, bytes / 1024).toFixed(1);
+
+    if (statSavedValueEl) statSavedValueEl.textContent = formatFullSavedTime(totalTimeSavedSec);
+    if (statSinceLineEl) statSinceLineEl.textContent = \`Since \${getTrackingStartDateFormatted()}\`;
+    if (statStoreLineEl) statStoreLineEl.textContent = \`\${heatmap.totalActiveDays} tracked days - \${kb} KB local store\`;
+    if (statLegacyLineEl) {
+      if (unattributedPriorSec > 0) {
+        statLegacyLineEl.style.display = 'block';
+        statLegacyLineEl.textContent = \`Includes \${formatCompactSavedTime(unattributedPriorSec)} recorded prior to daily tracking.\`;
+      } else {
+        statLegacyLineEl.style.display = 'none';
+      }
+    }
+
+    if (kpiTodayValEl) kpiTodayValEl.textContent = formatCompactSavedTime(todaySec);
+    if (kpiTodaySubEl) {
+      const m = now.getMonth();
+      const d = now.getDate();
+      kpiTodaySubEl.textContent = todaySec > 0 ? \`\${MONTH_SHORT[m]} \${d} · Active\` : \`\${MONTH_SHORT[m]} \${d}\`;
+    }
+    if (kpiWeekValEl) kpiWeekValEl.textContent = formatCompactSavedTime(currentWeek.totalSec);
+    if (kpiWeekSubEl) kpiWeekSubEl.textContent = \`Avg \${formatCompactSavedTime(currentWeek.dailyAvgSec)} / day\`;
+    if (kpiMonthValEl) kpiMonthValEl.textContent = formatCompactSavedTime(currentMonth.totalSec);
+    if (kpiMonthSubEl) kpiMonthSubEl.textContent = \`\${currentMonth.activeDays} active \${currentMonth.activeDays === 1 ? 'day' : 'days'}\`;
+    if (kpiStreakValEl) kpiStreakValEl.textContent = \`\${heatmap.currentStreakDays}d\`;
+    if (kpiStreakSubEl) {
+      kpiStreakSubEl.textContent = heatmap.bestDay
+        ? \`Best: \${formatCompactSavedTime(heatmap.bestDay.seconds)} (\${heatmap.bestDay.label})\`
+        : 'Longest: 0d';
+    }
+
+    renderChartStage();
+    renderCollapsedSummaries();
+  }
+
+  if (selectChartViewEl) {
+    selectChartViewEl.addEventListener('change', () => {
+      chartView = selectChartViewEl.value;
+      drillMonthLabel = null;
+      drillWeekLabel = null;
+      renderChartStage();
+    });
   }
 
   btnOpenResetEl.addEventListener('click', () => {
@@ -9428,16 +11529,17 @@ html[dark] .cadence-rule-plus {
   btnConfirmForgetEl.addEventListener('click', async () => {
     if (inputConfirmForgetEl.value.trim() !== 'Forget Time Saved') return;
     totalTimeSavedSec = 0;
+    savedTimeByDay = {};
     timeSavedSince = Date.now();
-    await chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince });
+    await chrome.storage.local.set({ totalTimeSavedSec: 0, savedTimeByDay: {}, timeSavedSince });
     if (chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
       chrome.runtime.sendMessage({ type: 'CADENCE_RESET_TIME_SAVED', timeSavedSince }, () => {});
     }
-    renderTimeSaved();
+    renderTimeSavedAnalytics();
     resetConfirmBoxEl.classList.remove('visible');
     inputConfirmForgetEl.value = '';
     btnConfirmForgetEl.disabled = true;
-    showStatus(\`Lifetime time saved counter reset to 0s (since \${formatSinceDate(timeSavedSince)}).\`);
+    showStatus(\`Lifetime and daily time saved history reset to 0s (since \${getTrackingStartDateFormatted()}).\`);
   });
 
   function syncPresetSelectLabels() {
@@ -9482,8 +11584,10 @@ html[dark] .cadence-rule-plus {
         await chrome.storage.local.set({ presets });
         syncPresetSelectLabels();
         renderRules();
+        renderCollapsedSummaries();
       });
     });
+    renderCollapsedSummaries();
   }
 
   function resolveSpeed(rule) {
@@ -9580,7 +11684,6 @@ html[dark] .cadence-rule-plus {
       });
     }
 
-    // Render pagination buttons
     if (pageButtonsEl) {
       if (totalPages <= 1 || pageSize === -1) {
         pageButtonsEl.innerHTML = '';
@@ -9619,9 +11722,9 @@ html[dark] .cadence-rule-plus {
         });
       }
     }
+    renderCollapsedSummaries();
   }
 
-  // Filter & Search events
   if (searchInputEl) {
     searchInputEl.addEventListener('input', () => {
       searchQuery = searchInputEl.value;
@@ -9681,6 +11784,7 @@ html[dark] .cadence-rule-plus {
         exportedAt: new Date().toISOString(),
         totalTimeSavedSec,
         timeSavedSince,
+        savedTimeByDay,
         settings,
         presets,
         rules
@@ -9716,8 +11820,17 @@ html[dark] .cadence-rule-plus {
         renderToggles();
       }
 
-      if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
+      if (parsed && typeof parsed.savedTimeByDay === 'object' && parsed.savedTimeByDay !== null && !Array.isArray(parsed.savedTimeByDay)) {
+        savedTimeByDay = sanitizeSavedTimeByDay(parsed.savedTimeByDay);
+        const daySum = sumSavedTimeMap(savedTimeByDay);
+        const incomingTotal =
+          typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0
+            ? Math.floor(parsed.totalTimeSavedSec)
+            : daySum;
+        totalTimeSavedSec = Math.max(incomingTotal, daySum);
+      } else if (parsed && typeof parsed.totalTimeSavedSec === 'number' && parsed.totalTimeSavedSec >= 0) {
         totalTimeSavedSec = Math.floor(parsed.totalTimeSavedSec);
+        savedTimeByDay = {};
       }
 
       if (
@@ -9772,9 +11885,9 @@ html[dark] .cadence-rule-plus {
         rules = mergeRuleLists(sanitizedRules, rules);
       }
 
-      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec, timeSavedSince });
+      await chrome.storage.local.set({ settings, presets, rules, totalTimeSavedSec, savedTimeByDay, timeSavedSince });
       renderToggles();
-      renderTimeSaved();
+      renderTimeSavedAnalytics();
       renderPresets();
       renderRules();
       showStatus(\`Imported backup (\${rules.length} total channel rules, \${formatFullSavedTime(totalTimeSavedSec)} time saved)\`);
@@ -9836,13 +11949,19 @@ html[dark] .cadence-rule-plus {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    let shouldRenderSaved = false;
     if (changes.settings && typeof changes.settings.newValue === 'object') {
       settings = normalizeOptionsSettings(changes.settings.newValue);
       renderToggles();
+      shouldRenderSaved = true;
     }
     if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
-      totalTimeSavedSec = changes.totalTimeSavedSec.newValue;
-      renderTimeSaved();
+      totalTimeSavedSec = Math.max(0, Math.floor(changes.totalTimeSavedSec.newValue));
+      shouldRenderSaved = true;
+    }
+    if (changes.savedTimeByDay && typeof changes.savedTimeByDay.newValue === 'object') {
+      savedTimeByDay = sanitizeSavedTimeByDay(changes.savedTimeByDay.newValue);
+      shouldRenderSaved = true;
     }
     if (
       changes.timeSavedSince &&
@@ -9850,7 +11969,10 @@ html[dark] .cadence-rule-plus {
       changes.timeSavedSince.newValue > 0
     ) {
       timeSavedSince = changes.timeSavedSince.newValue;
-      renderTimeSaved();
+      shouldRenderSaved = true;
+    }
+    if (shouldRenderSaved) {
+      renderTimeSavedAnalytics();
     }
     if (changes.presets && Array.isArray(changes.presets.newValue)) {
       presets = changes.presets.newValue;
@@ -9863,7 +11985,7 @@ html[dark] .cadence-rule-plus {
   });
 
   renderToggles();
-  renderTimeSaved();
+  renderTimeSavedAnalytics();
   renderPresets();
   renderRules();
 })();

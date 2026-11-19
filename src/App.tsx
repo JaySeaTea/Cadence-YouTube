@@ -6,6 +6,7 @@ import {
   ChannelRule,
   ExtensionEventLog,
   ExtensionSettings,
+  SavedTimeByDay,
   SimulatedVideo,
 } from './types/extension';
 import {
@@ -15,6 +16,11 @@ import {
   EXTENSION_VERSION,
   INITIAL_CHANNEL_RULES,
 } from './data/initialData';
+import {
+  addSavedTimeDeltaToDayMap,
+  buildSampleSavedTimeByDay,
+  parseLocalDateKey,
+} from './utils/savedTimeAnalytics';
 import {
   downloadCwsExtensionZip,
   downloadExtensionZip,
@@ -39,6 +45,8 @@ const STORAGE_KEYS = {
   presets: 'cadence_ext_presets_v2',
   rules: 'cadence_ext_rules_v2',
   timeSaved: 'cadence_ext_time_saved_v2',
+  savedByDay: 'cadence_ext_saved_by_day_v1',
+  timeSavedSince: 'cadence_ext_time_saved_since_v1',
   updatedAt: 'cadence_ext_updated_at_v2',
 };
 
@@ -93,7 +101,25 @@ function normalizeSettingsSchema(
       typeof raw?.showWatchLaterRemoveAction === 'boolean'
         ? raw.showWatchLaterRemoveAction
         : true;
-    merged.settingsSchemaVersion = 6;
+  }
+  if (rawVersion < 7) {
+    merged.popupTimeSavedDisplay = 'daily';
+    merged.barTimeSavedDisplay = 'daily';
+    merged.settingsSchemaVersion = 7;
+  }
+  if (
+    merged.popupTimeSavedDisplay !== 'total' &&
+    merged.popupTimeSavedDisplay !== 'daily' &&
+    merged.popupTimeSavedDisplay !== 'off'
+  ) {
+    merged.popupTimeSavedDisplay = 'daily';
+  }
+  if (
+    merged.barTimeSavedDisplay !== 'total' &&
+    merged.barTimeSavedDisplay !== 'daily' &&
+    merged.barTimeSavedDisplay !== 'off'
+  ) {
+    merged.barTimeSavedDisplay = 'daily';
   }
   return merged;
 }
@@ -140,6 +166,41 @@ export default function App() {
     } catch {
       return DEFAULT_TOTAL_TIME_SAVED_SEC;
     }
+  });
+
+  const [savedTimeByDay, setSavedTimeByDay] = useState<SavedTimeByDay>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.savedByDay);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as SavedTimeByDay;
+        }
+      }
+      const existingTotalRaw = localStorage.getItem(STORAGE_KEYS.timeSaved);
+      const seedTarget =
+        existingTotalRaw !== null
+          ? Math.max(0, parseInt(existingTotalRaw, 10) || 0)
+          : DEFAULT_TOTAL_TIME_SAVED_SEC;
+      return seedTarget > 0 ? buildSampleSavedTimeByDay(seedTarget) : {};
+    } catch {
+      return buildSampleSavedTimeByDay(DEFAULT_TOTAL_TIME_SAVED_SEC);
+    }
+  });
+
+  const [timeSavedSince, setTimeSavedSince] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.timeSavedSince);
+      const parsed = saved ? Number(saved) : 0;
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } catch {
+      // Ignore storage read error
+    }
+    const keys = Object.entries(savedTimeByDay)
+      .filter(([, v]) => Number(v) > 0)
+      .map(([k]) => k)
+      .sort();
+    return keys.length > 0 ? parseLocalDateKey(keys[0]).getTime() : Date.now();
   });
 
   const [logs, setLogs] = useState<ExtensionEventLog[]>(() => [
@@ -236,6 +297,8 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.presets, JSON.stringify(presets));
       localStorage.setItem(STORAGE_KEYS.rules, JSON.stringify(rules));
       localStorage.setItem(STORAGE_KEYS.timeSaved, String(totalTimeSavedSec));
+      localStorage.setItem(STORAGE_KEYS.savedByDay, JSON.stringify(savedTimeByDay));
+      localStorage.setItem(STORAGE_KEYS.timeSavedSince, String(timeSavedSince));
     } catch {
       // Ignore storage quota errors
     }
@@ -243,19 +306,37 @@ export default function App() {
     if (userMutatedRef.current) {
       pushStateToServer(settings, presets, rules, totalTimeSavedSec);
     }
-  }, [settings, presets, rules, totalTimeSavedSec]);
+  }, [settings, presets, rules, totalTimeSavedSec, savedTimeByDay, timeSavedSince]);
 
   const handleAddTimeSaved = (deltaSec: number) => {
     const delta = Math.max(0, Math.floor(deltaSec));
     if (delta <= 0) return;
     markUserMutation();
     setTotalTimeSavedSec((prev) => prev + delta);
+    setSavedTimeByDay((prev) => addSavedTimeDeltaToDayMap(prev, delta));
   };
 
   const handleResetTimeSaved = () => {
+    const nowTs = Date.now();
     markUserMutation();
     setTotalTimeSavedSec(0);
-    addLog('Reset lifetime time saved', 'Time saved counter reset to 0s');
+    setSavedTimeByDay({});
+    setTimeSavedSince(nowTs);
+    addLog('Reset lifetime time saved', 'Time saved counter and daily buckets reset to 0s');
+  };
+
+  const handleRestoreSavedTimeData = (
+    nextByDay: SavedTimeByDay,
+    nextTotalSec: number,
+    nextSince?: number
+  ) => {
+    markUserMutation();
+    setSavedTimeByDay(nextByDay);
+    setTotalTimeSavedSec(Math.max(0, Math.floor(nextTotalSec)));
+    if (typeof nextSince === 'number' && Number.isFinite(nextSince) && nextSince > 0) {
+      setTimeSavedSince(Math.floor(nextSince));
+    }
+    addLog('Restored saved-time history', 'Loaded daily saved-time buckets into Option A store');
   };
 
   const addLog = (action: string, detail: string) => {
@@ -556,6 +637,7 @@ export default function App() {
             rules={rules}
             logs={logs}
             totalTimeSavedSec={totalTimeSavedSec}
+            savedTimeByDay={savedTimeByDay}
             onAddTimeSaved={handleAddTimeSaved}
             onUpdateSettings={handleUpdateSettings}
             onSaveChannelRule={handleSaveChannelFromSimulator}
@@ -578,7 +660,10 @@ export default function App() {
             presets={presets}
             rules={rules}
             totalTimeSavedSec={totalTimeSavedSec}
+            savedTimeByDay={savedTimeByDay}
+            timeSavedSince={timeSavedSince}
             onResetTimeSaved={handleResetTimeSaved}
+            onRestoreSavedTimeData={handleRestoreSavedTimeData}
             onUpdatePresetSpeed={handleUpdatePresetSpeed}
             onUpdateSettings={handleUpdateSettings}
             onAddRule={handleAddRule}

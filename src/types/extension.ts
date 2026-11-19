@@ -17,6 +17,11 @@ export interface ChannelRule {
   updatedAt: string;
 }
 
+export type SavedTimeDisplayMode = 'total' | 'daily' | 'off';
+export type PopupSavedTimeDisplayMode = SavedTimeDisplayMode;
+
+export type SavedTimeByDay = Record<string, number>;
+
 export interface ExtensionSettings {
   enabled: boolean;
   perChannelSpeedEnabled: boolean;
@@ -27,6 +32,8 @@ export interface ExtensionSettings {
   convertShortsToWatch: boolean;
   disableVideoPreviews: boolean;
   showWatchLaterRemoveAction: boolean;
+  popupTimeSavedDisplay?: SavedTimeDisplayMode;
+  barTimeSavedDisplay?: SavedTimeDisplayMode;
   settingsSchemaVersion?: number;
 }
 

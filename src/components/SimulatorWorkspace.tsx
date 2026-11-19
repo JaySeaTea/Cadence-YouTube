@@ -22,6 +22,7 @@ import {
   ExtensionEventLog,
   ExtensionSettings,
   PlaylistContextMode,
+  SavedTimeByDay,
   SimulatedVideo,
 } from '../types/extension';
 import {
@@ -29,6 +30,7 @@ import {
   resolveRuleSpeed,
   SIMULATED_VIDEOS,
 } from '../data/initialData';
+import { getTodaySavedSec } from '../utils/savedTimeAnalytics';
 
 interface SimulatorWorkspaceProps {
   settings: ExtensionSettings;
@@ -36,6 +38,7 @@ interface SimulatorWorkspaceProps {
   rules: ChannelRule[];
   logs: ExtensionEventLog[];
   totalTimeSavedSec?: number;
+  savedTimeByDay?: SavedTimeByDay;
   onAddTimeSaved?: (delta: number) => void;
   onUpdateSettings: (patch: Partial<ExtensionSettings>) => void;
   onSaveChannelRule: (
@@ -178,6 +181,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   rules,
   logs,
   totalTimeSavedSec,
+  savedTimeByDay,
   onAddTimeSaved,
   onUpdateSettings,
   onSaveChannelRule,
@@ -208,6 +212,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const [audioMuted, setAudioMuted] = useState<boolean>(true);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [collapseTagline, setCollapseTagline] = useState<boolean>(false);
+  const [hideRow3GlobalSaved, setHideRow3GlobalSaved] = useState<boolean>(false);
   const [unconvertedShortsActive, setUnconvertedShortsActive] = useState<boolean>(false);
   const [liveDvrEnabled, setLiveDvrEnabled] = useState<boolean>(true);
   const [nonDvrRuleClamped, setNonDvrRuleClamped] = useState<boolean>(false);
@@ -229,6 +234,10 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
   const row1Ref = useRef<HTMLDivElement | null>(null);
   const row1LeftRef = useRef<HTMLDivElement | null>(null);
   const brandFullSizerRef = useRef<HTMLSpanElement | null>(null);
+  const row3Ref = useRef<HTMLDivElement | null>(null);
+  const row3LeftRef = useRef<HTMLDivElement | null>(null);
+  const row3RuleRef = useRef<HTMLDivElement | null>(null);
+  const row3GlobalSavedSizerRef = useRef<HTMLSpanElement | null>(null);
 
   const syncTime = (val: number) => {
     currentTimeRef.current = val;
@@ -1431,6 +1440,60 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
     durationSlotModel.text,
   ]);
 
+  const barSavedMode = settings.barTimeSavedDisplay || 'daily';
+  const barDailySavedSec = savedTimeByDay ? getTodaySavedSec(savedTimeByDay) : 0;
+  const barGlobalSavedLabel =
+    barSavedMode === 'off'
+      ? ''
+      : barSavedMode === 'daily'
+        ? `Saved ${formatCompactDuration(barDailySavedSec)} today`
+        : `Saved ${formatCompactDuration(totalTimeSavedSec || 0)}`;
+
+  useEffect(() => {
+    const row3El = row3Ref.current;
+    const left3El = row3LeftRef.current;
+    const rule3El = row3RuleRef.current;
+    const sizer3El = row3GlobalSavedSizerRef.current;
+    if (!row3El || !left3El || !rule3El) {
+      setHideRow3GlobalSaved(false);
+      return;
+    }
+
+    const measureRow3 = () => {
+      if (barSavedMode === 'off') {
+        setHideRow3GlobalSaved(false);
+        return;
+      }
+      const available = row3El.clientWidth;
+      const leftW = left3El.getBoundingClientRect().width;
+      const ruleW = rule3El.getBoundingClientRect().width;
+      const savedW = sizer3El ? sizer3El.getBoundingClientRect().width : 0;
+      if (available > 0 && savedW > 0) {
+        setHideRow3GlobalSaved(leftW + ruleW + savedW + 24 > available);
+      }
+    };
+
+    measureRow3();
+    const observer = new ResizeObserver(measureRow3);
+    observer.observe(row3El);
+    observer.observe(left3El);
+    observer.observe(rule3El);
+    return () => observer.disconnect();
+  }, [
+    barSavedMode,
+    barGlobalSavedLabel,
+    isHomeBrowseMode,
+    unconvertedShortsActive,
+    settings.enabled,
+    settings.showInPageControlBar,
+    isAdPlaying,
+    isLiveStream,
+    isSessionActive,
+    Boolean(matchedRule),
+    effectiveSpeed,
+    vodSavedTimeModel?.text,
+  ]);
+
   const playlistLabel =
     playlistMode === 'youtube_home'
       ? 'YouTube Home · Browse Feed'
@@ -2548,9 +2611,22 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                       </div>
                     </div>
 
-                    {/* Row 3: Fine ±0.05 + Reset + VOD Saved Time (Left) & Style A Italic Rule Slot (Right) */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 mt-1.5 border-t border-white/[0.05]">
-                      <div className="flex items-center gap-1.5 min-w-0">
+                    {/* Row 3: Fine ±0.05 + Reset + VOD Saved Time (Left) & Global Readout + Style A Italic Rule Slot (Right) */}
+                    <div
+                      ref={row3Ref}
+                      className="relative flex flex-nowrap items-center justify-between gap-2 pt-1.5 mt-1.5 border-t border-white/[0.05]"
+                    >
+                      {barSavedMode !== 'off' && (
+                        <span
+                          ref={row3GlobalSavedSizerRef}
+                          aria-hidden="true"
+                          className="absolute left-0 top-0 invisible pointer-events-none select-none font-mono text-[11px] font-semibold tabular-nums whitespace-nowrap pr-2"
+                        >
+                          {barGlobalSavedLabel} ·
+                        </span>
+                      )}
+
+                      <div ref={row3LeftRef} className="flex items-center gap-1.5 min-w-0 shrink-0">
                         <button
                           type="button"
                           aria-disabled={isAdPlaying ? true : undefined}
@@ -2638,8 +2714,26 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                         )}
                       </div>
 
-                      {/* Style A Full-Italic 1-Click Channel Rule Slot */}
-                      <div className="inline-flex items-center gap-1.5 italic text-[11.5px] shrink-0 ml-auto">
+                      {/* Right Group: Optional Global Saved Time Readout (dropped on narrow width) + Channel Rule Slot */}
+                      <div className="inline-flex items-center gap-2 shrink-0 ml-auto">
+                        {barSavedMode !== 'off' && !hideRow3GlobalSaved && (
+                          <button
+                            type="button"
+                            onClick={onNavigateToRules}
+                            className="inline-flex items-center gap-2 text-[11px] font-mono font-semibold tabular-nums text-emerald-400 hover:text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                            title={
+                              barSavedMode === 'daily'
+                                ? 'Daily time saved today — configure in Options → Panel 02'
+                                : 'Total lifetime time saved — configure in Options → Panel 02'
+                            }
+                          >
+                            <span>{barGlobalSavedLabel}</span>
+                            <span className="h-3 w-px bg-white/15" aria-hidden="true" />
+                          </button>
+                        )}
+
+                        {/* Style A Full-Italic 1-Click Channel Rule Slot */}
+                        <div ref={row3RuleRef} className="inline-flex items-center gap-1.5 italic text-[11.5px] shrink-0">
                         {!matchedRule ? (
                           <>
                             <span className="text-slate-400 whitespace-nowrap">No rule</span>
@@ -2723,6 +2817,7 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
                             </button>
                           </>
                         )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2862,35 +2957,65 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
 
         {/* Right 4 Columns: Live Chrome Extension Popup Preview + Event Log */}
         <div className="lg:col-span-4 space-y-6">
-          <div className="bg-[#111827] border border-slate-800/90 rounded-xl p-5 space-y-5">
-            {/* Extension Popup Top Header */}
-            <div className="flex items-center justify-between pb-3.5 border-b border-slate-800">
-              <div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-sm font-bold text-slate-100 font-display">
-                    Cadence Toolbar Popup
+          {/* Compact Simulator-only Master Toggle & Badge Strip */}
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-[#111827] border border-slate-800/90 rounded-xl text-xs">
+            <div className="text-slate-400 tabular-nums">
+              Toolbar Badge:{' '}
+              <span className="font-mono font-semibold text-slate-200">
+                {badgeText || 'cleared'}
+              </span>
+            </div>
+            <label className="inline-flex items-center gap-2 font-medium text-slate-300 cursor-pointer">
+              <span>Extension Active</span>
+              <input
+                type="checkbox"
+                checked={settings.enabled}
+                onChange={(e) => onUpdateSettings({ enabled: e.target.checked })}
+                className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+              />
+            </label>
+          </div>
+
+          <div className="relative overflow-hidden bg-[#111827] border border-slate-800/90 rounded-xl p-5 space-y-5">
+            {/* Fading Cadence-Red Top Accent Line (v1.7.0) */}
+            <div
+              aria-hidden="true"
+              className="absolute top-0 left-0 right-0 h-[2.5px]"
+              style={{
+                background:
+                  'linear-gradient(90deg, #dc2626 0%, rgba(220, 38, 38, 0.72) 45%, rgba(220, 38, 38, 0.16) 80%, rgba(220, 38, 38, 0) 100%)',
+              }}
+            />
+
+            {/* Extension Popup Top Header: Brand Left + Buy Me a Coffee & Version Top Right */}
+            <div className="flex items-center justify-between gap-3 pb-3.5 border-b border-slate-800">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <CadenceEmblem className="w-7 h-7 shrink-0" />
+                <div className="flex flex-col leading-tight min-w-0">
+                  <span className="text-sm font-bold tracking-[-0.015em] text-slate-50 font-display truncate">
+                    Cadence
                   </span>
-                  <span className="text-xs font-mono tabular-nums text-slate-400">
-                    · v{EXTENSION_VERSION}
-                  </span>
-                </div>
-                <div className="text-xs text-slate-400 mt-0.5 tabular-nums">
-                  Toolbar Badge ·{' '}
-                  <span className="font-mono text-slate-200">
-                    {badgeText || 'cleared'}
+                  <span className="text-[9.5px] font-semibold tracking-[0.08em] italic text-slate-400 mt-0.5 truncate">
+                    YOUTUBE AT YOUR SPEED
                   </span>
                 </div>
               </div>
 
-              <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
-                <span>Active</span>
-                <input
-                  type="checkbox"
-                  checked={settings.enabled}
-                  onChange={(e) => onUpdateSettings({ enabled: e.target.checked })}
-                  className="w-4 h-4 accent-red-600 rounded cursor-pointer"
-                />
-              </label>
+              <div className="inline-flex items-center gap-2 shrink-0">
+                <a
+                  href="https://buymeacoffee.com/jayseatea"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Support Cadence on Buy Me a Coffee"
+                  className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[#0B0F19] border border-slate-800 hover:border-amber-500/50 hover:bg-slate-800 text-xs transition-colors"
+                >
+                  <span aria-hidden="true">☕</span>
+                  <span className="sr-only">Buy Me a Coffee</span>
+                </a>
+                <span className="text-xs font-mono font-semibold tabular-nums text-slate-300">
+                  v{EXTENSION_VERSION}
+                </span>
+              </div>
             </div>
 
             {/* Active Channel Speed Assignment */}
@@ -3189,17 +3314,46 @@ export const SimulatorWorkspace: React.FC<SimulatorWorkspaceProps> = ({
               </label>
             </div>
 
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400 tabular-nums">
-                {rules.length} {rules.length === 1 ? 'rule' : 'rules'} · {formatCompactDuration(totalTimeSavedSec || 0)} saved · v{EXTENSION_VERSION}
-              </span>
-              <button
-                type="button"
-                onClick={onNavigateToRules}
-                className="font-semibold text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Manage All Channels
-              </button>
+            <div className="flex items-center justify-between gap-3 text-xs pt-0.5">
+              <div className="inline-flex items-center gap-2 min-w-0">
+                <button
+                  type="button"
+                  onClick={onNavigateToRules}
+                  className="font-semibold text-red-400 hover:text-red-300 underline underline-offset-2 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  All Cadence Options
+                </button>
+                <span className="text-slate-600" aria-hidden="true">
+                  ·
+                </span>
+                <span className="text-slate-400 tabular-nums truncate">
+                  {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
+                </span>
+              </div>
+
+              {(() => {
+                const mode = settings.popupTimeSavedDisplay || 'daily';
+                if (mode === 'off') return null;
+                const dailySec = savedTimeByDay ? getTodaySavedSec(savedTimeByDay) : 0;
+                const label =
+                  mode === 'daily'
+                    ? `Saved ${formatCompactDuration(dailySec)} today`
+                    : `Saved ${formatCompactDuration(totalTimeSavedSec || 0)}`;
+                const title =
+                  mode === 'daily'
+                    ? 'Daily time saved today — configure in Options → Panel 02'
+                    : 'Total lifetime time saved — configure in Options → Panel 02';
+                return (
+                  <button
+                    type="button"
+                    onClick={onNavigateToRules}
+                    title={title}
+                    className="font-mono font-semibold tabular-nums text-emerald-400 hover:text-emerald-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    {label}
+                  </button>
+                );
+              })()}
             </div>
           </div>
 

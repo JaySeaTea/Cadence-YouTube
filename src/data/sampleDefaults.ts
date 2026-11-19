@@ -4,7 +4,7 @@ import {
   ExtensionSettings,
 } from '../types/extension';
 
-export const EXTENSION_VERSION = '1.7.0';
+export const EXTENSION_VERSION = '1.7.1';
 export const CWS_STORE_SNAPSHOT_VERSION = '1.5.1';
 export const DEFAULT_TOTAL_TIME_SAVED_SEC = 52340; // 14h 32m 20s
 
@@ -18,7 +18,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   convertShortsToWatch: true,
   disableVideoPreviews: true,
   showWatchLaterRemoveAction: true,
-  settingsSchemaVersion: 6,
+  popupTimeSavedDisplay: 'daily',
+  barTimeSavedDisplay: 'daily',
+  settingsSchemaVersion: 7,
 };
 
 export const DEFAULT_PRESETS: CategoryPreset[] = [

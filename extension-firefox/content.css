@@ -212,6 +212,7 @@ html[dark] .cadence-brand-tagline {
 }
 
 .cadence-row-bot {
+  position: relative;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -223,6 +224,19 @@ html[dark] .cadence-brand-tagline {
 
 html[dark] .cadence-row-bot {
   border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.cadence-global-saved-sizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  white-space: nowrap;
+  padding-right: 16px;
 }
 
 .cadence-bar-buttons {
@@ -237,6 +251,52 @@ html[dark] .cadence-row-bot {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+
+.cadence-row-bot-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cadence-bar-global-saved-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cadence-bar-global-saved {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  font-style: normal;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: #059669;
+}
+
+html[dark] .cadence-bar-global-saved {
+  color: #34d399;
+}
+
+.cadence-row3-sep {
+  width: 1px;
+  height: 11px;
+  background: rgba(148, 163, 184, 0.34);
+  flex-shrink: 0;
+}
+
+html[dark] .cadence-row3-sep {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.cadence-row-bot.is-global-saved-hidden .cadence-bar-global-saved-wrap {
+  display: none !important;
 }
 
 .cadence-bar-divider {
@@ -540,7 +600,6 @@ html[dark] .cadence-saved-time.is-saved {
 }
 
 .cadence-rule-slot {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;

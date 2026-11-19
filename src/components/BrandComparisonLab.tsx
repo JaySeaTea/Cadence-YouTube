@@ -1,5 +1,6 @@
 import React, { useId, useState } from 'react';
 import { EXTENSION_VERSION } from '../data/sampleDefaults';
+import { PopupSavedTimeDisplayMode } from '../types/extension';
 
 type TaglineVariant = 'sentence' | 'caps' | 'caps_italic';
 type PopupPlaybackState = 'active' | 'idle';
@@ -91,6 +92,7 @@ interface PopupPreviewProps {
   taglineVariant: TaglineVariant;
   showAccentLine: boolean;
   playbackState: PopupPlaybackState;
+  savedTimeMode?: PopupSavedTimeDisplayMode;
   fillPercent: number;
   selectedPreset: 'music' | 'educational' | 'podcast';
   speed: number;
@@ -108,6 +110,7 @@ const PopupLiveCard: React.FC<PopupPreviewProps> = ({
   taglineVariant,
   showAccentLine,
   playbackState,
+  savedTimeMode = 'daily',
   fillPercent,
   selectedPreset,
   speed,
@@ -133,7 +136,7 @@ const PopupLiveCard: React.FC<PopupPreviewProps> = ({
       {/* Popup Top Header */}
       {isProposed ? (
         <div
-          className="relative flex items-center gap-2.5 border-b border-slate-800"
+          className="relative flex items-center justify-between gap-2.5 border-b border-slate-800"
           style={{
             background: '#111827',
             padding: showAccentLine ? '14px 16px 12px' : '12px 16px',
@@ -149,21 +152,35 @@ const PopupLiveCard: React.FC<PopupPreviewProps> = ({
               }}
             />
           )}
-          <ProposedProgressEmblem size={32} fillPercent={fillPercent} />
-          <div className="flex flex-col leading-tight">
-            <span className="text-[16px] font-bold tracking-[-0.015em] text-slate-50">
-              Cadence
-            </span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <ProposedProgressEmblem size={32} fillPercent={fillPercent} />
+            <div className="flex flex-col leading-tight min-w-0">
+              <span className="text-[16px] font-bold tracking-[-0.015em] text-slate-50">
+                Cadence
+              </span>
+              <span
+                className={
+                  isCaps
+                    ? `text-[10px] font-semibold tracking-[0.09em] text-slate-400 mt-0.5 ${
+                        isItalic ? 'italic' : ''
+                      }`
+                    : 'text-[11.5px] font-medium text-slate-400 mt-0.5'
+                }
+              >
+                {taglineText}
+              </span>
+            </div>
+          </div>
+
+          <div className="inline-flex items-center gap-2 shrink-0">
             <span
-              className={
-                isCaps
-                  ? `text-[10px] font-semibold tracking-[0.09em] text-slate-400 mt-0.5 ${
-                      isItalic ? 'italic' : ''
-                    }`
-                  : 'text-[11.5px] font-medium text-slate-400 mt-0.5'
-              }
+              className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[#0b0f19] border border-slate-800 text-[13px] opacity-90"
+              title="Support Cadence on Buy Me a Coffee"
             >
-              {taglineText}
+              ☕
+            </span>
+            <span className="text-[11.5px] font-mono font-semibold text-slate-300 tabular-nums">
+              v{EXTENSION_VERSION}
             </span>
           </div>
         </div>
@@ -338,14 +355,22 @@ const PopupLiveCard: React.FC<PopupPreviewProps> = ({
         <span className="text-[12.5px] font-semibold text-slate-200 underline cursor-pointer hover:text-white">
           All Cadence Options
         </span>
-        <div className="inline-flex items-center gap-2">
-          <span className="text-[14px] opacity-90" title="Support Cadence on Buy Me a Coffee">
-            ☕
-          </span>
-          <span className="text-[12px] font-semibold text-slate-300 tabular-nums">
-            v{EXTENSION_VERSION}
-          </span>
-        </div>
+        {isProposed ? (
+          savedTimeMode === 'off' ? null : (
+            <span className="text-[12px] font-mono font-semibold text-emerald-400 tabular-nums">
+              {savedTimeMode === 'daily' ? 'Saved 15m today' : 'Saved 14h 32m'}
+            </span>
+          )
+        ) : (
+          <div className="inline-flex items-center gap-2">
+            <span className="text-[14px] opacity-90" title="Support Cadence on Buy Me a Coffee">
+              ☕
+            </span>
+            <span className="text-[12px] font-semibold text-slate-300 tabular-nums">
+              v{EXTENSION_VERSION}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -584,6 +609,8 @@ export const BrandComparisonLab: React.FC = () => {
   const [taglineVariant, setTaglineVariant] = useState<TaglineVariant>('caps_italic');
   const [showAccentLine, setShowAccentLine] = useState<boolean>(true);
   const [popupPlaybackState, setPopupPlaybackState] = useState<PopupPlaybackState>('active');
+  const [popupSavedTimeMode, setPopupSavedTimeMode] =
+    useState<PopupSavedTimeDisplayMode>('daily');
   const [toolbarTheme, setToolbarTheme] = useState<ToolbarTheme>('dark');
   const [fillPercent, setFillPercent] = useState<number>(45);
 
@@ -781,6 +808,34 @@ export const BrandComparisonLab: React.FC = () => {
                 {showAccentLine ? 'On' : 'Off'}
               </span>
             </button>
+
+            <div className="h-4 w-px bg-slate-800 hidden sm:block" />
+
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-semibold text-slate-300">Popup Footer:</span>
+              <div className="inline-flex rounded-lg border border-slate-700/80 bg-[#0B0F19] p-0.5">
+                {(
+                  [
+                    { id: 'total', label: 'Total' },
+                    { id: 'daily', label: 'Daily' },
+                    { id: 'off', label: 'Off' },
+                  ] as const
+                ).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPopupSavedTimeMode(m.id)}
+                    className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
+                      popupSavedTimeMode === m.id
+                        ? 'bg-red-600 text-white'
+                        : 'text-slate-400 hover:text-slate-100'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <span className="text-xs text-slate-500">
@@ -977,6 +1032,7 @@ export const BrandComparisonLab: React.FC = () => {
               taglineVariant={taglineVariant}
               showAccentLine={showAccentLine}
               playbackState={popupPlaybackState}
+              savedTimeMode={popupSavedTimeMode}
               fillPercent={fillPercent}
               selectedPreset={selectedPreset}
               speed={speed}

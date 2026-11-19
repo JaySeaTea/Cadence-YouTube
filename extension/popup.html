@@ -17,7 +17,8 @@
         overflow: hidden;
         display: flex;
         align-items: center;
-        justify-content: flex-start;
+        justify-content: space-between;
+        gap: 10px;
         background: #111827;
         padding: 14px 16px 12px;
         border-bottom: 1px solid #1e293b;
@@ -62,20 +63,55 @@
         color: #94a3b8;
         margin-top: 2px;
       }
+      .header-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
       .popup-main {
         padding: 16px 16px 8px;
       }
       .version-meta {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        color: #cbd5e1;
+        color: #94a3b8;
         font-variant-numeric: tabular-nums;
       }
+      .footer-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .footer-sep {
+        color: #475569;
+        font-size: 11px;
+      }
+      .footer-rules-meta {
+        font-size: 11px;
+        color: #64748b;
+        font-variant-numeric: tabular-nums;
+      }
+      .footer-saved-btn {
+        border: none;
+        background: none;
+        padding: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #34d399;
+        font-variant-numeric: tabular-nums;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: color 0.15s;
+      }
+      .footer-saved-btn:hover { color: #6ee7b7; }
       .link-btn {
         border: none;
         background: none;
         color: #e2e8f0;
-        font-size: 12.5px;
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
         text-decoration: underline;
@@ -302,6 +338,10 @@
           <span class="brand-tagline">YOUTUBE AT YOUR SPEED</span>
         </div>
       </div>
+      <div class="header-actions">
+        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
+        <span class="version-meta" id="header-version"></span>
+      </div>
     </div>
 
     <div class="popup-main">
@@ -363,11 +403,12 @@
     </div>
 
     <div class="footer-row">
-      <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
-      <div style="display:inline-flex; align-items:center; gap:8px;">
-        <a href="https://buymeacoffee.com/jayseatea" target="_blank" rel="noopener noreferrer" class="popup-coffee" title="Support Cadence on Buy Me a Coffee">☕</a>
-        <span class="version-meta" id="footer-version"></span>
+      <div class="footer-left">
+        <button type="button" id="open-options" class="link-btn">All Cadence Options</button>
+        <span class="footer-sep" aria-hidden="true">·</span>
+        <span class="footer-rules-meta" id="footer-rules-count">0 rules</span>
       </div>
+      <button type="button" id="footer-saved-time" class="footer-saved-btn" style="display:none;"></button>
     </div>
 
     <script src="popup.js"></script>

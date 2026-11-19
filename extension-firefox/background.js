@@ -9,7 +9,9 @@ const INITIAL_STATE = {
     "convertShortsToWatch": true,
     "disableVideoPreviews": true,
     "showWatchLaterRemoveAction": true,
-    "settingsSchemaVersion": 6
+    "popupTimeSavedDisplay": "daily",
+    "barTimeSavedDisplay": "daily",
+    "settingsSchemaVersion": 7
   },
   "presets": [
     {
@@ -85,8 +87,41 @@ const LEGACY_SAMPLE_CHANNEL_IDS = new Set([
   'UC2systemsCraft04',
 ]);
 
+function getLocalDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isValidDisplayMode(val) {
+  return val === 'total' || val === 'daily' || val === 'off';
+}
+
+function sanitizeSavedTimeByDay(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) continue;
+    const sec = Math.floor(Number(v) || 0);
+    if (Number.isFinite(sec) && sec > 0) {
+      out[k] = sec;
+    }
+  }
+  return out;
+}
+
+let savedTimeWriteQueue = Promise.resolve();
+
 chrome.runtime.onInstalled.addListener(async () => {
-  const existing = await chrome.storage.local.get(['settings', 'presets', 'rules', 'totalTimeSavedSec', 'timeSavedSince']);
+  const existing = await chrome.storage.local.get([
+    'settings',
+    'presets',
+    'rules',
+    'totalTimeSavedSec',
+    'timeSavedSince',
+    'savedTimeByDay',
+  ]);
   const nextPayload = {};
   const prevSchemaVersion = (existing.settings && existing.settings.settingsSchemaVersion) || 1;
 
@@ -107,9 +142,15 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof cleanInitialSettings.showWatchLaterRemoveAction === 'boolean'
           ? cleanInitialSettings.showWatchLaterRemoveAction
           : true,
-      settingsSchemaVersion: 6,
+      popupTimeSavedDisplay: isValidDisplayMode(cleanInitialSettings.popupTimeSavedDisplay)
+        ? cleanInitialSettings.popupTimeSavedDisplay
+        : 'daily',
+      barTimeSavedDisplay: isValidDisplayMode(cleanInitialSettings.barTimeSavedDisplay)
+        ? cleanInitialSettings.barTimeSavedDisplay
+        : 'daily',
+      settingsSchemaVersion: 7,
     };
-  } else if (prevSchemaVersion < 6) {
+  } else if (prevSchemaVersion < 7) {
     const migratedSettings = {
       ...INITIAL_STATE.settings,
       ...existing.settings,
@@ -125,7 +166,13 @@ chrome.runtime.onInstalled.addListener(async () => {
         typeof existing.settings.showWatchLaterRemoveAction === 'boolean'
           ? existing.settings.showWatchLaterRemoveAction
           : true,
-      settingsSchemaVersion: 6,
+      popupTimeSavedDisplay: isValidDisplayMode(existing.settings.popupTimeSavedDisplay)
+        ? existing.settings.popupTimeSavedDisplay
+        : 'daily',
+      barTimeSavedDisplay: isValidDisplayMode(existing.settings.barTimeSavedDisplay)
+        ? existing.settings.barTimeSavedDisplay
+        : 'daily',
+      settingsSchemaVersion: 7,
     };
     delete migratedSettings.autoRememberManualSpeed;
     nextPayload.settings = migratedSettings;
@@ -141,6 +188,14 @@ chrome.runtime.onInstalled.addListener(async () => {
     existing.timeSavedSince <= 0
   ) {
     nextPayload.timeSavedSince = Date.now();
+  }
+
+  if (
+    !existing.savedTimeByDay ||
+    typeof existing.savedTimeByDay !== 'object' ||
+    Array.isArray(existing.savedTimeByDay)
+  ) {
+    nextPayload.savedTimeByDay = {};
   }
 
   if (!existing.presets) {
@@ -192,10 +247,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'CADENCE_ADD_TIME_SAVED') {
     const delta = Math.max(0, Math.floor(Number(message.deltaSec) || 0));
     if (delta > 0) {
-      chrome.storage.local.get(['totalTimeSavedSec']).then((data) => {
-        const current = Math.max(0, Number(data.totalTimeSavedSec) || 0);
-        chrome.storage.local.set({ totalTimeSavedSec: current + delta }).catch(() => {});
-      }).catch(() => {});
+      savedTimeWriteQueue = savedTimeWriteQueue
+        .then(async () => {
+          const data = await chrome.storage.local.get([
+            'totalTimeSavedSec',
+            'savedTimeByDay',
+            'timeSavedSince',
+          ]);
+          const current = Math.max(0, Math.floor(Number(data.totalTimeSavedSec) || 0));
+          const byDay = sanitizeSavedTimeByDay(data.savedTimeByDay);
+          const todayKey = getLocalDateKey();
+          byDay[todayKey] = (byDay[todayKey] || 0) + delta;
+          const patch = {
+            totalTimeSavedSec: current + delta,
+            savedTimeByDay: byDay,
+          };
+          if (
+            typeof data.timeSavedSince !== 'number' ||
+            !Number.isFinite(data.timeSavedSince) ||
+            data.timeSavedSince <= 0
+          ) {
+            patch.timeSavedSince = Date.now();
+          }
+          await chrome.storage.local.set(patch);
+        })
+        .catch(() => {});
     }
     sendResponse({ ok: true });
     return false;
@@ -207,11 +283,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.timeSavedSince > 0
         ? message.timeSavedSince
         : Date.now();
-    chrome.storage.local.set({ totalTimeSavedSec: 0, timeSavedSince: resetSince }).then(() => {
-      sendResponse({ ok: true, totalTimeSavedSec: 0, timeSavedSince: resetSince });
-    }).catch(() => {
-      sendResponse({ ok: false });
-    });
+    savedTimeWriteQueue = savedTimeWriteQueue
+      .then(() =>
+        chrome.storage.local.set({
+          totalTimeSavedSec: 0,
+          savedTimeByDay: {},
+          timeSavedSince: resetSince,
+        })
+      )
+      .then(() => {
+        sendResponse({
+          ok: true,
+          totalTimeSavedSec: 0,
+          savedTimeByDay: {},
+          timeSavedSince: resetSince,
+        });
+      })
+      .catch(() => {
+        sendResponse({ ok: false });
+      });
     return true; // async
   }
   if (message && message.type === 'CADENCE_UPDATE_BADGE') {

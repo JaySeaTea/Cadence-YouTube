@@ -7,16 +7,40 @@
     return (str || '').trim().toLowerCase();
   }
 
+  function getLocalDateKey(date = new Date()) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function formatCompactSavedDuration(rawSec) {
+    const safeSec = Math.max(0, Math.round(Number(rawSec) || 0));
+    if (safeSec === 0) return '0s';
+    if (safeSec < 60) return `${safeSec}s`;
+    const totalMins = Math.round(safeSec / 60);
+    if (totalMins < 60) return `${totalMins}m`;
+    const hrs = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  }
+
   const manifestVersion =
     chrome.runtime && typeof chrome.runtime.getManifest === 'function'
       ? chrome.runtime.getManifest().version
       : '';
-  const footerVersionEl = document.getElementById('footer-version');
-  if (footerVersionEl && manifestVersion) {
-    footerVersionEl.textContent = `v${manifestVersion}`;
+  const headerVersionEl = document.getElementById('header-version');
+  if (headerVersionEl && manifestVersion) {
+    headerVersionEl.textContent = `v${manifestVersion}`;
   }
 
-  const stored = await chrome.storage.local.get(['settings', 'rules', 'presets']);
+  const stored = await chrome.storage.local.get([
+    'settings',
+    'rules',
+    'presets',
+    'totalTimeSavedSec',
+    'savedTimeByDay',
+  ]);
   const settings = stored.settings || {
     enabled: true,
     perChannelSpeedEnabled: true,
@@ -26,10 +50,17 @@
     disableVideoPreviews: true,
     showWatchLaterRemoveAction: true,
     showSpeedToast: true,
+    popupTimeSavedDisplay: 'daily',
+    barTimeSavedDisplay: 'daily',
     defaultSpeed: 1.0,
-    settingsSchemaVersion: 6,
+    settingsSchemaVersion: 7,
   };
   let rules = Array.isArray(stored.rules) ? stored.rules : [];
+  let totalTimeSavedSec = Math.max(0, Math.floor(Number(stored.totalTimeSavedSec) || 0));
+  let savedTimeByDay =
+    stored.savedTimeByDay && typeof stored.savedTimeByDay === 'object'
+      ? stored.savedTimeByDay
+      : {};
   const presets = Array.isArray(stored.presets) && stored.presets.length > 0
     ? stored.presets
     : [
@@ -52,7 +83,32 @@
   const stepperValEl = document.getElementById('stepper-value');
   const stepDownBtn = document.getElementById('step-down');
   const stepUpBtn = document.getElementById('step-up');
+  const footerRulesCountEl = document.getElementById('footer-rules-count');
+  const footerSavedBtnEl = document.getElementById('footer-saved-time');
   let popupToastTimer = null;
+
+  function renderFooterMeta() {
+    if (footerRulesCountEl) {
+      footerRulesCountEl.textContent = `${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}`;
+    }
+    if (!footerSavedBtnEl) return;
+    const mode = settings.popupTimeSavedDisplay || 'daily';
+    if (mode === 'off') {
+      footerSavedBtnEl.style.display = 'none';
+      return;
+    }
+    footerSavedBtnEl.style.display = 'inline-block';
+    if (mode === 'total') {
+      footerSavedBtnEl.textContent = `Saved ${formatCompactSavedDuration(totalTimeSavedSec)}`;
+      footerSavedBtnEl.title = 'Total lifetime time saved — Click to view analytics in Options';
+    } else {
+      const todaySec = Math.max(0, Math.floor(Number(savedTimeByDay[getLocalDateKey()]) || 0));
+      footerSavedBtnEl.textContent = `Saved ${formatCompactSavedDuration(todaySec)} today`;
+      footerSavedBtnEl.title = 'Daily time saved today — Click to view analytics in Options';
+    }
+  }
+
+  renderFooterMeta();
 
   function showPopupToast(message) {
     if (!popupToastEl) return;
@@ -99,6 +155,38 @@
       chrome.runtime.openOptionsPage();
     });
   }
+  if (footerSavedBtnEl) {
+    footerSavedBtnEl.addEventListener('click', () => {
+      chrome.runtime.openOptionsPage();
+    });
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    let shouldRenderFooter = false;
+    if (changes.settings && typeof changes.settings.newValue === 'object') {
+      Object.assign(settings, changes.settings.newValue);
+      if (toggleStop) toggleStop.checked = Boolean(settings.stopAfterVideoEnds);
+      if (toggleShorts) toggleShorts.checked = settings.convertShortsToWatch !== false;
+      if (togglePreviews) togglePreviews.checked = settings.disableVideoPreviews !== false;
+      shouldRenderFooter = true;
+    }
+    if (changes.rules && Array.isArray(changes.rules.newValue)) {
+      rules = changes.rules.newValue;
+      shouldRenderFooter = true;
+    }
+    if (changes.totalTimeSavedSec && typeof changes.totalTimeSavedSec.newValue === 'number') {
+      totalTimeSavedSec = Math.max(0, Math.floor(changes.totalTimeSavedSec.newValue));
+      shouldRenderFooter = true;
+    }
+    if (changes.savedTimeByDay && typeof changes.savedTimeByDay.newValue === 'object') {
+      savedTimeByDay = changes.savedTimeByDay.newValue || {};
+      shouldRenderFooter = true;
+    }
+    if (shouldRenderFooter) {
+      renderFooterMeta();
+    }
+  });
 
   function findRuleForChannel(meta) {
     if (!meta) return null;
