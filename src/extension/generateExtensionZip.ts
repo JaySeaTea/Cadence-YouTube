@@ -9890,14 +9890,14 @@ html[dark] .cadence-rule-plus {
       path: 'content.js',
       language: 'javascript',
       description:
-        'Isolated content script mounting the full-width 3-row transport deck above #title with collision-aware brand tagline, VOD saved time, and 1-click italic Rule slot.',
+        'Isolated content script mounting the full-width 3-row below-video control bar above #title with collision-aware brand tagline, VOD saved time, and 1-click italic Rule slot.',
       content: contentJs,
     },
     {
       path: 'content.css',
       language: 'css',
       description:
-        'Adaptive light/dark styles for the full-width 3-row transport deck above #title, Style B seek capsules, VOD-only saved time, and Style A italic Rule slot.',
+        'Adaptive light/dark styles for the full-width 3-row below-video control bar above #title, Style B seek capsules, VOD-only saved time, and Style A italic Rule slot.',
       content: contentCss,
     },
     {

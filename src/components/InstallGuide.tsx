@@ -72,7 +72,7 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
           </p>
         </div>
         <a
-          href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe"
+          href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-youtube-speed-c/flocdmlnhefmnkigiihbiloloinpfffe"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors whitespace-nowrap shrink-0 self-start sm:self-center cursor-pointer shadow-md shadow-blue-900/40"
@@ -290,10 +290,10 @@ export const InstallGuide: React.FC<InstallGuideProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-5 text-sm text-slate-400 leading-relaxed">
           <div className="space-y-1.5">
             <h3 className="font-semibold text-slate-100">
-              Full-Width 3-Row Watch Deck, 10s/30s/60s Seek &amp; 1-Click Channel Rules
+              Full-Width 3-Row Below-Video Control Bar, 10s/30s/60s Seek &amp; 1-Click Channel Rules
             </h3>
             <p>
-              Cadence mounts its watch-page transport deck full-width inside{' '}
+              Cadence mounts its below-video control bar full-width inside{' '}
               <code className="font-mono text-xs text-slate-200 bg-slate-800/80 px-1.5 py-0.5 rounded">
                 #above-the-fold
               </code>{' '}

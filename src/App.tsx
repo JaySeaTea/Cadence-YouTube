@@ -506,7 +506,7 @@ export default function App() {
           {/* Zone 3: Store link & 1 primary action */}
           <div className="flex items-center gap-2.5 shrink-0">
             <a
-              href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-per-channel-spe/flocdmlnhefmnkigiihbiloloinpfffe"
+              href="https://chromewebstore.google.com/detail/cadence-%E2%80%94-youtube-speed-c/flocdmlnhefmnkigiihbiloloinpfffe"
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
@@ -613,7 +613,7 @@ export default function App() {
       <footer className="border-t border-slate-800/90 bg-[#0F1624] mt-12">
         <div className="max-w-[1320px] mx-auto px-6 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400">
           <span className="tabular-nums">
-            Cadence for YouTube · v{EXTENSION_VERSION} · Manifest V3 Chrome Extension
+            Cadence — YouTube Speed Controller &amp; Autoplay Stop · v{EXTENSION_VERSION} · Manifest V3 Browser Extension
           </span>
           <div className="flex items-center gap-5">
             <button

@@ -1,8 +1,8 @@
-# Privacy Policy — Cadence for YouTube
+# Privacy Policy — Cadence
 
-**Extension Name:** Cadence — Per-Channel Speed & Playlist Stop for YouTube  
+**Extension Name:** Cadence — YouTube Speed Controller & Autoplay Stop  
 **Effective Date:** October 31, 2026  
-**Last Updated:** October 31, 2026  
+**Last Updated:** November 19, 2026  
 
 ---
 
@@ -15,7 +15,7 @@ Every setting, category speed profile, and YouTube channel speed rule you config
 
 ## 2. Information Stored Locally on Your Device
 
-To perform its single purpose—controlling YouTube playback speeds per channel, providing an in-page watch transport toolbar, converting YouTube Shorts URLs to the standard watch player, and stopping automatic playlist progression at the end of videos—Cadence stores only the following configuration data in **`chrome.storage.local`** on your device:
+To perform its single purpose—controlling YouTube playback speeds per channel, providing a below-video control bar, converting YouTube Shorts URLs to the standard watch player, and stopping automatic playlist progression at the end of videos—Cadence stores only the following configuration data in **`chrome.storage.local`** on your device:
 
 - **Extension Preferences (`settings`)**: Boolean toggles and numeric defaults you choose in the extension popup or options page (such as per-channel speed activation, end-of-video stop behavior, watch toolbar visibility, Shorts-to-Watch conversion, and default fallback speed).
 - **Category Speed Profiles (`presets`)**: Numeric speed multipliers for reusable categories (e.g., *Music `1.0×`*, *Educational `1.5×`*, *Podcast `2.0×`*).

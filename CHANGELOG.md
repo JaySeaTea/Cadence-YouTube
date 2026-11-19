@@ -1,8 +1,30 @@
 # Changelog
 
-All notable changes to **Cadence — Per-Channel Speed & Playlist Stop for YouTube** are documented in this file.
+All notable changes to **Cadence — YouTube Speed Controller & Autoplay Stop** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.7.0] - 2026-11-18
+
+### Changed
+- **Visual Re-Brand Across Extension Surfaces, Icons & Workbench**:
+  - Replaced the play/pause mark with the new **45%-progress Cadence emblem** (centered red play triangle above a horizontal white/red progress track) across all generated PNG/SVG extension icons (`16px`–`1024px`), inline below-video toolbar, Toolbar Popup (`32px`), Options Page (`44px`), 4K promo graphics, and workbench top bar.
+  - Updated brand lockups on the Options Page, Toolbar Popup, and Below-Video Control Bar to use the muted slate **`YOUTUBE AT YOUR SPEED`** tagline in `ALL CAPS` Italic (paired with the Cadence-red vertical divider in the below-video bar).
+  - Added a `2.5px` fading Cadence-red gradient accent line across the Options header (bottom edge), Toolbar Popup header (top edge), Below-Video Control Bar (top edge), and End-of-Video overlay banner (top edge).
+- **End-of-Video Overlay Action Hierarchy**:
+  - Unified **Replay** and **Play Next** to neutral glass button styling.
+  - Promoted **YouTube Home** to the primary Cadence-red (`#DC2626`) highlight.
+  - Styled **Remove from Watch Later** in muted slate with a crisp coral outline (`#FB7185`) so it stands apart from both neutral actions and the red YouTube Home button while preserving emerald removal confirmation and amber error states.
+
+## [1.6.0 - 1.6.2] - 2026-11-17
+
+### Added
+- **`timeSavedSince` Tracking & Reset**: Recorded install and reset timestamps in `chrome.storage.local` so the Options page displays exact *Time Saved since `<date>`* attribution and resets cleanly alongside lifetime saved seconds.
+- **YouTube Home & Watch Later Removal Actions in End-of-Video Overlay**: Added one-click **YouTube Home** navigation and logged-in **Remove from Watch Later** cleanup directly inside the end-of-video pause banner (gated behind a `showWatchLaterRemoveAction` setting in Options).
+- **Toolbar Popup & Options Page Design Polish (#36, #37)**:
+  - Added shaded header/footer bands in the Toolbar Popup, an active/idle outline & dot indicator on the **Now Playing** panel, and streamlined active controls to **Category Presets + Fine Stepper (±0.05×)**.
+  - Standardized Options Page switch toggles, unified Panel 01 card layout without redundant sync badges, updated the Options header with the Cadence emblem and tagline, and synchronized tab/tooltip titles across Popup, Options, and manifest.
+- **Firefox Manifest V3 Bundle & Disable Video Previews**: Added `extension-firefox` / `Firefox.zip` packaging alongside the **Disable Video Previews** feed toggle and Buy Me a Coffee support links.
 
 ## [1.5.1] - 2026-11-01
 
